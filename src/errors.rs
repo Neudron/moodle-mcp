@@ -58,6 +58,55 @@ impl CoreError {
     }
 }
 
+/// Scrub token material from a string before it reaches logs, errors or
+/// snapshots (plan #1053): every `token=<value>` / `wstoken=<value>`
+/// occurrence becomes `token=REDACTED` / `wstoken=REDACTED`. Over-redacts
+/// rather than leaks: any key ending in `token=` is scrubbed.
+#[must_use]
+pub fn redact_token(input: &str) -> String {
+    const TAG: &str = "REDACTED";
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let rest = &input[i..];
+        // Longest key first so `wstoken=` is not partially matched.
+        let key_len = if rest.starts_with("wstoken=") {
+            Some("wstoken=".len())
+        } else if rest.starts_with("token=") {
+            Some("token=".len())
+        } else {
+            None
+        };
+        match key_len {
+            Some(k) => {
+                let key = &rest[..k];
+                out.push_str(key);
+                out.push_str(TAG);
+                i += k;
+                while i < bytes.len() && !is_token_delim(bytes[i]) {
+                    i += 1;
+                }
+            }
+            None => {
+                // `bytes[i]` is a single byte of a UTF-8 boundary-safe walk:
+                // ASCII fast path, otherwise copy the whole char.
+                let ch = rest.chars().next().unwrap_or_default();
+                out.push(ch);
+                i += ch.len_utf8().max(1);
+            }
+        }
+    }
+    out
+}
+
+fn is_token_delim(b: u8) -> bool {
+    matches!(
+        b,
+        b'&' | b' ' | b'\t' | b'\n' | b'\r' | b'"' | b'\'' | b'<' | b'>' | b')' | b',' | b';'
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +137,25 @@ mod tests {
             CoreError::RateLimited(30).to_string(),
             "rate limited, retry after 30s"
         );
+    }
+
+    #[test]
+    fn redaction_scrubs_token_forms() {
+        let fake = "FAKETOKEN-0123456789abcdef";
+        let cases = [
+            format!("https://x.invalid/f?token={fake}&a=1"),
+            format!("https://x.invalid/f?a=1&token={fake}"),
+            format!("wstoken={fake}&wsfunction=y"),
+            format!("download http 500: https://x.invalid/f?token={fake}"),
+            format!("url=https://x.invalid/f?token={fake}')"),
+        ];
+        for raw in cases {
+            let redacted = redact_token(&raw);
+            assert!(!redacted.contains(fake), "leak: {redacted}");
+            assert!(redacted.contains("REDACTED"), "over-scrubbed: {redacted}");
+        }
+        // Innocent text passes through untouched.
+        assert_eq!(redact_token("no secrets here"), "no secrets here");
+        assert_eq!(redact_token(""), "");
     }
 }

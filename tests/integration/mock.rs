@@ -25,6 +25,11 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
 pub const COURSE_ID: i64 = 101;
 pub const USER_ID: i64 = 42;
 pub const TOKEN: &str = "mock-token-0123456789abcdef";
+/// Fixed `Last-Modified` served on pluginfile hits (Task 2 timemodified).
+/// `Wed, 21 Oct 2015 07:28:00 GMT` == 1445412480 unix.
+pub const LAST_MODIFIED_HTTP: &str = "Wed, 21 Oct 2015 07:28:00 GMT";
+#[allow(dead_code)]
+pub const LAST_MODIFIED_UNIX: i64 = 1445412480;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct MockConfig {
@@ -48,11 +53,17 @@ struct Shared {
 
 pub struct MockMoodle {
     base: String,
+    // Introspection fields: each test binary uses a subset; shared fixture.
+    #[allow(dead_code)]
     pub site_info: serde_json::Value,
+    #[allow(dead_code)]
     pub courses: serde_json::Value,
+    #[allow(dead_code)]
     pub contents: serde_json::Value,
     /// Configured fail-first counts, for test introspection.
+    #[allow(dead_code)]
     pub flaky_500: usize,
+    #[allow(dead_code)]
     pub ratelimit: usize,
     files: HashMap<String, Vec<u8>>,
 }
@@ -115,6 +126,7 @@ impl MockMoodle {
         .await
     }
 
+    #[allow(dead_code)]
     pub async fn unauthorized() -> Self {
         Self::start(MockConfig {
             unauthorized: true,
@@ -305,26 +317,37 @@ fn route(
     method: &str,
     target: &str,
     body: &[u8],
+    range: Option<&str>,
     shared: &Shared,
-) -> (u16, &'static str, &'static str, Vec<u8>) {
+) -> (u16, String, String, Vec<u8>) {
     const JSON: &str = "application/json";
-    const OCTET: &str = "application/octet-stream";
     let path = target.split('?').next().unwrap_or("/");
+    let query = target.split('?').nth(1).unwrap_or("");
     if method == "POST" && path == "/webservice/rest/server.php" {
         let form = form_decode(std::str::from_utf8(body).unwrap_or(""));
         if shared.unauthorized || !form.get("wstoken").is_some_and(|t| t == TOKEN) {
-            return (401, JSON, "", exc_body("invalidtoken", "Invalid token"));
+            return (
+                401,
+                JSON.to_string(),
+                String::new(),
+                exc_body("invalidtoken", "Invalid token"),
+            );
         }
         if take(&shared.ratelimit_left) {
             return (
                 429,
-                JSON,
-                "Retry-After: 2\r\n",
+                JSON.to_string(),
+                "Retry-After: 2\r\n".to_string(),
                 exc_body("ratelimited", "Slow down"),
             );
         }
         if take(&shared.flaky_left) {
-            return (500, JSON, "", exc_body("servererror", "Flaky failure"));
+            return (
+                500,
+                JSON.to_string(),
+                String::new(),
+                exc_body("servererror", "Flaky failure"),
+            );
         }
         let payload = match form.get("wsfunction").map(String::as_str) {
             Some("core_webservice_get_site_info") => {
@@ -339,21 +362,76 @@ fn route(
             Some(other) => exc_body("invalidfunction", &format!("unknown wsfunction {other}")),
             None => exc_body("invalidrequest", "missing wsfunction"),
         };
-        (200, JSON, "", payload)
+        (200, JSON.to_string(), String::new(), payload)
     } else if method == "GET"
         && (path.starts_with("/webservice/pluginfile.php") || path.starts_with("/pluginfile.php"))
     {
+        // pluginfile downloads require the token query param, like production.
+        let authed = !shared.unauthorized
+            && query
+                .split('&')
+                .filter_map(|p| p.strip_prefix("token="))
+                .any(|t| t == TOKEN);
+        if !authed {
+            return (
+                401,
+                JSON.to_string(),
+                String::new(),
+                exc_body("invalidtoken", "Invalid token"),
+            );
+        }
         let rest = path
             .strip_prefix("/webservice/pluginfile.php")
             .or_else(|| path.strip_prefix("/pluginfile.php"))
             .unwrap_or(path);
         match shared.files.get(rest) {
-            Some(bytes) => (200, OCTET, "", bytes.clone()),
-            None => (404, JSON, "", exc_body("filenotfound", "File not found")),
+            Some(bytes) => {
+                let ext = rest.rsplit('.').next().unwrap_or("");
+                let ctype = mime_for(ext).to_string();
+                let base_extra =
+                    format!("Accept-Ranges: bytes\r\nLast-Modified: {LAST_MODIFIED_HTTP}\r\n");
+                // Task 2 resume: honor `Range: bytes=N-` with 206, else full 200.
+                if let Some(start) = parse_range(range) {
+                    if start >= bytes.len() as u64 {
+                        return (416, ctype, String::new(), Vec::new());
+                    }
+                    let start = start as usize;
+                    let end = bytes.len() - 1;
+                    let extra = format!(
+                        "{base_extra}Content-Range: bytes {start}-{end}/{}\r\n",
+                        bytes.len()
+                    );
+                    (206, ctype, extra, bytes[start..].to_vec())
+                } else {
+                    (200, ctype, base_extra, bytes.clone())
+                }
+            }
+            None => (
+                404,
+                JSON.to_string(),
+                String::new(),
+                exc_body("filenotfound", "File not found"),
+            ),
         }
     } else {
-        (404, JSON, "", exc_body("notfound", "Unknown mock route"))
+        (
+            404,
+            JSON.to_string(),
+            String::new(),
+            exc_body("notfound", "Unknown mock route"),
+        )
     }
+}
+
+/// Parse `bytes=N-` suffix-open ranges; `None` means "no (usable) Range".
+fn parse_range(header: Option<&str>) -> Option<u64> {
+    let v = header?.trim();
+    let rest = v.strip_prefix("bytes=")?;
+    let (start, _) = rest.split_once('-').unwrap_or((rest, ""));
+    if start.is_empty() {
+        return None; // suffix ranges (`bytes=-N`) are not honored here
+    }
+    start.parse().ok()
 }
 
 async fn handle(stream: tokio::net::TcpStream, shared: &Shared) {
@@ -366,6 +444,7 @@ async fn handle(stream: tokio::net::TcpStream, shared: &Shared) {
     let method = parts.next().unwrap_or("");
     let target = parts.next().unwrap_or("").to_string();
     let mut content_length = 0usize;
+    let mut range: Option<String> = None;
     loop {
         let mut line = String::new();
         match reader.read_line(&mut line).await {
@@ -378,6 +457,8 @@ async fn handle(stream: tokio::net::TcpStream, shared: &Shared) {
                 let lower = line.to_ascii_lowercase();
                 if let Some(v) = lower.strip_prefix("content-length:") {
                     content_length = v.trim().parse().unwrap_or(0);
+                } else if let Some(v) = lower.strip_prefix("range:") {
+                    range = Some(v.trim().to_string());
                 }
             }
         }
@@ -386,7 +467,8 @@ async fn handle(stream: tokio::net::TcpStream, shared: &Shared) {
     if content_length > 0 && reader.read_exact(&mut body).await.is_err() {
         return;
     }
-    let (status, content_type, extra, payload) = route(method, &target, &body, shared);
+    let (status, content_type, extra, payload) =
+        route(method, &target, &body, range.as_deref(), shared);
     let mut stream = reader.into_inner();
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n",
