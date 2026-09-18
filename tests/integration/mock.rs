@@ -66,6 +66,11 @@ pub struct MockMoodle {
     #[allow(dead_code)]
     pub ratelimit: usize,
     files: HashMap<String, Vec<u8>>,
+    /// Accepted TCP connections since start (one HTTP request per
+    /// `Connection: close` connection). Task 3 incremental-sync tests use
+    /// this to assert skipped files cause zero file-download hits.
+    #[allow(dead_code)]
+    hits: Arc<AtomicUsize>,
 }
 
 impl MockMoodle {
@@ -84,11 +89,14 @@ impl MockMoodle {
             ratelimit_left: AtomicUsize::new(config.ratelimit),
             unauthorized: config.unauthorized,
         });
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_accept = Arc::clone(&hits);
         tokio::spawn(async move {
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
                     break;
                 };
+                hits_accept.fetch_add(1, Ordering::SeqCst);
                 let shared = Arc::clone(&shared);
                 tokio::spawn(async move {
                     handle(stream, &shared).await;
@@ -103,6 +111,7 @@ impl MockMoodle {
             flaky_500: config.flaky_500,
             ratelimit: config.ratelimit,
             files,
+            hits,
         }
     }
 
@@ -110,6 +119,7 @@ impl MockMoodle {
         Self::start(MockConfig::default()).await
     }
 
+    #[allow(dead_code)]
     pub async fn flaky(n: usize) -> Self {
         Self::start(MockConfig {
             flaky_500: n,
@@ -118,6 +128,7 @@ impl MockMoodle {
         .await
     }
 
+    #[allow(dead_code)]
     pub async fn ratelimited(n: usize) -> Self {
         Self::start(MockConfig {
             ratelimit: n,
@@ -140,6 +151,21 @@ impl MockMoodle {
         &self.base
     }
 
+    /// Accepted connections (HTTP hits) since start or last reset.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn hits(&self) -> usize {
+        self.hits.load(Ordering::SeqCst)
+    }
+
+    /// Zero the hit counter (e.g. between a seeding sync and the sync
+    /// under test).
+    #[allow(dead_code)]
+    pub fn reset_hits(&self) {
+        self.hits.store(0, Ordering::SeqCst);
+    }
+
+    #[allow(dead_code)]
     #[must_use]
     pub fn pluginfile(&self, path: &str) -> Option<&[u8]> {
         self.files.get(path).map(Vec::as_slice)
@@ -209,15 +235,23 @@ fn fixtures(
                 let filename = format!("s{s}-m{m}-{k}.{ext}");
                 let path = format!("/{COURSE_ID}/mod_resource/content/{n}/{filename}");
                 let fileurl = format!("{base}/webservice/pluginfile.php{path}");
-                files.insert(
-                    path.clone(),
-                    format!("mock-bytes:{path}\n").repeat(8).into_bytes(),
-                );
+                // Like production, the served bytes are exactly `filesize`
+                // long so size-based skip logic can trust the declaration.
+                let size = 64 + n;
+                let pattern = format!("mock-bytes:{path}\n");
+                let mut bytes = Vec::with_capacity(size);
+                while bytes.len() < size {
+                    let take = (size - bytes.len()).min(pattern.len());
+                    bytes.extend_from_slice(&pattern.as_bytes()[..take]);
+                }
+                files.insert(path.clone(), bytes);
                 contents.push(serde_json::json!({
                     "filename": filename,
-                    "filesize": 64 + n as i64,
+                    "filesize": size as i64,
                     "mimetype": mime_for(ext),
                     "fileurl": fileurl,
+                    "timemodified": LAST_MODIFIED_UNIX,
+                    "contenthash": format!("{n:040x}"),
                 }));
                 n += 1;
             }

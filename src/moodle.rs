@@ -116,6 +116,13 @@ pub struct ModuleFile {
     pub mimetype: String,
     #[serde(default)]
     pub fileurl: Option<String>,
+    /// Unix seconds from `core_course_get_contents` (`timemodified`).
+    /// Absent in old fixtures → 0 (unknown).
+    #[serde(default)]
+    pub timemodified: i64,
+    /// Moodle `contenthash` (content identifier). Absent → empty.
+    #[serde(default)]
+    pub contenthash: String,
 }
 
 #[derive(Debug, serde::Serialize, Deserialize)]
