@@ -531,7 +531,13 @@ async fn record_move(
     report: &mut Report,
     downloads: &mut Vec<(PlannedFile, PathBuf, String)>,
 ) {
-    let Some(prev) = old_files.get(&mv.url) else {
+    // Same-URL moves are keyed by URL; cross-URL content moves (planner
+    // matched by sha) carry the new URL, so locate the stored entry by its
+    // recorded source path instead. Paths are unique per course state.
+    let prev = old_files
+        .get(&mv.url)
+        .or_else(|| old_files.values().find(|entry| entry.path == mv.from));
+    let Some(prev) = prev else {
         downloads.push((mv.file.clone(), root.join(&mv.to), mv.to.clone()));
         return;
     };

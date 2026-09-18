@@ -500,6 +500,7 @@ pub fn plan(
             });
         }
     }
+    resolve_cross_url_moves_by_sha(old, &mut out);
     // Deterministic output for dry-run JSON diffs.
     out.fetch.sort_by(|a, b| a.dest_rel.cmp(&b.dest_rel));
     out.reuse.sort_by(|a, b| a.dest_rel.cmp(&b.dest_rel));
@@ -508,6 +509,86 @@ pub fn plan(
     out
 }
 
+/// Cross-URL content moves ("move/rename detect by sha", brief Step 2).
+///
+/// Same-URL path changes are detected in [`plan`] proper; this pass handles
+/// the content-identity case: a fetch candidate whose Moodle `contenthash`
+/// matches the stored sha256 of an old entry whose URL vanished from
+/// contents is a move (rename on disk, no download), not a fresh download.
+/// Only otherwise-stale entries participate (a still-visible URL keeps its
+/// own reuse/move/fetch verdict); each stale entry is consumed at most
+/// once, deterministically by (`path`, `url`) order. Empty hashes on either
+/// side never match (old fixtures, unhashed externals).
+fn resolve_cross_url_moves_by_sha(old: &BTreeMap<String, crate::state::FileEntry>, out: &mut Plan) {
+    use std::collections::VecDeque;
+    // sha256 → queue of stale indices in deterministic (path, url) order
+    // (final output sorting happens after this pass, so order locally).
+    let mut order: Vec<usize> = (0..out.stale.len()).collect();
+    order.sort_by(|&a, &b| {
+        (out.stale[a].path.clone(), out.stale[a].url.clone())
+            .cmp(&(out.stale[b].path.clone(), out.stale[b].url.clone()))
+    });
+    let mut by_sha: std::collections::HashMap<String, VecDeque<usize>> =
+        std::collections::HashMap::new();
+    for idx in order {
+        let stale = &out.stale[idx];
+        let Some(entry) = old.get(&stale.url) else {
+            continue;
+        };
+        if entry.sha256.is_empty() {
+            continue;
+        }
+        by_sha
+            .entry(entry.sha256.clone())
+            .or_default()
+            .push_back(idx);
+    }
+    if by_sha.is_empty() {
+        return;
+    }
+    let mut consumed = vec![false; out.stale.len()];
+    let mut kept_fetch: Vec<PlannedFile> = Vec::with_capacity(out.fetch.len());
+    // Contents-walk order is deterministic, so in-place iteration is stable.
+    let fetch = std::mem::take(&mut out.fetch);
+    for file in fetch {
+        // Externals never download (pointer files are regenerated), so
+        // content matching only applies to real pluginfile downloads.
+        let matched = if file.is_external || file.contenthash.is_empty() {
+            None
+        } else {
+            by_sha.get_mut(&file.contenthash).and_then(|queue| {
+                while let Some(&idx) = queue.front() {
+                    if consumed[idx] {
+                        queue.pop_front();
+                        continue;
+                    }
+                    return queue.pop_front();
+                }
+                None
+            })
+        };
+        match matched {
+            Some(idx) => {
+                consumed[idx] = true;
+                out.moves.push(FileMove {
+                    url: file.url.clone(),
+                    from: out.stale[idx].path.clone(),
+                    to: file.dest_rel.clone(),
+                    file,
+                });
+            }
+            None => kept_fetch.push(file),
+        }
+    }
+    out.fetch = kept_fetch;
+    let mut kept_stale = Vec::with_capacity(out.stale.len());
+    for (idx, stale) in out.stale.drain(..).enumerate() {
+        if !consumed[idx] {
+            kept_stale.push(stale);
+        }
+    }
+    out.stale = kept_stale;
+}
 /// Convenience: plan + serialise for `--dry-run` output.
 pub fn plan_json(
     contents: &[CourseSection],
@@ -681,6 +762,111 @@ mod tests {
         assert!(p.reuse.is_empty());
         assert!(p.fetch.is_empty());
         assert_eq!(p.moves.len(), 1, "same url new path → move: {p:?}");
+    }
+
+    #[test]
+    fn planner_cross_url_move_by_sha() {
+        use crate::state::FileEntry;
+        // Old state: URL-A stored at 001-m/a.pdf with sha S.
+        let mut files = BTreeMap::new();
+        files.insert(
+            "http://h.invalid/webservice/pluginfile.php/1/a.pdf".to_string(),
+            FileEntry {
+                path: "C/RA01/001-m/a.pdf".to_string(),
+                sha256: "somesha256".to_string(),
+                size: 100,
+            },
+        );
+        let state = CourseState {
+            shortname: "C".to_string(),
+            files,
+            ..Default::default()
+        };
+        // New contents: different URL-B, same bytes (Moodle contenthash S),
+        // laid out under a renamed module folder.
+        let contents = vec![CourseSection {
+            id: 1,
+            name: "RA01".to_string(),
+            summary: "s".to_string(),
+            position: 1,
+            modules: vec![crate::moodle::CourseModule {
+                id: 2,
+                name: "renamed".to_string(),
+                module_type: "resource".to_string(),
+                description: None,
+                contents: Some(vec![ModuleFile {
+                    filename: "a.pdf".to_string(),
+                    filesize: 100,
+                    mimetype: "application/pdf".to_string(),
+                    fileurl: Some(
+                        "http://h.invalid/webservice/pluginfile.php/1/a-v2.pdf".to_string(),
+                    ),
+                    timemodified: 0,
+                    contenthash: "somesha256".to_string(),
+                }]),
+            }],
+        }];
+        let p = plan(&contents, &SyncFilters::default(), &state, "C");
+        assert!(p.fetch.is_empty(), "sha match must not download: {p:?}");
+        assert!(p.stale.is_empty(), "matched stale entry is consumed: {p:?}");
+        assert_eq!(p.moves.len(), 1, "cross-URL sha match → move: {p:?}");
+        let mv = &p.moves[0];
+        assert_eq!(
+            mv.url,
+            "http://h.invalid/webservice/pluginfile.php/1/a-v2.pdf"
+        );
+        assert_eq!(mv.from, "C/RA01/001-m/a.pdf");
+        assert!(
+            mv.to.contains("001-renamed"),
+            "destination follows new layout: {p:?}"
+        );
+    }
+
+    #[test]
+    fn planner_cross_url_no_match_without_hash() {
+        use crate::state::FileEntry;
+        let mut files = BTreeMap::new();
+        files.insert(
+            "http://h.invalid/webservice/pluginfile.php/1/a.pdf".to_string(),
+            FileEntry {
+                path: "C/RA01/001-m/a.pdf".to_string(),
+                sha256: "somesha256".to_string(),
+                size: 100,
+            },
+        );
+        let state = CourseState {
+            shortname: "C".to_string(),
+            files,
+            ..Default::default()
+        };
+        // Same shape as above but the new file carries no contenthash:
+        // empty hashes never match, so it stays fetch + stale.
+        let contents = vec![CourseSection {
+            id: 1,
+            name: "RA01".to_string(),
+            summary: "s".to_string(),
+            position: 1,
+            modules: vec![crate::moodle::CourseModule {
+                id: 2,
+                name: "renamed".to_string(),
+                module_type: "resource".to_string(),
+                description: None,
+                contents: Some(vec![ModuleFile {
+                    filename: "a.pdf".to_string(),
+                    filesize: 100,
+                    mimetype: "application/pdf".to_string(),
+                    fileurl: Some(
+                        "http://h.invalid/webservice/pluginfile.php/1/a-v2.pdf".to_string(),
+                    ),
+                    timemodified: 0,
+                    contenthash: String::new(),
+                }]),
+            }],
+        }];
+        let p = plan(&contents, &SyncFilters::default(), &state, "C");
+        assert_eq!(p.fetch.len(), 1, "no hash → download: {p:?}");
+        assert_eq!(p.stale.len(), 1, "old URL stays a GC candidate: {p:?}");
+        assert!(p.moves.is_empty());
     }
 
     #[test]
