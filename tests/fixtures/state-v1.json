@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "user_id": 42,
+  "courses": {
+    "101": {
+      "fullname": "Mock Course",
+      "shortname": "MOCK101",
+      "synced_at": "1700000000",
+      "sections": {
+        "1": "RA01"
+      },
+      "files": {
+        "http://h.invalid/webservice/pluginfile.php/1/a.pdf": {
+          "path": "MOCK101/RA01/001-m/a.pdf",
+          "sha256": "abc123",
+          "size": 100
+        }
+      }
+    }
+  }
+}

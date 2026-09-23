@@ -1,0 +1,10 @@
+/target/
+.env
+.env.*
+!.env.example
+.moodle/
+**/.moodle/
+**/token
+state.json
+*.pem
+*.key

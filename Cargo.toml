@@ -1,0 +1,38 @@
+[package]
+name = "moodle-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rmcp = { version = "1", features = ["server", "macros", "transport-io", "schemars"] }
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "gzip", "http2"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+dotenvy = "0.15"
+thiserror = "2"
+regex = "1"
+sha2 = "0.10"
+schemars = "1.2.2"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+ratatui = "0.29"
+crossterm = "0.28"
+htmd = "0.1"
+deunicode = "1"
+tantivy = "0.22"
+fs2 = "0.4"
+
+[[bin]]
+name = "moodle-mcp"
+path = "src/bin/mcp.rs"
+
+[[bin]]
+name = "moodle-sync"
+path = "src/bin/sync.rs"
+
+[lib]
+name = "moodle_mcp"
+path = "src/lib.rs"
