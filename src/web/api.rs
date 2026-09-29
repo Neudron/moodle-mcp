@@ -498,11 +498,43 @@ async fn office_config(State(app): S, Query(q): Query<PathQ>) -> R<Json<Value>> 
     ))
 }
 
+/// Office files open as their `_amin` copy so a teacher original is never edited in place.
+fn open_target(root: &std::path::Path, rel: &str) -> Result<std::path::PathBuf, String> {
+    let is_office = rel
+        .rsplit_once('.')
+        .is_some_and(|(_, e)| crate::web::office::doc_type(e).is_some());
+    let rel = if is_office {
+        crate::web::office::amin_copy(root, rel)?
+    } else {
+        rel.to_string()
+    };
+    files::jail(root, &rel)
+}
+
 async fn open_local(State(app): S, Json(b): Json<PathQ>) -> R<Json<Value>> {
-    let p = files::jail(std::path::Path::new(&app.root), &b.path).map_err(forbid)?;
+    let p = open_target(std::path::Path::new(&app.root), &b.path).map_err(forbid)?;
     std::process::Command::new("xdg-open")
         .arg(p)
         .spawn()
         .map_err(anyhow::Error::from)?;
     Ok(Json(json!({})))
+}
+
+#[cfg(test)]
+mod open_tests {
+    use super::open_target;
+
+    #[test]
+    fn open_office_original_targets_amin_copy() {
+        let r = std::env::temp_dir().join(format!("mweb-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&r);
+        std::fs::create_dir_all(r.join("C")).unwrap();
+        std::fs::write(r.join("C/T.docx"), "orig").unwrap();
+        std::fs::write(r.join("C/n.pdf"), "pdf").unwrap();
+        let p = open_target(&r, "C/T.docx").unwrap();
+        assert!(p.ends_with("C/T_amin.docx"));
+        assert_eq!(std::fs::read_to_string(r.join("C/T.docx")).unwrap(), "orig");
+        assert!(open_target(&r, "C/n.pdf").unwrap().ends_with("C/n.pdf"));
+        assert!(!r.join("C/n_amin.pdf").exists());
+    }
 }
