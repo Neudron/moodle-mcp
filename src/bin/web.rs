@@ -27,6 +27,12 @@ async fn main() -> Result<()> {
         }
     });
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    if let Some(bind) = web::env::get("WEB_DOCKER_BIND") {
+        let l = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
+        let oo = web::office::oo_router().with_state(Arc::clone(&app));
+        tokio::spawn(async move { axum::serve(l, oo).await.ok() });
+        tracing::info!("onlyoffice callbacks on {bind}:{port}");
+    }
     tracing::info!("moodle-web on http://localhost:{port}");
     web::serve_on(listener, app).await
 }

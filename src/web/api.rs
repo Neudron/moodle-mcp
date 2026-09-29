@@ -111,6 +111,9 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/grades", get(grades))
         .route("/api/status", get(status))
         .route("/api/sync", post(sync_now))
+        .merge(crate::web::office::oo_router())
+        .route("/api/office/config", get(office_config))
+        .route("/api/open", post(open_local))
 }
 
 fn static_file(ct: &'static str, body: &'static str) -> Response {
@@ -471,4 +474,35 @@ async fn sync_now(State(app): S) -> R<Json<Value>> {
         .await
         .map_err(|e| ApiErr(StatusCode::BAD_GATEWAY, e.to_string()))?;
     Ok(Json(json!({"events": ev.len()})))
+}
+
+async fn office_config(State(app): S, Query(q): Query<PathQ>) -> R<Json<Value>> {
+    let secret = crate::web::env::get("ONLYOFFICE_JWT").ok_or(ApiErr(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "OnlyOffice no disponible".into(),
+    ))?;
+    let root = std::path::Path::new(&app.root);
+    let rel = crate::web::office::amin_copy(root, &q.path).map_err(forbid)?;
+    let p = files::jail(root, &rel).map_err(forbid)?;
+    let mtime = std::fs::metadata(&p)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs() as i64);
+    let host = format!("http://host.docker.internal:{}", app.port);
+    let oo =
+        crate::web::env::get("ONLYOFFICE_URL").unwrap_or_else(|| "http://127.0.0.1:8080".into());
+    Ok(Json(
+        json!({"api_js": format!("{oo}/web-apps/apps/api/documents/api.js"), "rel": rel,
+        "config": crate::web::office::editor_config(&secret, &rel, mtime, &host, crate::web::now())}),
+    ))
+}
+
+async fn open_local(State(app): S, Json(b): Json<PathQ>) -> R<Json<Value>> {
+    let p = files::jail(std::path::Path::new(&app.root), &b.path).map_err(forbid)?;
+    std::process::Command::new("xdg-open")
+        .arg(p)
+        .spawn()
+        .map_err(anyhow::Error::from)?;
+    Ok(Json(json!({})))
 }

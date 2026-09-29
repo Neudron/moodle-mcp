@@ -301,3 +301,23 @@ taskExtras.push((tv) => {
   } }, 'Envia per qualificar');
   return [up, send];
 });
+
+const OFFICE = /\.(docx?|odt|rtf|xlsx?|ods|csv|pptx?|odp)$/i;
+const editButton = (rel) => h('a', { href: `#/edita/${enc(rel)}` }, h('button', { type: 'button', class: 'primary' }, 'Edita'));
+fileExtras.push((info) => (OFFICE.test(info.rel) ? editButton(info.rel) : null));
+taskExtras.push((tv) => { const f = tv.local.files.find((x) => OFFICE.test(x)); return f ? editButton(f) : null; });
+
+views.edita = async (...parts) => {
+  const rel = parts.join('/');
+  const fallback = () => h('div', {}, h('p', { class: 'err' }, 'OnlyOffice no disponible.'),
+    h('button', { type: 'button', onclick: () => api('/api/open', { method: 'POST', body: { path: rel } }) }, "Obre amb l'aplicació de l'ordinador"));
+  let cfg;
+  try { cfg = await api(`/api/office/config?path=${enc(rel)}`); } catch (e) { return fallback(); }
+  const holder = h('div', { id: 'oo', style: { height: '80vh' } });
+  const wrap = h('section', {}, h('p', {}, h('a', { href: `#/fitxers/${enc(cfg.rel)}` }, '← ', cfg.rel)), holder);
+  const s = h('script', { src: cfg.api_js });
+  s.onload = () => new window.DocsAPI.DocEditor('oo', cfg.config);
+  s.onerror = () => wrap.replaceChildren(fallback());
+  document.head.append(s);
+  return wrap;
+};
