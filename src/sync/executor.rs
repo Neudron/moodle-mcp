@@ -285,6 +285,10 @@ async fn write_external(
             path: file.dest_rel.clone(),
             sha256: sha256_hex(body.as_bytes()),
             size: body.len() as i64,
+            // State v2 (Task 4): externals carry contents metadata + source.
+            timemodified: file.timemodified,
+            mimetype: file.mimetype.clone(),
+            source: crate::state::SOURCE_EXTERNAL.to_string(),
         },
         bytes: body.len() as u64,
     }
@@ -323,6 +327,14 @@ async fn download_one(
                     path: dest_rel,
                     sha256: meta.sha256,
                     size: meta.size as i64,
+                    // State v2 (Task 4): verified download metadata + source.
+                    timemodified: meta.timemodified,
+                    mimetype: meta.mimetype,
+                    source: if file.is_external {
+                        crate::state::SOURCE_EXTERNAL.to_string()
+                    } else {
+                        crate::state::SOURCE_PLUGINFILE.to_string()
+                    },
                 },
                 bytes: meta.size,
             }

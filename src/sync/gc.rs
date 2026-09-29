@@ -412,6 +412,7 @@ mod tests {
                     path: path.to_string(),
                     sha256: "x".to_string(),
                     size: 1,
+                    ..Default::default()
                 },
             );
         }

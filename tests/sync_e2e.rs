@@ -193,6 +193,7 @@ async fn e2e_gc_preview_trash_apply_with_audit() {
             path: stale_rel.to_string(),
             sha256: "deadbeef".to_string(),
             size: 5,
+            ..Default::default()
         },
     );
     let files = cs.files.clone();

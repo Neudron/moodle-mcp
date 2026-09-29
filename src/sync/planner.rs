@@ -671,6 +671,7 @@ mod tests {
                 path: "C/RA01/001-m/a.pdf".to_string(),
                 sha256: "abc".to_string(),
                 size: 100,
+                ..Default::default()
             },
         );
         let state = CourseState {
@@ -731,6 +732,7 @@ mod tests {
                 path: "C/RA01/001-old/a.pdf".to_string(),
                 sha256: "abc".to_string(),
                 size: 100,
+                ..Default::default()
             },
         );
         let state = CourseState {
@@ -775,6 +777,7 @@ mod tests {
                 path: "C/RA01/001-m/a.pdf".to_string(),
                 sha256: "somesha256".to_string(),
                 size: 100,
+                ..Default::default()
             },
         );
         let state = CourseState {
@@ -832,6 +835,7 @@ mod tests {
                 path: "C/RA01/001-m/a.pdf".to_string(),
                 sha256: "somesha256".to_string(),
                 size: 100,
+                ..Default::default()
             },
         );
         let state = CourseState {

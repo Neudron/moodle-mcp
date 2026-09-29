@@ -40,10 +40,6 @@ use crate::moodle::{Course, CourseSection, Moodle};
 use crate::ra;
 use crate::state::State;
 
-fn epoch_secs_now() -> String {
-    unix_secs_now().to_string()
-}
-
 fn course_dir_name(course: &Course) -> String {
     if course.shortname.is_empty() {
         return format!("course-{}", course.id);
@@ -282,7 +278,8 @@ pub async fn sync_course_with_options(
         .unwrap_or_default();
     cs.upsert(course);
     let prev_synced_at = cs.synced_at.clone();
-    cs.synced_at = epoch_secs_now();
+    // State v2 (Task 4): ISO8601 on write; v1 epoch values migrate on load.
+    cs.synced_at = iso_now();
 
     let plan = planner::plan(&contents, filters, &cs, &dir_name);
     if filters.dry_run {
