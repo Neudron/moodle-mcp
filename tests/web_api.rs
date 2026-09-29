@@ -221,3 +221,22 @@ fn small_tag_font_size_is_16px_multiple() {
     let css = include_str!("../web/app.css");
     assert!(css.contains("small{font-size:16px}"));
 }
+
+#[tokio::test]
+async fn app_shell_cannot_be_framed_cross_site() {
+    let (base, ..) = start("frame").await;
+    let r = reqwest::get(format!("{base}/")).await.unwrap();
+    assert_eq!(r.headers().get("x-frame-options").unwrap(), "SAMEORIGIN");
+    let csp: Vec<_> = r
+        .headers()
+        .get_all("content-security-policy")
+        .iter()
+        .map(|v| v.to_str().unwrap().to_string())
+        .collect();
+    assert!(
+        csp.iter().any(|v| v.contains("frame-ancestors 'self'")),
+        "{csp:?}"
+    );
+    let r = reqwest::get(format!("{base}/api/status")).await.unwrap();
+    assert_eq!(r.headers().get("x-frame-options").unwrap(), "SAMEORIGIN");
+}

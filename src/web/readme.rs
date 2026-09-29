@@ -198,6 +198,17 @@ pub fn import_once(db: &Db, root: &str) -> Result<()> {
     if let Ok(md) = std::fs::read_to_string(&path) {
         let (done, _) = parse(&md);
         let tasks: Vec<Task> = db.all_tasks()?;
+        // README lists bare names; the rest of the app wants paths under root.
+        // ponytail: first match wins if two submit/ folders hold the same name.
+        let mut under_submit = Vec::new();
+        crate::web::files::walk(std::path::Path::new(root), "submit", &mut under_submit);
+        let resolve = |name: &str| {
+            under_submit
+                .iter()
+                .find(|rel| file_name(rel) == name)
+                .cloned()
+                .unwrap_or_else(|| name.to_string())
+        };
         for r in done {
             match tasks
                 .iter()
@@ -211,7 +222,7 @@ pub fn import_once(db: &Db, root: &str) -> Result<()> {
                         .files
                         .split(", ")
                         .filter(|f| !f.is_empty())
-                        .map(String::from)
+                        .map(resolve)
                         .collect(),
                     verified: parse_date(&r.verified),
                     chat_session: String::new(),
@@ -260,8 +271,16 @@ mod tests {
         let root = std::env::temp_dir().join(format!("mweb-readme-{}", std::process::id()));
         std::fs::create_dir_all(root.join("submit")).unwrap();
         std::fs::write(root.join("submit/README.md"), CURRENT).unwrap();
+        let done_dir = root.join("submit/_lliurat/LMSGI/M4_A2_A_RA1");
+        std::fs::create_dir_all(&done_dir).unwrap();
+        std::fs::write(done_dir.join("M4_A2_A_RA1_amin.docx"), "d").unwrap();
         import_once(&db, root.to_str().unwrap()).unwrap();
         let l = db.local("assign:1").unwrap();
+        assert_eq!(
+            l.files,
+            vec!["submit/_lliurat/LMSGI/M4_A2_A_RA1/M4_A2_A_RA1_amin.docx"],
+            "bare README names must resolve to root-relative paths"
+        );
         assert_eq!(l.status, "lliurat");
         assert_eq!(l.module, "LMSGI 0373");
         let n = db.manual_rows().unwrap().len();

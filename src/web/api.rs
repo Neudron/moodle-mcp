@@ -51,7 +51,20 @@ pub async fn guard_mw(State(app): S, req: Request, next: Next) -> Response {
         g("x-neu"),
         app.port,
     ) {
-        Ok(()) => next.run(req).await,
+        Ok(()) => {
+            // Clickjacking: other sites may not frame the app; our own iframes (PDF, HTML preview) still work.
+            let mut res = next.run(req).await;
+            let h = res.headers_mut();
+            h.insert(
+                header::X_FRAME_OPTIONS,
+                header::HeaderValue::from_static("SAMEORIGIN"),
+            );
+            h.append(
+                header::CONTENT_SECURITY_POLICY,
+                header::HeaderValue::from_static("frame-ancestors 'self'"),
+            );
+            res
+        }
         Err(e) => (StatusCode::FORBIDDEN, e).into_response(),
     }
 }
