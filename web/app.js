@@ -188,3 +188,92 @@ try { const t = localStorage.getItem('theme'); if (t) document.documentElement.d
 $('.skip').addEventListener('click', (e) => { e.preventDefault(); $('#main').focus(); });
 addEventListener('hashchange', route);
 addEventListener('DOMContentLoaded', () => { route(); refreshStatus(); loadCourses(); setInterval(refreshStatus, 60000); });
+
+views.curs = async (short) => {
+  const c = await api(`/api/courses/${enc(short)}`);
+  const tasks = (await api('/api/tasks')).filter((tv) => tv.task.course === short && tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
+  return h('section', {},
+    h('h1', {}, h('span', { class: 'dot', style: { '--h': hue(short), display: 'inline-block' } }), ' ', c.title),
+    tasks.length ? [h('h2', {}, 'Tasques'), h('div', { class: 'cards' }, tasks.map(card))] : null,
+    h('h2', {}, 'Continguts'),
+    c.sections.map((s, i) => h('details', { open: i < 2 },
+      h('summary', {}, s.name),
+      s.modules.map((m) => [h('h3', {}, m.name), h('ul', { class: 'list' },
+        m.files.filter((f) => !f.is_dir).map((f) => h('li', {}, h('a', { href: `#/fitxers/${enc(f.rel)}` }, f.name))))]))));
+};
+
+views.fitxers = async (...parts) => {
+  const rel = parts.join('/');
+  const info = await api(`/api/files?path=${enc(rel)}`);
+  const crumbs = [h('a', { href: '#/fitxers' }, '~/smx')];
+  rel.split('/').filter(Boolean).reduce((acc, p) => { const r = acc ? `${acc}/${p}` : p; crumbs.push(' / ', h('a', { href: `#/fitxers/${enc(r)}` }, p)); return r; }, '');
+  const head = h('p', { class: 'dim' }, crumbs);
+  if (info.kind === 'dir') {
+    return h('section', {}, h('h1', {}, 'Fitxers'), head, h('ul', { class: 'list' },
+      info.entries.map((e) => h('li', {}, h('a', { href: `#/fitxers/${enc(e.rel)}` }, e.is_dir ? '📁 ' : '', e.name, e.is_dir ? '' : h('span', { class: 'dim' }, `  ${Math.ceil(e.size / 1024)} KB`))))));
+  }
+  const raw = `/api/raw?path=${enc(rel)}`;
+  const name = rel.split('/').pop();
+  let body;
+  if (info.mime.startsWith('image/')) body = h('img', { src: raw, alt: name, style: { maxWidth: '100%', borderRadius: '16px' } });
+  else if (info.mime === 'application/pdf') body = h('iframe', { class: 'body', src: raw, title: 'PDF' });
+  else if (info.mime.startsWith('text/html')) body = h('iframe', { class: 'body', src: raw, sandbox: '', title: 'HTML' });
+  else if (info.mime.startsWith('text/')) body = h('pre', {}, info.size > 2e6 ? 'Fitxer massa gran per previsualitzar.' : await api(raw));
+  else body = h('p', { class: 'dim' }, 'Sense previsualització per a aquest tipus.');
+  return h('section', {}, h('h1', {}, name), head,
+    h('div', { class: 'actions' }, h('a', { href: raw, download: name }, h('button', { type: 'button' }, 'Descarrega')), fileExtras.map((f) => f(info))),
+    body);
+};
+
+views.calendari = async (ym) => {
+  const all = (await api('/api/tasks')).filter((tv) => tv.task.due && tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
+  const now = new Date();
+  const [y, m] = ym ? ym.split('-').map(Number) : [now.getFullYear(), now.getMonth() + 1];
+  const first = new Date(y, m - 1, 1), start = new Date(first);
+  start.setDate(1 - ((first.getDay() + 6) % 7)); // Monday first
+  const key = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const byDay = {};
+  for (const tv of all) { const d = new Date(tv.task.due * 1000); (byDay[key(d)] ||= []).push(tv); }
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    const cls = 'd' + (d.getMonth() !== m - 1 ? ' out' : '') + (key(d) === key(now) ? ' today' : '');
+    cells.push(h('div', { class: cls }, h('strong', {}, d.getDate()),
+      (byDay[key(d)] || []).map((tv) => h('a', { href: `#/tasca/${enc(tv.task.id)}`, title: tv.task.title },
+        h('span', { class: 'dot', style: { '--h': hue(tv.task.course), display: 'inline-block' } }), ' ', isDone(tv) ? '✓ ' : '', tv.task.title))));
+  }
+  const nav = (dm) => { const d = new Date(y, m - 1 + dm, 1); return `#/calendari/${d.getFullYear()}-${d.getMonth() + 1}`; };
+  const title = new Intl.DateTimeFormat('ca-ES', { month: 'long', year: 'numeric' }).format(first);
+  return h('section', {}, h('h1', {}, title),
+    h('div', { class: 'actions' }, h('a', { href: nav(-1) }, h('button', { type: 'button' }, '← Anterior')), h('a', { href: '#/calendari' }, h('button', { type: 'button' }, 'Avui')), h('a', { href: nav(1) }, h('button', { type: 'button' }, 'Següent →'))),
+    h('div', { class: 'cal' }, ['dl', 'dt', 'dc', 'dj', 'dv', 'ds', 'dg'].map((d) => h('div', { class: 'dim' }, d)), cells));
+};
+
+views.notes = async () => {
+  const gs = await api('/api/grades');
+  if (!gs.length) return h('section', {}, h('h1', {}, 'Notes'), h('p', { class: 'dim' }, 'Encara no hi ha notes.'));
+  return h('section', {}, h('h1', {}, 'Notes'), gs.map((g) => [
+    h('h2', {}, g.course || `Curs ${g.course_id}`),
+    h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Element'), h('th', {}, 'Nota'), h('th', {}, '%'))),
+      h('tbody', {}, (g.items || []).filter((i) => i.itemname).map((i) => h('tr', {}, h('td', {}, i.itemname), h('td', {}, i.gradeformatted || '—'), h('td', {}, i.percentageformatted || '—')))))]));
+};
+
+views.forums = async () => {
+  const posts = (await api('/api/tasks')).filter((tv) => tv.task.kind === 'post').sort((a, b) => b.task.opens - a.task.opens);
+  const item = (tv) => h('details', { ontoggle: async (e) => {
+    const d = e.target;
+    if (!d.open || d.dataset.loaded) return;
+    d.dataset.loaded = '1';
+    const full = await api(`/api/tasks/${enc(tv.task.id)}`);
+    d.append(sandboxed(full.task.body_html));
+    if (tv.local.status !== 'llegit') {
+      await api(`/api/tasks/${enc(tv.task.id)}/status`, { method: 'POST', body: { status: 'llegit' } });
+      tv.local.status = 'llegit';
+    }
+  } }, h('summary', {}, tv.local.status === 'llegit' ? '' : '● ', tv.task.title, h('span', { class: 'dim' }, ` · ${tv.task.course} · ${when(tv.task.opens)}`)));
+  const unread = posts.filter((p) => p.local.status !== 'llegit');
+  const read = posts.filter((p) => p.local.status === 'llegit');
+  return h('section', {}, h('h1', {}, 'Fòrums i avisos'),
+    unread.length ? [h('h2', {}, `Sense llegir · ${unread.length}`), unread.map(item)] : h('p', { class: 'dim' }, 'Tot llegit.'),
+    read.length ? [h('h2', {}, 'Llegits'), read.map(item)] : null);
+};
