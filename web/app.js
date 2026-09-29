@@ -98,10 +98,19 @@ views.tauler = async () => {
 views.tasca = async (id) => {
   const tv = await api(`/api/tasks/${enc(id)}`);
   const t = tv.task, l = tv.local;
-  const status = h('select', { 'aria-label': 'Estat local', onchange: async (e) => {
-    try { await api(`/api/tasks/${enc(id)}/status`, { method: 'POST', body: { status: e.target.value } }); toast('Estat desat'); route(); }
-    catch (err) { toast(err.message); e.target.value = l.status; } } },
+  // Save only on an explicit click: arrow keys on a closed <select> fire `change` per step,
+  // and 'lliurat' moves the submit folder, so it also needs a confirmation.
+  const select = h('select', { 'aria-label': 'Estat local' },
     ['', 'per revisar', 'revisat OK', 'lliurat'].map((s) => h('option', { value: s, selected: s === l.status }, s || '— sense estat —')));
+  const save = h('button', { type: 'button', id: 'estat-desa', onclick: async () => {
+    const next = select.value;
+    if (next === l.status) return;
+    if (next === 'lliurat' && !(await confirmDialog('Marcar com a lliurada?',
+      h('p', {}, `La carpeta de "${t.title}" es mourà a submit/_lliurat/.`), 'Marca lliurada'))) { select.value = l.status; save.focus(); return; }
+    try { await api(`/api/tasks/${enc(id)}/status`, { method: 'POST', body: { status: next } }); toast('Estat desat'); await route(); $('#estat-desa')?.focus(); }
+    catch (err) { toast(err.message); select.value = l.status; }
+  } }, 'Desa estat');
+  const status = h('span', { class: 'actions', style: { margin: '0' } }, select, save);
   const actions = h('div', { class: 'actions' },
     h('a', { href: t.url, target: '_blank', rel: 'noopener' }, h('button', { type: 'button' }, 'Obre a Moodle')),
     status,
