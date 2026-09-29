@@ -318,7 +318,8 @@ views.edita = async (...parts) => {
   let cfg;
   try { cfg = await api('/api/office/config', { method: 'POST', body: { path: rel } }); }
   catch (e) { return fallback(e.status === 503 ? 'OnlyOffice no disponible.' : e.message); }
-  const holder = h('div', { id: 'oo', style: { height: '80vh' } });
+  // DocsAPI replaces #oo with an iframe sized 100% of its parent, so the parent carries the height.
+  const holder = h('div', { style: { height: '80vh' } }, h('div', { id: 'oo' }));
   const wrap = h('section', {}, h('p', {}, h('a', { href: `#/fitxers/${enc(cfg.rel)}` }, '← ', cfg.rel)), holder);
   const open = () => new window.DocsAPI.DocEditor('oo', cfg.config);
   if (window.DocsAPI) setTimeout(open, 0); // holder is attached once route() swaps the view in
