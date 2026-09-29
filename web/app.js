@@ -99,7 +99,8 @@ views.tasca = async (id) => {
   const tv = await api(`/api/tasks/${enc(id)}`);
   const t = tv.task, l = tv.local;
   const status = h('select', { 'aria-label': 'Estat local', onchange: async (e) => {
-    await api(`/api/tasks/${enc(id)}/status`, { method: 'POST', body: { status: e.target.value } }); toast('Estat desat'); } },
+    try { await api(`/api/tasks/${enc(id)}/status`, { method: 'POST', body: { status: e.target.value } }); toast('Estat desat'); route(); }
+    catch (err) { toast(err.message); e.target.value = l.status; } } },
     ['', 'per revisar', 'revisat OK', 'lliurat'].map((s) => h('option', { value: s, selected: s === l.status }, s || '— sense estat —')));
   const actions = h('div', { class: 'actions' },
     h('a', { href: t.url, target: '_blank', rel: 'noopener' }, h('button', { type: 'button' }, 'Obre a Moodle')),
