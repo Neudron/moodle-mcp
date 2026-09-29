@@ -196,7 +196,15 @@ pub async fn sync_all(
                     &[("assignid", asg["id"].to_string())],
                 )
                 .await?;
-                out.push(from_assign(c, asg, &st, &base));
+                let mut t = from_assign(c, asg, &st, &base);
+                if st.is_null() {
+                    // transient failure: keep cached status/grade/feedback
+                    if let Some(o) = db.task(&t.id).map_err(CoreError::Other)? {
+                        (t.moodle_status, t.grade, t.feedback_html) =
+                            (o.moodle_status, o.grade, o.feedback_html);
+                    }
+                }
+                out.push(t);
             }
         }
         let q = ws(
@@ -212,7 +220,13 @@ pub async fn sync_all(
                 &[("quizid", quiz["id"].to_string()), ("status", "all".into())],
             )
             .await?;
-            out.push(from_quiz(c, quiz, &at, &base));
+            let mut t = from_quiz(c, quiz, &at, &base);
+            if at.is_null() {
+                if let Some(o) = db.task(&t.id).map_err(CoreError::Other)? {
+                    t.moodle_status = o.moodle_status;
+                }
+            }
+            out.push(t);
         }
         let f = ws(
             m,

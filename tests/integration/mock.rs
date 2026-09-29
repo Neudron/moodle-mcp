@@ -39,6 +39,8 @@ pub struct MockConfig {
     pub ratelimit: usize,
     /// Every webservice call fails with HTTP 401.
     pub unauthorized: bool,
+    /// This wsfunction answers with a non-auth exception.
+    pub fail_fn: Option<&'static str>,
 }
 
 struct Shared {
@@ -49,6 +51,7 @@ struct Shared {
     flaky_left: AtomicUsize,
     ratelimit_left: AtomicUsize,
     unauthorized: bool,
+    fail_fn: Option<&'static str>,
 }
 
 pub struct MockMoodle {
@@ -88,6 +91,7 @@ impl MockMoodle {
             flaky_left: AtomicUsize::new(config.flaky_500),
             ratelimit_left: AtomicUsize::new(config.ratelimit),
             unauthorized: config.unauthorized,
+            fail_fn: config.fail_fn,
         });
         let hits = Arc::new(AtomicUsize::new(0));
         let hits_accept = Arc::clone(&hits);
@@ -427,6 +431,7 @@ fn route(
             Some("core_course_get_contents") => {
                 serde_json::to_vec(&shared.contents).unwrap_or_default()
             }
+            Some(other) if shared.fail_fn == Some(other) => exc_body("servererror", "forced"),
             Some(other) => match web_ws(other) {
                 Some(v) => serde_json::to_vec(&v).unwrap_or_default(),
                 None => exc_body("invalidfunction", &format!("unknown wsfunction {other}")),

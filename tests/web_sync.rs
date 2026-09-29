@@ -59,3 +59,35 @@ async fn sync_auth_error_keeps_tasks() {
     );
     assert_eq!(db.all_tasks().unwrap().len(), before);
 }
+
+#[tokio::test]
+async fn transient_status_failure_keeps_cache_no_false_grade() {
+    let db = Db::memory().unwrap();
+    let r = root("transient");
+    let ok = MockMoodle::healthy().await;
+    sync_all(&Moodle::new(ok.base(), TOKEN), &db, &r, false)
+        .await
+        .unwrap();
+    let want = db.task("assign:7").unwrap().unwrap();
+    assert!(!want.grade.is_empty());
+    let bad = MockMoodle::start(MockConfig {
+        fail_fn: Some("mod_assign_get_submission_status"),
+        ..Default::default()
+    })
+    .await;
+    sync_all(&Moodle::new(bad.base(), TOKEN), &db, &r, false)
+        .await
+        .unwrap();
+    let got = db.task("assign:7").unwrap().unwrap();
+    assert_eq!(
+        (&got.grade, &got.moodle_status, &got.feedback_html),
+        (&want.grade, &want.moodle_status, &want.feedback_html)
+    );
+    let ev = sync_all(&Moodle::new(ok.base(), TOKEN), &db, &r, false)
+        .await
+        .unwrap();
+    assert!(
+        !ev.iter().any(|e| matches!(e, Event::NewGrade(_))),
+        "{ev:?}"
+    );
+}
