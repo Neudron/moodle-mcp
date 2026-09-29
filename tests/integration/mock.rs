@@ -279,6 +279,40 @@ fn fixtures(
     )
 }
 
+/// Canned replies for the moodle-web wsfunctions.
+#[allow(dead_code)]
+pub fn web_ws(function: &str) -> Option<serde_json::Value> {
+    use serde_json::json;
+    Some(match function {
+        "mod_assign_get_assignments" => json!({"courses": [{"id": COURSE_ID, "assignments": [
+            {"id": 7, "cmid": 70, "name": "M4_A1_A_RA2", "intro": "<p>Fes <b>això</b></p>",
+             "introattachments": [{"filename": "enunciat.pdf", "fileurl": "https://x/webservice/pluginfile.php/1/enunciat.pdf", "mimetype": "application/pdf"}],
+             "allowsubmissionsfromdate": 1_790_000_000, "duedate": 1_795_000_000, "cutoffdate": 0},
+            {"id": 8, "cmid": 80, "name": "Sense data", "intro": "", "duedate": 0}
+        ]}]}),
+        "mod_assign_get_submission_status" => {
+            json!({"lastattempt": {"submission": {"status": "draft"}},
+             "feedback": {"gradefordisplay": "8,50 / 10,00", "plugins": [{"type": "comments", "editorfields": [{"text": "<p>Bé</p>"}]}]}})
+        }
+        "mod_quiz_get_quizzes_by_courses" => {
+            json!({"quizzes": [{"id": 5, "course": COURSE_ID, "coursemodule": 50, "name": "Qüestionari RA1", "intro": "", "timeopen": 0, "timeclose": 1_796_000_000}]})
+        }
+        "mod_quiz_get_user_attempts" => json!({"attempts": [{"state": "finished"}]}),
+        "mod_forum_get_forums_by_courses" => {
+            json!([{"id": 3, "course": COURSE_ID, "type": "news", "name": "Avisos"}])
+        }
+        "mod_forum_get_forum_discussions" => {
+            json!({"discussions": [{"id": 31, "discussion": 30, "name": "Benvinguts", "message": "<p>Hola</p>", "created": 1_790_000_100}]})
+        }
+        "gradereport_user_get_grade_items" => {
+            json!({"usergrades": [{"courseid": COURSE_ID, "gradeitems": [{"itemname": "M4_A1_A_RA2", "gradeformatted": "8,50", "percentageformatted": "85,00 %"}]}]})
+        }
+        "mod_assign_save_submission" => json!([]),
+        "mod_assign_submit_for_grading" => json!([]),
+        _ => return None,
+    })
+}
+
 fn hex_val(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
@@ -393,10 +427,29 @@ fn route(
             Some("core_course_get_contents") => {
                 serde_json::to_vec(&shared.contents).unwrap_or_default()
             }
-            Some(other) => exc_body("invalidfunction", &format!("unknown wsfunction {other}")),
+            Some(other) => match web_ws(other) {
+                Some(v) => serde_json::to_vec(&v).unwrap_or_default(),
+                None => exc_body("invalidfunction", &format!("unknown wsfunction {other}")),
+            },
             None => exc_body("invalidrequest", "missing wsfunction"),
         };
         (200, JSON.to_string(), String::new(), payload)
+    } else if method == "POST" && path.starts_with("/webservice/upload.php") {
+        if shared.unauthorized {
+            (
+                401,
+                JSON.to_string(),
+                String::new(),
+                exc_body("invalidtoken", "Invalid token"),
+            )
+        } else {
+            (
+                200,
+                JSON.to_string(),
+                String::new(),
+                br#"[{"itemid": 777, "filename": "f"}]"#.to_vec(),
+            )
+        }
     } else if method == "GET"
         && (path.starts_with("/webservice/pluginfile.php") || path.starts_with("/pluginfile.php"))
     {
