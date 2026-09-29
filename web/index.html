@@ -1,1 +1,36 @@
-<!doctype html><title>Institut</title>
+<!doctype html>
+<html lang="ca">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Institut</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<a class="skip" href="#main">Salta al contingut</a>
+<div class="shell">
+  <aside class="side">
+    <div class="brand">neu · institut</div>
+    <nav aria-label="Seccions">
+      <a href="#/tauler">Tauler</a>
+      <a href="#/calendari">Calendari</a>
+      <a href="#/fitxers">Fitxers</a>
+      <a href="#/notes">Notes</a>
+      <a href="#/forums">Fòrums</a>
+    </nav>
+    <div class="courses" id="courses" aria-label="Cursos"></div>
+    <div class="syncbox">
+      <button id="sync" type="button">Sincronitza</button>
+      <small id="lastsync" class="dim"></small>
+      <button id="theme" type="button" aria-label="Canvia el tema">◐</button>
+    </div>
+  </aside>
+  <main id="main" tabindex="-1"></main>
+</div>
+<div id="banner" class="banner" role="alert" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<dialog id="dlg"><form method="dialog"><h2 id="dlg-t"></h2><div id="dlg-b"></div>
+  <menu><button value="no" type="submit">Cancel·la</button><button value="ok" type="submit" class="primary" id="dlg-ok">D'acord</button></menu></form></dialog>
+<script src="/app.js"></script>
+</body>
+</html>
