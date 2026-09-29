@@ -249,3 +249,43 @@ async fn static_assets_are_not_cached() {
         assert_eq!(r.headers().get("cache-control").unwrap(), "no-store", "{p}");
     }
 }
+
+#[tokio::test]
+async fn upload_route_saves_draft_and_rejects_bad_input() {
+    let (base, app, _m, root) = start("upload").await;
+    let c = reqwest::Client::new();
+    post(&c, &base, "/api/sync").send().await.unwrap();
+    std::fs::create_dir_all(root.join("submit/T")).unwrap();
+    std::fs::write(root.join("submit/T/a_amin.txt"), "x").unwrap();
+    let up = |id: &str, files: serde_json::Value| {
+        post(&c, &base, &format!("/api/tasks/{id}/upload"))
+            .json(&serde_json::json!({ "files": files }))
+    };
+    let r = up("assign:7", serde_json::json!(["submit/T/a_amin.txt"]))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    assert_eq!(
+        r.json::<serde_json::Value>().await.unwrap()["status"],
+        "draft"
+    );
+    assert_eq!(
+        app.db.task("assign:7").unwrap().unwrap().moodle_status,
+        "draft"
+    );
+    for bad in [".env", "../x", "nope.txt"] {
+        let r = up("assign:7", serde_json::json!([bad]))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 403, "{bad}");
+    }
+    let r = up("quiz:5", serde_json::json!([])).send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    let r = post(&c, &base, "/api/tasks/assign:7/submit")
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+}

@@ -205,6 +205,54 @@ impl Moodle {
         &self.base
     }
 
+    /// Upload one file into the user's draft area (`webservice/upload.php`).
+    /// `itemid = 0` starts a new draft area; pass the returned id to add more.
+    pub async fn upload_draft(
+        &self,
+        itemid: i64,
+        filename: &str,
+        bytes: Vec<u8>,
+    ) -> Result<i64, CoreError> {
+        if retry::offline_blocked() {
+            return Err(CoreError::Net(
+                "offline mode (MOODLE_OFFLINE): network blocked".into(),
+            ));
+        }
+        let url = format!("{}/webservice/upload.php", self.base);
+        let part = reqwest::multipart::Part::bytes(bytes).file_name(filename.to_string());
+        let form = reqwest::multipart::Form::new()
+            .text("token", self.token.clone())
+            .text("filearea", "draft")
+            .text("itemid", itemid.to_string())
+            .part("file_1", part);
+        let resp = self
+            .http
+            .post(&url)
+            .multipart(form)
+            .timeout(FILE_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| CoreError::Net(redact_token(&e.to_string())))?;
+        let status = resp.status();
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(CoreError::Auth(format!("upload http {status}")));
+        }
+        let v: serde_json::Value = resp
+            .json()
+            .await
+            .map_err(|e| CoreError::Net(redact_token(&e.to_string())))?;
+        // Moodle answers HTTP 200 with {"error":..,"errorcode":..} for a bad token.
+        if v["errorcode"] == "invalidtoken" {
+            return Err(CoreError::Auth("upload: invalid token".into()));
+        }
+        if let Some(err) = v.get("error") {
+            return Err(CoreError::Invalid(redact_token(&format!("upload: {err}"))));
+        }
+        v[0]["itemid"]
+            .as_i64()
+            .ok_or_else(|| CoreError::Invalid("upload: unexpected reply".into()))
+    }
+
     pub fn moodle_root() -> String {
         std::env::var("MOODLE_ROOT").unwrap_or_else(|_| {
             let cwd = std::env::current_dir()

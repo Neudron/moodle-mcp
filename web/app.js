@@ -281,3 +281,23 @@ views.forums = async () => {
     unread.length ? [h('h2', {}, `Sense llegir · ${unread.length}`), unread.map(item)] : h('p', { class: 'dim' }, 'Tot llegit.'),
     read.length ? [h('h2', {}, 'Llegits'), read.map(item)] : null);
 };
+
+taskExtras.push((tv) => {
+  if (tv.task.kind !== 'assign') return null;
+  const id = enc(tv.task.id), files = tv.local.files;
+  const up = h('button', { type: 'button', disabled: !files.length, title: files.length ? '' : 'Vincula primer un fitxer', onclick: async () => {
+    const body = h('div', {}, h('p', {}, `Tasca: ${tv.task.title} (${tv.task.course})`),
+      h('p', {}, 'Es pujaran aquests fitxers com a esborrany. Substitueixen els que ja hi hagi a Moodle:'),
+      h('ul', {}, files.map((f) => h('li', {}, f))));
+    if (!(await confirmDialog('Puja com a esborrany?', body, 'Puja'))) return;
+    try { const r = await api(`/api/tasks/${id}/upload`, { method: 'POST', body: { files } }); toast(`Moodle: ${MSTATUS[r.status] || r.status}`); route(); }
+    catch (e) { toast(e.message); }
+  } }, 'Puja (esborrany)');
+  const send = h('button', { type: 'button', disabled: tv.task.moodle_status !== 'draft', onclick: async () => {
+    const body = h('p', {}, `Enviaràs "${tv.task.title}" per qualificar. Després ja no la podràs modificar.`);
+    if (!(await confirmDialog('Envia per qualificar?', body, 'Envia'))) return;
+    try { const r = await api(`/api/tasks/${id}/submit`, { method: 'POST' }); toast(`Moodle: ${MSTATUS[r.status] || r.status}`); route(); }
+    catch (e) { toast(e.message); }
+  } }, 'Envia per qualificar');
+  return [up, send];
+});

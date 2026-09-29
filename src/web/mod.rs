@@ -6,6 +6,7 @@ pub mod files;
 pub mod guard;
 pub mod readme;
 pub mod tasks;
+pub mod upload;
 
 use crate::errors::CoreError;
 use crate::moodle::Moodle;

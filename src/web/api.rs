@@ -100,6 +100,8 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/tasks/{id}/status", post(set_status))
         .route("/api/tasks/{id}/files", post(set_files))
         .route("/api/tasks/{id}/ai", post(set_ai))
+        .route("/api/tasks/{id}/upload", post(upload_files))
+        .route("/api/tasks/{id}/submit", post(submit))
         .route("/api/submit-files", get(submit_files))
         .route("/api/courses", get(courses))
         .route("/api/courses/{short}", get(course))
@@ -232,6 +234,67 @@ async fn set_ai(State(app): S, Path(id): Path<String>, Json(b): Json<AiIn>) -> R
     app.db.set_ai_confirmed(&id, b.keep)?;
     readme::write(&app.db, &app.root)?;
     Ok(Json(json!({})))
+}
+
+fn assign_id(id: &str) -> R<i64> {
+    id.strip_prefix("assign:")
+        .and_then(|n| n.parse().ok())
+        .ok_or(bad("només tasques de Moodle"))
+}
+
+fn store_status(app: &App, id: &str, st: &Value) -> R<String> {
+    let s = st["lastattempt"]["submission"]["status"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+    if let Some(mut t) = app.db.task(id)? {
+        t.moodle_status = s.clone();
+        app.db.upsert_tasks(&[t])?;
+    }
+    Ok(s)
+}
+
+fn upstream(e: crate::errors::CoreError) -> ApiErr {
+    ApiErr(
+        StatusCode::BAD_GATEWAY,
+        crate::errors::redact_token(&e.to_string()),
+    )
+}
+
+async fn upload_files(
+    State(app): S,
+    Path(id): Path<String>,
+    Json(b): Json<FilesIn>,
+) -> R<Json<Value>> {
+    let aid = assign_id(&id)?;
+    let root = std::path::Path::new(&app.root);
+    let paths = b
+        .files
+        .iter()
+        .map(|f| {
+            crate::web::upload::resolve(root, f)
+                .ok_or_else(|| forbid(format!("fitxer no trobat: {f}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let st = crate::web::upload::save_draft(&app.moodle, aid, &paths)
+        .await
+        .map_err(upstream)?;
+    Ok(Json(json!({"status": store_status(&app, &id, &st)?})))
+}
+
+async fn submit(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
+    let aid = assign_id(&id)?;
+    let st = crate::web::upload::submit_for_grading(&app.moodle, aid)
+        .await
+        .map_err(upstream)?;
+    let s = store_status(&app, &id, &st)?;
+    if s == "submitted" {
+        let mut l = app.db.local(&id)?;
+        l.status = "lliurat".into();
+        app.db.set_local(&l)?;
+        readme::write(&app.db, &app.root)?;
+    }
+    Ok(Json(json!({"status": s})))
 }
 
 async fn submit_files(State(app): S) -> R<Json<Vec<String>>> {
