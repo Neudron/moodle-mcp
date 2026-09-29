@@ -28,6 +28,7 @@ main{padding:32px;max-width:1024px;width:100%}
 h1{font-size:32px;line-height:1.25;margin:0 0 16px}
 h2{font-size:16px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin:32px 0 8px}
 h3{font-size:16px;margin:16px 0 8px}
+small{font-size:16px}
 .dim{color:var(--dim)} .err{color:var(--bad)}
 button,select,input{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 16px;cursor:pointer}
 button.primary{background:var(--accent);color:var(--page);border-color:var(--accent);font-weight:600}

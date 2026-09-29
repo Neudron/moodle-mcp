@@ -215,3 +215,9 @@ async fn lliurat_moves_folder_under_module_and_rewrites_files() {
     assert_eq!(one["local"]["files"][0], format!("{to}/a.txt"));
     assert!(root.join("submit/README.md").exists());
 }
+
+#[test]
+fn small_tag_font_size_is_16px_multiple() {
+    let css = include_str!("../web/app.css");
+    assert!(css.contains("small{font-size:16px}"));
+}
