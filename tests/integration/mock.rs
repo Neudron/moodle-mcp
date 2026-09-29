@@ -41,6 +41,10 @@ pub struct MockConfig {
     pub unauthorized: bool,
     /// This wsfunction answers with a non-auth exception.
     pub fail_fn: Option<&'static str>,
+    /// This wsfunction answers HTTP 200 with a non-empty `warnings` array.
+    pub warn_fn: Option<&'static str>,
+    /// Submission status reported by `mod_assign_get_submission_status`.
+    pub status: Option<&'static str>,
 }
 
 struct Shared {
@@ -52,6 +56,8 @@ struct Shared {
     ratelimit_left: AtomicUsize,
     unauthorized: bool,
     fail_fn: Option<&'static str>,
+    warn_fn: Option<&'static str>,
+    status: Option<&'static str>,
 }
 
 pub struct MockMoodle {
@@ -92,6 +98,8 @@ impl MockMoodle {
             ratelimit_left: AtomicUsize::new(config.ratelimit),
             unauthorized: config.unauthorized,
             fail_fn: config.fail_fn,
+            warn_fn: config.warn_fn,
+            status: config.status,
         });
         let hits = Arc::new(AtomicUsize::new(0));
         let hits_accept = Arc::clone(&hits);
@@ -119,6 +127,7 @@ impl MockMoodle {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn healthy() -> Self {
         Self::start(MockConfig::default()).await
     }
@@ -430,6 +439,16 @@ fn route(
             }
             Some("core_course_get_contents") => {
                 serde_json::to_vec(&shared.contents).unwrap_or_default()
+            }
+            Some(other) if shared.warn_fn == Some(other) => serde_json::to_vec(&serde_json::json!(
+                [{"item": "x", "itemid": 7, "warningcode": "couldnotsavesubmission", "message": "duedatereached"}]
+            ))
+            .unwrap_or_default(),
+            Some("mod_assign_get_submission_status") if shared.status.is_some() => {
+                serde_json::to_vec(&serde_json::json!(
+                    {"lastattempt": {"submission": {"status": shared.status}}}
+                ))
+                .unwrap_or_default()
             }
             Some(other) if shared.fail_fn == Some(other) => exc_body("servererror", "forced"),
             Some(other) => match web_ws(other) {

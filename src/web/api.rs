@@ -186,24 +186,30 @@ async fn set_status(
     let t = app.db.task(&id)?.ok_or(bad("no existeix"))?;
     let mut l = app.db.local(&id)?;
     l.status = b.status;
-    let from_rel = readme::submit_dir(&module_of(&l, &t.course), &t.title);
     if l.status == "lliurat" {
-        let root = std::path::Path::new(&app.root);
-        let to_rel = from_rel.replacen("submit/", "submit/_lliurat/", 1);
-        if root.join(&from_rel).is_dir() {
-            let to = root.join(&to_rel);
-            std::fs::create_dir_all(to.parent().unwrap_or(&to)).map_err(anyhow::Error::from)?;
-            std::fs::rename(root.join(&from_rel), &to).map_err(anyhow::Error::from)?;
-            for f in &mut l.files {
-                if f == &from_rel || f.starts_with(&format!("{from_rel}/")) {
-                    *f = format!("{to_rel}{}", &f[from_rel.len()..]);
-                }
-            }
-        }
+        move_lliurat(&app, &t, &mut l)?;
     }
     app.db.set_local(&l)?;
     readme::write(&app.db, &app.root)?;
     Ok(Json(l))
+}
+
+/// `lliurat` moves the task folder to `submit/_lliurat/` and rewrites `l.files`.
+fn move_lliurat(app: &App, t: &crate::web::db::Task, l: &mut Local) -> R<()> {
+    let from_rel = readme::submit_dir(&module_of(l, &t.course), &t.title);
+    let root = std::path::Path::new(&app.root);
+    let to_rel = from_rel.replacen("submit/", "submit/_lliurat/", 1);
+    if root.join(&from_rel).is_dir() {
+        let to = root.join(&to_rel);
+        std::fs::create_dir_all(to.parent().unwrap_or(&to)).map_err(anyhow::Error::from)?;
+        std::fs::rename(root.join(&from_rel), &to).map_err(anyhow::Error::from)?;
+        for f in &mut l.files {
+            if f == &from_rel || f.starts_with(&format!("{from_rel}/")) {
+                *f = format!("{to_rel}{}", &f[from_rel.len()..]);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -291,6 +297,8 @@ async fn submit(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
     if s == "submitted" {
         let mut l = app.db.local(&id)?;
         l.status = "lliurat".into();
+        let t = app.db.task(&id)?.ok_or(bad("no existeix"))?;
+        move_lliurat(&app, &t, &mut l)?;
         app.db.set_local(&l)?;
         readme::write(&app.db, &app.root)?;
     }

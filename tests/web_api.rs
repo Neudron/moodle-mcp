@@ -1,7 +1,7 @@
 #[path = "integration/mock.rs"]
 mod mock;
 
-use mock::{MockMoodle, TOKEN};
+use mock::{MockConfig, MockMoodle, TOKEN};
 use moodle_mcp::{
     moodle::Moodle,
     web::{self, db::Db},
@@ -9,7 +9,14 @@ use moodle_mcp::{
 use std::sync::Arc;
 
 async fn start(tag: &str) -> (String, Arc<web::App>, MockMoodle, std::path::PathBuf) {
-    let m = MockMoodle::healthy().await;
+    start_with(tag, MockConfig::default()).await
+}
+
+async fn start_with(
+    tag: &str,
+    cfg: MockConfig,
+) -> (String, Arc<web::App>, MockMoodle, std::path::PathBuf) {
+    let m = MockMoodle::start(cfg).await;
     let root = std::env::temp_dir().join(format!("mweb-api-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("Digitalització aplicada/RA01")).unwrap();
@@ -288,4 +295,78 @@ async fn upload_route_saves_draft_and_rejects_bad_input() {
         .await
         .unwrap();
     assert!(r.status().is_success());
+}
+
+#[tokio::test]
+async fn moodle_warnings_become_errors() {
+    for f in [
+        "mod_assign_save_submission",
+        "mod_assign_submit_for_grading",
+    ] {
+        let cfg = MockConfig {
+            warn_fn: Some(f),
+            ..Default::default()
+        };
+        let (base, _app, _m, root) = start_with(&format!("warn-{f}"), cfg).await;
+        let c = reqwest::Client::new();
+        post(&c, &base, "/api/sync").send().await.unwrap();
+        std::fs::create_dir_all(root.join("submit/T")).unwrap();
+        std::fs::write(root.join("submit/T/a_amin.txt"), "x").unwrap();
+        let (path, body) = if f.ends_with("save_submission") {
+            (
+                "upload",
+                serde_json::json!({"files": ["submit/T/a_amin.txt"]}),
+            )
+        } else {
+            ("submit", serde_json::json!({}))
+        };
+        let r = post(&c, &base, &format!("/api/tasks/assign:7/{path}"))
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 502, "{f}");
+        assert!(r.text().await.unwrap().contains("duedatereached"), "{f}");
+    }
+}
+
+#[tokio::test]
+async fn submit_moves_folder_to_lliurat_and_readme_follows() {
+    let cfg = MockConfig {
+        status: Some("submitted"),
+        ..Default::default()
+    };
+    let (base, app, _m, root) = start_with("submit", cfg).await;
+    let c = reqwest::Client::new();
+    post(&c, &base, "/api/sync").send().await.unwrap();
+    let one: serde_json::Value = c
+        .get(format!("{base}/api/tasks/assign:7"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let dir = one["submit_dir"].as_str().unwrap().to_string();
+    std::fs::create_dir_all(root.join(&dir)).unwrap();
+    std::fs::write(root.join(&dir).join("a.txt"), "x").unwrap();
+    let r = post(&c, &base, "/api/tasks/assign:7/files")
+        .json(&serde_json::json!({"files": [format!("{dir}/a.txt")]}))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    let r = post(&c, &base, "/api/tasks/assign:7/submit")
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    let to = dir.replacen("submit/", "submit/_lliurat/", 1);
+    assert!(!root.join(&dir).exists());
+    assert!(root.join(&to).join("a.txt").exists());
+    let l = app.db.local("assign:7").unwrap();
+    assert_eq!(l.status, "lliurat");
+    assert_eq!(l.files[0], format!("{to}/a.txt"));
+    let readme = std::fs::read_to_string(root.join("submit/README.md")).unwrap();
+    assert!(readme.contains(&format!("{to}/a.txt")) || readme.contains("_lliurat"));
 }
