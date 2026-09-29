@@ -48,7 +48,8 @@ pub fn list(root: &Path, rel: &str) -> Result<Vec<Entry>, String> {
         .flatten()
     {
         let name = e.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
+        // symlinks skipped: no cycles in walk, no metadata leak from targets
+        if name.starts_with('.') || e.file_type().is_ok_and(|t| t.is_symlink()) {
             continue;
         }
         let Ok(meta) = std::fs::metadata(e.path()) else {
@@ -165,5 +166,15 @@ mod tests {
         walk(&r, "", &mut all);
         assert!(all.iter().any(|p| p.ends_with("l'any.docx")));
         assert!(!all.iter().any(|p| p.contains(".moodle")));
+    }
+
+    #[test]
+    fn walk_survives_symlink_loop() {
+        let r = root("loop");
+        std::fs::create_dir_all(r.join("a")).unwrap();
+        std::os::unix::fs::symlink(r.join("a"), r.join("a/loop")).unwrap();
+        let mut out = Vec::new();
+        walk(&r, "", &mut out);
+        assert!(!list(&r, "a").unwrap().iter().any(|e| e.name == "loop"));
     }
 }
