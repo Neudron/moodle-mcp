@@ -175,5 +175,6 @@ $('#theme').addEventListener('click', () => {
   try { localStorage.setItem('theme', next); } catch (e) { /* private mode */ }
 });
 try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* ignore */ }
+$('.skip').addEventListener('click', (e) => { e.preventDefault(); $('#main').focus(); });
 addEventListener('hashchange', route);
 addEventListener('DOMContentLoaded', () => { route(); refreshStatus(); loadCourses(); setInterval(refreshStatus, 60000); });
