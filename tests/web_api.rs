@@ -370,3 +370,98 @@ async fn submit_moves_folder_to_lliurat_and_readme_follows() {
     let readme = std::fs::read_to_string(root.join("submit/README.md")).unwrap();
     assert!(readme.contains(&format!("{to}/a.txt")) || readme.contains("_lliurat"));
 }
+
+async fn seed_task_dir(c: &reqwest::Client, base: &str) -> String {
+    post(c, base, "/api/sync").send().await.unwrap();
+    let one: serde_json::Value = c
+        .get(format!("{base}/api/tasks/assign:7"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    one["submit_dir"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn upload_refuses_teacher_originals_outside_submit() {
+    let (base, _app, _m, root) = start("orig").await;
+    let c = reqwest::Client::new();
+    post(&c, &base, "/api/sync").send().await.unwrap();
+    std::fs::create_dir_all(root.join("submit/T")).unwrap();
+    std::fs::write(root.join("submit/T/plain.txt"), "x").unwrap();
+    let up = |f: &str| {
+        post(&c, &base, "/api/tasks/assign:7/upload").json(&serde_json::json!({ "files": [f] }))
+    };
+    let f = "Digitalització aplicada/RA01/Mapa IT·OT.txt";
+    let r = up(f).send().await.unwrap();
+    assert_eq!(r.status(), 400);
+    assert!(r.text().await.unwrap().contains("_amin"));
+    // ".." can not smuggle an original under a submit/ prefix
+    let r = up(&format!("submit/../{f}")).send().await.unwrap();
+    assert!(r.status().is_client_error());
+    // anything under submit/ is fine
+    assert!(up("submit/T/plain.txt")
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .is_success());
+}
+
+#[tokio::test]
+async fn upload_of_directly_submitted_assignment_marks_lliurat() {
+    let cfg = MockConfig {
+        status: Some("submitted"),
+        ..Default::default()
+    };
+    let (base, app, _m, root) = start_with("updirect", cfg).await;
+    let c = reqwest::Client::new();
+    let dir = seed_task_dir(&c, &base).await;
+    std::fs::create_dir_all(root.join(&dir)).unwrap();
+    std::fs::write(root.join(&dir).join("a_amin.txt"), "x").unwrap();
+    let f = format!("{dir}/a_amin.txt");
+    post(&c, &base, "/api/tasks/assign:7/files")
+        .json(&serde_json::json!({ "files": [&f] }))
+        .send()
+        .await
+        .unwrap();
+    let r = post(&c, &base, "/api/tasks/assign:7/upload")
+        .json(&serde_json::json!({ "files": [&f] }))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    let l = app.db.local("assign:7").unwrap();
+    assert_eq!(l.status, "lliurat");
+    let to = dir.replacen("submit/", "submit/_lliurat/", 1);
+    assert_eq!(l.files[0], format!("{to}/a_amin.txt"));
+    assert!(root.join(&to).join("a_amin.txt").exists());
+}
+
+#[tokio::test]
+async fn submit_move_failure_is_a_warning_not_a_500() {
+    let cfg = MockConfig {
+        status: Some("submitted"),
+        ..Default::default()
+    };
+    let (base, app, _m, root) = start_with("movefail", cfg).await;
+    let c = reqwest::Client::new();
+    let dir = seed_task_dir(&c, &base).await;
+    let to = dir.replacen("submit/", "submit/_lliurat/", 1);
+    std::fs::create_dir_all(root.join(&dir)).unwrap();
+    std::fs::write(root.join(&dir).join("a.txt"), "x").unwrap();
+    // Non-empty destination makes the rename fail.
+    std::fs::create_dir_all(root.join(&to)).unwrap();
+    std::fs::write(root.join(&to).join("old.txt"), "y").unwrap();
+    let r = post(&c, &base, "/api/tasks/assign:7/submit")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(v["status"], "submitted");
+    assert!(v["warning"].as_str().unwrap().contains("carpeta"));
+    assert_eq!(app.db.local("assign:7").unwrap().status, "lliurat");
+}

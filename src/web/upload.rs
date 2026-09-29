@@ -5,18 +5,9 @@ use crate::web::files;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-pub fn resolve(root: &Path, rel_or_name: &str) -> Option<PathBuf> {
-    if let Ok(p) = files::jail(root, rel_or_name) {
-        return p.is_file().then_some(p);
-    }
-    if rel_or_name.contains('/') || rel_or_name.starts_with('.') {
-        return None;
-    }
-    let mut all = Vec::new();
-    files::walk(root, "submit", &mut all);
-    all.into_iter()
-        .find(|r| r.rsplit('/').next() == Some(rel_or_name))
-        .and_then(|r| files::jail(root, &r).ok())
+/// Only jailed rel paths that are files; a bare name is never guessed (it could hit another task's file).
+pub fn resolve(root: &Path, rel: &str) -> Option<PathBuf> {
+    files::jail(root, rel).ok().filter(|p| p.is_file())
 }
 
 /// Moodle reports refusals as HTTP 200 + `warnings`, not as exceptions.

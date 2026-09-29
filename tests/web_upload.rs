@@ -20,9 +20,17 @@ async fn upload_then_save_draft() {
     std::fs::write(&f, b"doc").unwrap();
     let st = upload::save_draft(&c, 7, &[f]).await.unwrap();
     assert_eq!(st["lastattempt"]["submission"]["status"], "draft");
-    assert!(upload::resolve(&dir, "a_amin.docx")
+    assert!(upload::resolve(&dir, "submit/LMSGI/T/a_amin.docx")
         .unwrap()
         .ends_with("submit/LMSGI/T/a_amin.docx"));
+    assert!(
+        upload::resolve(&dir, "a_amin.docx").is_none(),
+        "no bare-name guessing"
+    );
+    assert!(
+        upload::resolve(&dir, "submit/LMSGI").is_none(),
+        "dirs refused"
+    );
     assert!(upload::resolve(&dir, "../etc/passwd").is_none());
     assert!(upload::save_draft(&c, 7, &[]).await.is_err());
 }

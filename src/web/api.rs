@@ -112,7 +112,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/status", get(status))
         .route("/api/sync", post(sync_now))
         .merge(crate::web::office::oo_router())
-        .route("/api/office/config", get(office_config))
+        .route("/api/office/config", post(office_config))
         .route("/api/open", post(open_local))
 }
 
@@ -270,6 +270,29 @@ fn upstream(e: crate::errors::CoreError) -> ApiErr {
     )
 }
 
+/// Moodle says "submitted": mark lliurat and move the folder. A failed move only warns (Moodle already has it).
+fn mark_lliurat(app: &App, id: &str) -> R<Option<String>> {
+    let mut l = app.db.local(id)?;
+    l.status = "lliurat".into();
+    let t = app.db.task(id)?.ok_or(bad("no existeix"))?;
+    let warning = move_lliurat(app, &t, &mut l).err().map(|e| {
+        format!(
+            "Enviada a Moodle, però no s'ha pogut moure la carpeta: {}",
+            e.1
+        )
+    });
+    app.db.set_local(&l)?;
+    readme::write(&app.db, &app.root)?;
+    Ok(warning)
+}
+
+fn status_json(s: String, warning: Option<String>) -> Json<Value> {
+    Json(match warning {
+        Some(w) => json!({"status": s, "warning": w}),
+        None => json!({"status": s}),
+    })
+}
+
 async fn upload_files(
     State(app): S,
     Path(id): Path<String>,
@@ -277,6 +300,7 @@ async fn upload_files(
 ) -> R<Json<Value>> {
     let aid = assign_id(&id)?;
     let root = std::path::Path::new(&app.root);
+    let croot = root.canonicalize().map_err(anyhow::Error::from)?;
     let paths = b
         .files
         .iter()
@@ -285,10 +309,27 @@ async fn upload_files(
                 .ok_or_else(|| forbid(format!("fitxer no trobat: {f}")))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    // Teacher originals live in course folders: only _amin files (or anything under submit/) go up.
+    for p in &paths {
+        let stem = p
+            .file_stem()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_default();
+        if !stem.ends_with("_amin") && !p.starts_with(croot.join("submit")) {
+            return Err(bad("només fitxers _amin o de submit/"));
+        }
+    }
     let st = crate::web::upload::save_draft(&app.moodle, aid, &paths)
         .await
         .map_err(upstream)?;
-    Ok(Json(json!({"status": store_status(&app, &id, &st)?})))
+    let s = store_status(&app, &id, &st)?;
+    // Assignments without drafts (submissiondrafts=0) are final as soon as they are saved.
+    let warning = if s == "submitted" {
+        mark_lliurat(&app, &id)?
+    } else {
+        None
+    };
+    Ok(status_json(s, warning))
 }
 
 async fn submit(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
@@ -297,15 +338,12 @@ async fn submit(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
         .await
         .map_err(upstream)?;
     let s = store_status(&app, &id, &st)?;
-    if s == "submitted" {
-        let mut l = app.db.local(&id)?;
-        l.status = "lliurat".into();
-        let t = app.db.task(&id)?.ok_or(bad("no existeix"))?;
-        move_lliurat(&app, &t, &mut l)?;
-        app.db.set_local(&l)?;
-        readme::write(&app.db, &app.root)?;
-    }
-    Ok(Json(json!({"status": s})))
+    let warning = if s == "submitted" {
+        mark_lliurat(&app, &id)?
+    } else {
+        None
+    };
+    Ok(status_json(s, warning))
 }
 
 async fn submit_files(State(app): S) -> R<Json<Vec<String>>> {
@@ -476,7 +514,14 @@ async fn sync_now(State(app): S) -> R<Json<Value>> {
     Ok(Json(json!({"events": ev.len()})))
 }
 
-async fn office_config(State(app): S, Query(q): Query<PathQ>) -> R<Json<Value>> {
+async fn office_config(State(app): S, Json(q): Json<PathQ>) -> R<Json<Value>> {
+    let is_office = q
+        .path
+        .rsplit_once('.')
+        .is_some_and(|(_, e)| crate::web::office::doc_type(e).is_some());
+    if !is_office {
+        return Err(bad("només fitxers ofimàtics"));
+    }
     let secret = crate::web::env::get("ONLYOFFICE_JWT").ok_or(ApiErr(
         StatusCode::SERVICE_UNAVAILABLE,
         "OnlyOffice no disponible".into(),
@@ -484,6 +529,24 @@ async fn office_config(State(app): S, Query(q): Query<PathQ>) -> R<Json<Value>> 
     let root = std::path::Path::new(&app.root);
     let rel = crate::web::office::amin_copy(root, &q.path).map_err(forbid)?;
     let p = files::jail(root, &rel).map_err(forbid)?;
+    // Tasks linking the teacher original must now point at the _amin copy, or "Puja" would upload the unedited original.
+    if rel != q.path {
+        let mut changed = false;
+        for mut l in app.db.all_local()? {
+            if l.files.contains(&q.path) {
+                for f in &mut l.files {
+                    if *f == q.path {
+                        f.clone_from(&rel);
+                    }
+                }
+                app.db.set_local(&l)?;
+                changed = true;
+            }
+        }
+        if changed {
+            readme::write(&app.db, &app.root)?;
+        }
+    }
     let mtime = std::fs::metadata(&p)
         .ok()
         .and_then(|m| m.modified().ok())

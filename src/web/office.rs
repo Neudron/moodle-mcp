@@ -131,6 +131,45 @@ async fn oo_file(State(app): State<Arc<App>>, Query(q): Query<TQ>) -> Result<Vec
         .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))
 }
 
+/// The file may have moved to `submit/_lliurat/` while the editor was open.
+fn locate(root: &Path, rel: &str) -> Result<std::path::PathBuf, String> {
+    files::jail(root, rel).or_else(|e| match rel.strip_prefix("submit/") {
+        Some(r) if !r.starts_with("_lliurat/") => {
+            files::jail(root, &format!("submit/_lliurat/{r}"))
+        }
+        _ => Err(e),
+    })
+}
+
+async fn save_edit(app: &App, rel: &str, url: &str) -> Result<(), E> {
+    let oo = env::get("ONLYOFFICE_URL").unwrap_or_else(|| "http://127.0.0.1:8080".into());
+    // Trailing slash: "http://host:8080" must not match "http://host:80801/..." or "http://host:8080.evil.com".
+    if !url.starts_with(&format!("{}/", oo.trim_end_matches('/'))) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "download url outside ONLYOFFICE_URL".into(),
+        ));
+    }
+    let gw = |e: reqwest::Error| (StatusCode::BAD_GATEWAY, e.without_url().to_string());
+    let bytes = reqwest::get(url)
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(gw)?
+        .bytes()
+        .await
+        .map_err(gw)?;
+    let p = locate(Path::new(&app.root), rel).map_err(|e| (StatusCode::FORBIDDEN, e))?;
+    let ioe = |e: std::io::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    let mut bak = p.clone().into_os_string();
+    bak.push(".bak");
+    std::fs::copy(&p, &bak).map_err(ioe)?;
+    let mut tmp = p.clone().into_os_string();
+    tmp.push(".tmp");
+    std::fs::write(&tmp, &bytes).map_err(ioe)?;
+    std::fs::rename(&tmp, &p).map_err(ioe)?;
+    Ok(())
+}
+
 async fn oo_callback(
     State(app): State<Arc<App>>,
     Query(q): Query<TQ>,
@@ -163,31 +202,11 @@ async fn oo_callback(
     };
     let status = payload["status"].as_i64().unwrap_or(0);
     if status == 2 || status == 6 {
-        let url = payload["url"].as_str().unwrap_or("");
-        let oo = env::get("ONLYOFFICE_URL").unwrap_or_else(|| "http://127.0.0.1:8080".into());
-        // Trailing slash: "http://host:8080" must not match "http://host:80801/..." or "http://host:8080.evil.com".
-        if !url.starts_with(&format!("{}/", oo.trim_end_matches('/'))) {
-            return Err((
-                StatusCode::FORBIDDEN,
-                "download url outside ONLYOFFICE_URL".into(),
-            ));
+        if let Err((code, why)) = save_edit(&app, &rel, payload["url"].as_str().unwrap_or("")).await
+        {
+            tracing::warn!(file = %rel, reason = %why, "onlyoffice save failed");
+            return Err((code, why));
         }
-        let bytes = reqwest::get(url)
-            .await
-            .and_then(|r| r.error_for_status())
-            .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?
-            .bytes()
-            .await
-            .map_err(|e| (StatusCode::BAD_GATEWAY, e.to_string()))?;
-        let p = files::jail(Path::new(&app.root), &rel).map_err(|e| (StatusCode::FORBIDDEN, e))?;
-        let ioe = |e: std::io::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
-        let mut bak = p.clone().into_os_string();
-        bak.push(".bak");
-        std::fs::copy(&p, &bak).map_err(ioe)?;
-        let mut tmp = p.clone().into_os_string();
-        tmp.push(".tmp");
-        std::fs::write(&tmp, &bytes).map_err(ioe)?;
-        std::fs::rename(&tmp, &p).map_err(ioe)?;
         tracing::info!(file = %rel, "onlyoffice save");
     }
     Ok(Json(json!({"error": 0})))

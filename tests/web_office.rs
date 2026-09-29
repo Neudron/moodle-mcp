@@ -107,4 +107,88 @@ async fn callback_saves_with_bak_and_guards_url() {
         std::fs::read_to_string(root.join("C/a.docx")).unwrap(),
         "orig"
     );
+
+    // file moved to submit/_lliurat/ while the editor was open: callback still saves there
+    std::fs::create_dir_all(root.join("submit/_lliurat/T")).unwrap();
+    std::fs::write(root.join("submit/_lliurat/T/b_amin.docx"), "mine").unwrap();
+    let tb = office::file_token(SECRET, "submit/T/b_amin.docx", web::now());
+    let r = c
+        .post(format!("{base}/oo/callback?t={tb}"))
+        .json(&json!({"token": ok}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        std::fs::read_to_string(root.join("submit/_lliurat/T/b_amin.docx")).unwrap(),
+        "edited"
+    );
+}
+
+#[tokio::test]
+async fn office_config_is_post_only_office_only_and_repoints_task_files() {
+    std::env::set_var("ONLYOFFICE_JWT", SECRET);
+    let m = MockMoodle::healthy().await;
+    let root = std::env::temp_dir().join(format!("mweb-oocfg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("C")).unwrap();
+    std::fs::write(root.join("C/a.docx"), "orig").unwrap();
+    std::fs::write(root.join("C/n.pdf"), "pdf").unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let app = Arc::new(web::App::new(
+        Db::memory().unwrap(),
+        Moodle::new(m.base(), TOKEN),
+        root.to_str().unwrap(),
+        port,
+    ));
+    app.db
+        .set_local(&web::db::Local {
+            task_id: "assign:7".into(),
+            files: vec!["C/a.docx".into(), "C/other.pdf".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    tokio::spawn(web::serve_on(listener, Arc::clone(&app)));
+    let base = format!("http://127.0.0.1:{port}");
+    let c = reqwest::Client::new();
+    let url = format!("{base}/api/office/config");
+    // a GET (e.g. <img src>) must not create files
+    assert_eq!(
+        c.get(&url)
+            .query(&[("path", "C/a.docx")])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        405
+    );
+    assert!(!root.join("C/a_amin.docx").exists());
+    let post = |p: &str| {
+        c.post(&url)
+            .header("origin", &base)
+            .header("x-neu", "1")
+            .json(&json!({ "path": p }))
+    };
+    // cross-site style POST without the app headers
+    let r = c
+        .post(&url)
+        .json(&json!({"path": "C/a.docx"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
+    assert!(!root.join("C/a_amin.docx").exists());
+    assert_eq!(post("C/n.pdf").send().await.unwrap().status(), 400);
+    assert!(!root.join("C/n_amin.pdf").exists());
+    let r = post("C/a.docx").send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        r.json::<serde_json::Value>().await.unwrap()["rel"],
+        "C/a_amin.docx"
+    );
+    assert_eq!(
+        app.db.local("assign:7").unwrap().files,
+        vec!["C/a_amin.docx", "C/other.pdf"]
+    );
 }
