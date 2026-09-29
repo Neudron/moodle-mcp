@@ -80,19 +80,23 @@ function card(tv) {
 views.tauler = async () => {
   const all = (await api('/api/tasks')).filter((tv) => tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
   const now = Date.now() / 1000, week = now + 7 * 86400;
+  // Overdue by more than 60 days = last school year's leftovers: collapsed, not counted as pending.
+  const stale = (tv) => !isDone(tv) && tv.task.due && tv.task.due < now - 60 * 86400;
   const groups = [
-    ['Endarrerides', (tv) => !isDone(tv) && tv.task.due && tv.task.due < now],
+    ['Endarrerides', (tv) => !isDone(tv) && !stale(tv) && tv.task.due && tv.task.due < now],
     ['Aquesta setmana', (tv) => !isDone(tv) && tv.task.due >= now && tv.task.due <= week],
     ['Més endavant', (tv) => !isDone(tv) && (!tv.task.due || tv.task.due > week)],
     ['Lliurades', isDone],
   ];
-  const pending = all.filter((tv) => !isDone(tv)).length;
+  const pending = all.filter((tv) => !isDone(tv) && !stale(tv)).length;
+  const old = all.filter(stale);
   return h('section', {}, h('h1', {}, `Tens ${pending} ${pending === 1 ? 'tasca pendent' : 'tasques pendents'}`),
     groups.map(([name, f]) => {
       const items = all.filter(f);
       if (name === 'Lliurades') items.reverse();
       return items.length ? [h('h2', {}, `${name} · ${items.length}`), h('div', { class: 'cards' }, items.map(card))] : null;
-    }));
+    }),
+    old.length ? h('details', {}, h('summary', {}, `Antigues sense enviar · ${old.length}`), h('div', { class: 'cards' }, old.map(card))) : null);
 };
 
 views.tasca = async (id) => {

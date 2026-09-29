@@ -115,7 +115,8 @@ fn static_file(ct: &'static str, body: &'static str) -> Response {
     (
         [
             (header::CONTENT_TYPE, ct),
-            (header::CACHE_CONTROL, "no-cache"),
+            // no-store: embedded assets carry no ETag, so no-cache let browsers keep a stale app.js after a rebuild.
+            (header::CACHE_CONTROL, "no-store"),
         ],
         body,
     )

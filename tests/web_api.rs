@@ -240,3 +240,12 @@ async fn app_shell_cannot_be_framed_cross_site() {
     let r = reqwest::get(format!("{base}/api/status")).await.unwrap();
     assert_eq!(r.headers().get("x-frame-options").unwrap(), "SAMEORIGIN");
 }
+
+#[tokio::test]
+async fn static_assets_are_not_cached() {
+    let (base, ..) = start("cache").await;
+    for p in ["/", "/app.js", "/app.css"] {
+        let r = reqwest::get(format!("{base}{p}")).await.unwrap();
+        assert_eq!(r.headers().get("cache-control").unwrap(), "no-store", "{p}");
+    }
+}
