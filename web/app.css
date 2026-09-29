@@ -31,7 +31,7 @@ h3{font-size:16px;margin:16px 0 8px}
 small{font-size:16px}
 .dim{color:var(--dim)} .err{color:var(--bad)}
 button,.btn,select,input{font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:8px 16px;cursor:pointer}
-button.primary{background:var(--accent);color:var(--page);border-color:var(--accent);font-weight:600}
+button.primary,.btn.primary{background:var(--accent);color:var(--page);border-color:var(--accent);font-weight:600}
 button:disabled{opacity:.5;cursor:not-allowed}
 button,.btn{transition:transform .2s var(--ease)} .btn{display:inline-block;text-decoration:none} button:active,.btn:active{transform:scale(.96)}
 .cards{display:grid;gap:8px}

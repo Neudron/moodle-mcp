@@ -19,7 +19,7 @@ async function api(path, opts = {}) {
   if (o.body !== undefined && typeof o.body !== 'string') { o.body = JSON.stringify(o.body); o.headers['content-type'] = 'application/json'; }
   if (o.method && o.method !== 'GET') o.headers['x-neu'] = '1';
   const r = await fetch(path, o);
-  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  if (!r.ok) throw Object.assign(new Error((await r.text()) || r.statusText), { status: r.status });
   return (r.headers.get('content-type') || '').includes('json') ? r.json() : r.text();
 }
 
@@ -283,42 +283,50 @@ views.forums = async () => {
     read.length ? [h('h2', {}, 'Llegits'), read.map(item)] : null);
 };
 
+const kb = (n) => `${Math.max(1, Math.ceil(n / 1024))} KB`;
 taskExtras.push((tv) => {
   if (tv.task.kind !== 'assign') return null;
-  const id = enc(tv.task.id), files = tv.local.files;
-  const up = h('button', { type: 'button', disabled: !files.length, title: files.length ? '' : 'Vincula primer un fitxer', onclick: async () => {
+  const id = enc(tv.task.id), files = tv.local.files, submitted = tv.task.moodle_status === 'submitted';
+  const after = async (r, btn) => { toast(r.warning || `Moodle: ${MSTATUS[r.status] || r.status}`); await route(); $(btn)?.focus(); };
+  const up = h('button', { type: 'button', id: 'puja', disabled: submitted || !files.length, title: submitted ? 'Ja enviada' : files.length ? '' : 'Vincula primer un fitxer', onclick: async () => {
+    const sizes = await Promise.all(files.map((f) => api(`/api/files?path=${enc(f)}`).then((i) => kb(i.size), () => 'no trobat')));
     const body = h('div', {}, h('p', {}, `Tasca: ${tv.task.title} (${tv.task.course})`),
-      h('p', {}, 'Es pujaran aquests fitxers com a esborrany. Substitueixen els que ja hi hagi a Moodle:'),
-      h('ul', {}, files.map((f) => h('li', {}, f))));
-    if (!(await confirmDialog('Puja com a esborrany?', body, 'Puja'))) return;
-    try { const r = await api(`/api/tasks/${id}/upload`, { method: 'POST', body: { files } }); toast(`Moodle: ${MSTATUS[r.status] || r.status}`); route(); }
+      h('p', {}, 'Es pujaran aquests fitxers com a esborrany. Substitueixen els que ja hi hagi a Moodle. Si la tasca no admet esborranys, quedarà enviada directament.'),
+      h('ul', {}, files.map((f, i) => h('li', {}, `${f} (${sizes[i]})`))));
+    if (!(await confirmDialog('Puja com a esborrany?', body, 'Puja'))) { up.focus(); return; }
+    try { await after(await api(`/api/tasks/${id}/upload`, { method: 'POST', body: { files } }), '#puja'); }
     catch (e) { toast(e.message); }
   } }, 'Puja (esborrany)');
-  const send = h('button', { type: 'button', disabled: tv.task.moodle_status !== 'draft', onclick: async () => {
+  const send = h('button', { type: 'button', id: 'envia', disabled: tv.task.moodle_status !== 'draft', onclick: async () => {
     const body = h('p', {}, `Enviaràs "${tv.task.title}" per qualificar. Després ja no la podràs modificar.`);
-    if (!(await confirmDialog('Envia per qualificar?', body, 'Envia'))) return;
-    try { const r = await api(`/api/tasks/${id}/submit`, { method: 'POST' }); toast(`Moodle: ${MSTATUS[r.status] || r.status}`); route(); }
+    if (!(await confirmDialog('Envia per qualificar?', body, 'Envia'))) { send.focus(); return; }
+    try { await after(await api(`/api/tasks/${id}/submit`, { method: 'POST' }), '#envia'); }
     catch (e) { toast(e.message); }
   } }, 'Envia per qualificar');
   return [up, send];
 });
 
 const OFFICE = /\.(docx?|odt|rtf|xlsx?|ods|csv|pptx?|odp)$/i;
-const editButton = (rel) => h('a', { href: `#/edita/${enc(rel)}` }, h('button', { type: 'button', class: 'primary' }, 'Edita'));
+const editButton = (rel) => h('a', { class: 'btn primary', href: `#/edita/${enc(rel)}` }, 'Edita');
 fileExtras.push((info) => (OFFICE.test(info.rel) ? editButton(info.rel) : null));
 taskExtras.push((tv) => { const f = tv.local.files.find((x) => OFFICE.test(x)); return f ? editButton(f) : null; });
 
 views.edita = async (...parts) => {
   const rel = parts.join('/');
-  const fallback = () => h('div', {}, h('p', { class: 'err' }, 'OnlyOffice no disponible.'),
-    h('button', { type: 'button', onclick: () => api('/api/open', { method: 'POST', body: { path: rel } }) }, "Obre amb l'aplicació de l'ordinador"));
+  const fallback = (msg) => h('div', {}, h('p', { class: 'err' }, msg),
+    h('button', { type: 'button', onclick: async () => { try { await api('/api/open', { method: 'POST', body: { path: rel } }); } catch (e) { toast(e.message); } } }, "Obre amb l'aplicació de l'ordinador"));
   let cfg;
-  try { cfg = await api(`/api/office/config?path=${enc(rel)}`); } catch (e) { return fallback(); }
+  try { cfg = await api('/api/office/config', { method: 'POST', body: { path: rel } }); }
+  catch (e) { return fallback(e.status === 503 ? 'OnlyOffice no disponible.' : e.message); }
   const holder = h('div', { id: 'oo', style: { height: '80vh' } });
   const wrap = h('section', {}, h('p', {}, h('a', { href: `#/fitxers/${enc(cfg.rel)}` }, '← ', cfg.rel)), holder);
-  const s = h('script', { src: cfg.api_js });
-  s.onload = () => new window.DocsAPI.DocEditor('oo', cfg.config);
-  s.onerror = () => wrap.replaceChildren(fallback());
-  document.head.append(s);
+  const open = () => new window.DocsAPI.DocEditor('oo', cfg.config);
+  if (window.DocsAPI) setTimeout(open, 0); // holder is attached once route() swaps the view in
+  else {
+    const s = h('script', { src: cfg.api_js });
+    s.onload = open;
+    s.onerror = () => wrap.replaceChildren(fallback('OnlyOffice no disponible.'));
+    document.head.append(s);
+  }
   return wrap;
 };
