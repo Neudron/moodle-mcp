@@ -529,24 +529,7 @@ async fn office_config(State(app): S, Json(q): Json<PathQ>) -> R<Json<Value>> {
     let root = std::path::Path::new(&app.root);
     let rel = crate::web::office::amin_copy(root, &q.path).map_err(forbid)?;
     let p = files::jail(root, &rel).map_err(forbid)?;
-    // Tasks linking the teacher original must now point at the _amin copy, or "Puja" would upload the unedited original.
-    if rel != q.path {
-        let mut changed = false;
-        for mut l in app.db.all_local()? {
-            if l.files.contains(&q.path) {
-                for f in &mut l.files {
-                    if *f == q.path {
-                        f.clone_from(&rel);
-                    }
-                }
-                app.db.set_local(&l)?;
-                changed = true;
-            }
-        }
-        if changed {
-            readme::write(&app.db, &app.root)?;
-        }
-    }
+    repoint(&app, &q.path, &rel)?;
     let mtime = std::fs::metadata(&p)
         .ok()
         .and_then(|m| m.modified().ok())
@@ -561,8 +544,36 @@ async fn office_config(State(app): S, Json(q): Json<PathQ>) -> R<Json<Value>> {
     ))
 }
 
+/// Tasks linking the teacher original must point at the `_amin` copy instead, or "Puja"
+/// would upload the unedited original. Keeps order, drops the duplicate if both were linked.
+fn repoint(app: &App, from: &str, to: &str) -> R<()> {
+    if from == to {
+        return Ok(());
+    }
+    let mut changed = false;
+    for mut l in app.db.all_local()? {
+        if !l.files.iter().any(|f| f == from) {
+            continue;
+        }
+        let mut seen = std::collections::HashSet::new();
+        l.files = l
+            .files
+            .iter()
+            .map(|f| if f == from { to.to_string() } else { f.clone() })
+            .filter(|f| seen.insert(f.clone()))
+            .collect();
+        app.db.set_local(&l)?;
+        changed = true;
+    }
+    if changed {
+        readme::write(&app.db, &app.root)?;
+    }
+    Ok(())
+}
+
 /// Office files open as their `_amin` copy so a teacher original is never edited in place.
-fn open_target(root: &std::path::Path, rel: &str) -> Result<std::path::PathBuf, String> {
+/// Returns the absolute path and the rel actually opened.
+fn open_target(root: &std::path::Path, rel: &str) -> Result<(std::path::PathBuf, String), String> {
     let is_office = rel
         .rsplit_once('.')
         .is_some_and(|(_, e)| crate::web::office::doc_type(e).is_some());
@@ -571,11 +582,12 @@ fn open_target(root: &std::path::Path, rel: &str) -> Result<std::path::PathBuf, 
     } else {
         rel.to_string()
     };
-    files::jail(root, &rel)
+    Ok((files::jail(root, &rel)?, rel))
 }
 
 async fn open_local(State(app): S, Json(b): Json<PathQ>) -> R<Json<Value>> {
-    let p = open_target(std::path::Path::new(&app.root), &b.path).map_err(forbid)?;
+    let (p, rel) = open_target(std::path::Path::new(&app.root), &b.path).map_err(forbid)?;
+    repoint(&app, &b.path, &rel)?;
     std::process::Command::new("xdg-open")
         .arg(p)
         .spawn()
@@ -594,10 +606,38 @@ mod open_tests {
         std::fs::create_dir_all(r.join("C")).unwrap();
         std::fs::write(r.join("C/T.docx"), "orig").unwrap();
         std::fs::write(r.join("C/n.pdf"), "pdf").unwrap();
-        let p = open_target(&r, "C/T.docx").unwrap();
+        let (p, rel) = open_target(&r, "C/T.docx").unwrap();
         assert!(p.ends_with("C/T_amin.docx"));
+        assert_eq!(rel, "C/T_amin.docx");
         assert_eq!(std::fs::read_to_string(r.join("C/T.docx")).unwrap(), "orig");
-        assert!(open_target(&r, "C/n.pdf").unwrap().ends_with("C/n.pdf"));
+        assert!(open_target(&r, "C/n.pdf").unwrap().0.ends_with("C/n.pdf"));
         assert!(!r.join("C/n_amin.pdf").exists());
+    }
+
+    #[test]
+    fn repoint_replaces_original_without_duplicates() {
+        use crate::web::db::{Db, Local};
+        let r = std::env::temp_dir().join(format!("mweb-repoint-{}", std::process::id()));
+        std::fs::create_dir_all(&r).unwrap();
+        let app = crate::web::App::new(
+            Db::memory().unwrap(),
+            crate::moodle::Moodle::new("http://127.0.0.1:9", "tok-0123456789abcdef"),
+            r.to_str().unwrap(),
+            0,
+        );
+        let l = |id: &str, files: &[&str]| Local {
+            task_id: id.into(),
+            files: files.iter().map(|s| s.to_string()).collect(),
+            ..Default::default()
+        };
+        app.db.set_local(&l("a", &["C/x.docx"])).unwrap();
+        app.db
+            .set_local(&l("b", &["C/x.docx", "C/x_amin.docx"]))
+            .unwrap();
+        app.db.set_local(&l("c", &["C/y.docx"])).unwrap();
+        assert!(super::repoint(&app, "C/x.docx", "C/x_amin.docx").is_ok());
+        assert_eq!(app.db.local("a").unwrap().files, ["C/x_amin.docx"]);
+        assert_eq!(app.db.local("b").unwrap().files, ["C/x_amin.docx"]);
+        assert_eq!(app.db.local("c").unwrap().files, ["C/y.docx"]);
     }
 }
