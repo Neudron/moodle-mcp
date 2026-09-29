@@ -29,6 +29,13 @@ async fn first_sync_no_events_then_diff() {
         assert!(ids.iter().any(|i| i == want), "missing {want} in {ids:?}");
     }
     assert!(!db.grades().unwrap().is_empty());
+    assert!(
+        db.grades()
+            .unwrap()
+            .iter()
+            .all(|(_, v)| v["course_name"].as_str().is_some_and(|s| !s.is_empty())),
+        "grades must carry the course name for courses without tasks"
+    );
     let mut t = db.task("assign:7").unwrap().unwrap();
     t.due = 1;
     db.upsert_tasks(&[t]).unwrap();

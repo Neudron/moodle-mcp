@@ -375,7 +375,9 @@ async fn grades(State(app): S) -> R<Json<Vec<Value>>> {
         .map(|t| (t.course_id, t.course))
         .collect();
     Ok(Json(app.db.grades()?.into_iter().map(|(id, v)| json!({
-        "course_id": id, "course": names.get(&id).cloned().unwrap_or_default(), "items": v["gradeitems"].clone()})).collect()))
+        "course_id": id,
+        "course": v["course_name"].as_str().map(String::from).or_else(|| names.get(&id).cloned()).unwrap_or_default(),
+        "items": v["gradeitems"].clone()})).collect()))
 }
 
 async fn status(State(app): S) -> R<Json<Value>> {

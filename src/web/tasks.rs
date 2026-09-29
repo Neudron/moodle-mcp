@@ -252,8 +252,10 @@ pub async fn sync_all(
         )
         .await?;
         if !g["usergrades"][0].is_null() {
-            db.set_grades(c.id, &g["usergrades"][0])
-                .map_err(CoreError::Other)?;
+            // Keep the name here: courses with no tasks have nowhere else to get it from.
+            let mut ug = g["usergrades"][0].clone();
+            ug["course_name"] = Value::String(c.shortname.clone());
+            db.set_grades(c.id, &ug).map_err(CoreError::Other)?;
         }
     }
     let old: HashMap<String, Task> = db

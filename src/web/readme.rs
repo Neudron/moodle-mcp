@@ -124,6 +124,14 @@ pub fn build(db: &Db, now: i64) -> Result<String> {
         .into_iter()
         .filter_map(|v| serde_json::from_value(v).ok())
         .collect();
+    // The student's own module label for a course (e.g. "LMSGI 0373"), reused for its other rows.
+    let labels: std::collections::HashMap<String, String> = tasks
+        .iter()
+        .filter_map(|t| {
+            let m = &locals.get(&t.id)?.module;
+            (!m.is_empty()).then(|| (t.course.clone(), m.clone()))
+        })
+        .collect();
     let mut pending = Vec::new();
     for t in tasks
         .iter()
@@ -133,6 +141,7 @@ pub fn build(db: &Db, now: i64) -> Result<String> {
         let module = l
             .map(|l| l.module.clone())
             .filter(|m| !m.is_empty())
+            .or_else(|| labels.get(&t.course).cloned())
             .unwrap_or_else(|| t.course.clone());
         match l.filter(|l| !l.status.is_empty() && l.status != "llegit") {
             Some(l) => done.push(Row {
@@ -290,6 +299,31 @@ mod tests {
         let md = build(&db, 0).unwrap();
         assert!(md.contains("Tasca-RA1-Unilever_amin.docx"), "{md}");
         assert!(md.contains("| LMSGI 0373 | M4_A2_A_RA1 |"));
+    }
+
+    #[test]
+    fn pending_rows_reuse_course_label() {
+        let db = Db::memory().unwrap();
+        let t = |id: &str, title: &str| Task {
+            id: id.into(),
+            kind: "assign".into(),
+            title: title.into(),
+            course: "2627_DAX_0373".into(),
+            due: 2_000_000_000,
+            source: "moodle".into(),
+            ..Default::default()
+        };
+        db.upsert_tasks(&[t("assign:1", "Fet"), t("assign:2", "Pendent")])
+            .unwrap();
+        db.set_local(&Local {
+            task_id: "assign:1".into(),
+            status: "lliurat".into(),
+            module: "LMSGI 0373".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let md = build(&db, 0).unwrap();
+        assert!(md.contains("| LMSGI 0373 | Pendent |"), "{md}");
     }
 
     #[test]
