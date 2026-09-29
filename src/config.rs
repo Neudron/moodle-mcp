@@ -582,10 +582,12 @@ mod tests {
     #[test]
     fn config_template_round_trips_to_defaults() {
         let parsed = parse_toml_subset(&Config::init_template());
-        let mut config = Config::default();
         // Reset to non-defaults, then re-apply the template: must restore.
-        config.concurrency = 3;
-        config.locale = "xx".to_string();
+        let mut config = Config {
+            concurrency: 3,
+            locale: "xx".to_string(),
+            ..Config::default()
+        };
         config.apply_layer(&parsed, "test");
         assert_eq!(config, Config::default());
     }

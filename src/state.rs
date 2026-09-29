@@ -287,6 +287,7 @@ fn open_lock(root: &str) -> Result<std::fs::File> {
         .with_context(|| format!("creating {} (is the root writable?)", dir.display()))?;
     std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(lock_path(root))
@@ -839,9 +840,11 @@ mod tests {
         assert_eq!(issues.len(), 1, "{issues:?}");
         assert!(issues[0].starts_with("warn:"));
 
-        let mut bad = State::default();
-        bad.schema_version = 1;
-        bad.user_id = 3;
+        let mut bad = State {
+            schema_version: 1,
+            user_id: 3,
+            ..State::default()
+        };
         bad.meta.store = "tape".to_string();
         bad.courses.insert(
             "abc".to_string(),

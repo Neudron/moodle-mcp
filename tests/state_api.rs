@@ -18,8 +18,10 @@ fn test_root(name: &str) -> String {
 }
 
 fn sample_state() -> State {
-    let mut state = State::default();
-    state.user_id = 42;
+    let mut state = State {
+        user_id: 42,
+        ..State::default()
+    };
     state.courses.insert(
         "101".to_string(),
         CourseState {
@@ -212,8 +214,10 @@ fn state_vacuum_and_repair() {
 fn state_large_state_roundtrip() {
     // >10k files must save+load+validate quickly (#987).
     let root = test_root("state-large");
-    let mut state = State::default();
-    state.user_id = 1;
+    let mut state = State {
+        user_id: 1,
+        ..State::default()
+    };
     let mut files = BTreeMap::new();
     for i in 0..12_000 {
         files.insert(
