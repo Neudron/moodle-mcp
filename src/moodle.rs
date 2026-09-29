@@ -180,16 +180,29 @@ impl Moodle {
     pub fn from_env() -> Result<Self> {
         let base = std::env::var("MOODLE_URL")
             .unwrap_or_else(|_| "https://educaciodigital.cat/iespalamos/moodle".into());
-        let token_file = std::env::var("MOODLE_TOKEN_FILE")
-            .unwrap_or_else(|_| format!("{}/.moodle/token", Self::moodle_root()));
-        let token = std::fs::read_to_string(&token_file)
-            .with_context(|| format!("reading token file {token_file}"))?
-            .trim()
-            .to_string();
+        let token = match std::env::var("MOODLE_TOKEN")
+            .ok()
+            .filter(|t| !t.trim().is_empty())
+        {
+            Some(t) => t.trim().to_string(),
+            None => {
+                let token_file = std::env::var("MOODLE_TOKEN_FILE")
+                    .unwrap_or_else(|_| format!("{}/.moodle/token", Self::moodle_root()));
+                std::fs::read_to_string(&token_file)
+                    .with_context(|| format!("reading token file {token_file}"))?
+                    .trim()
+                    .to_string()
+            }
+        };
         if token.len() < 16 {
-            bail!("token file {token_file} does not look like a token");
+            bail!("moodle token does not look like a token (MOODLE_TOKEN or token file)");
         }
         Ok(Self::new(&base, &token))
+    }
+
+    /// Base URL without trailing slash (for building `mod/*/view.php` links).
+    pub fn base(&self) -> &str {
+        &self.base
     }
 
     pub fn moodle_root() -> String {

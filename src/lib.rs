@@ -8,3 +8,4 @@ pub mod retry;
 pub mod state;
 pub mod store;
 pub mod sync;
+pub mod web;
