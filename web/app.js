@@ -41,7 +41,8 @@ const enc = encodeURIComponent;
 
 function sandboxed(html) {
   const css = '<style>body{font:16px/1.5 system-ui,sans-serif;margin:16px;color:#1b1722}img{max-width:100%}</style>';
-  return h('iframe', { class: 'body', sandbox: '', referrerpolicy: 'no-referrer', title: 'Contingut de Moodle', srcdoc: css + (html || '<p>(sense descripció)</p>') });
+  if (!html || !html.trim()) return h('p', { class: 'dim' }, 'Sense descripció a Moodle.');
+  return h('iframe', { class: 'body', sandbox: '', referrerpolicy: 'no-referrer', title: 'Contingut de Moodle', srcdoc: css + html });
 }
 
 function toast(msg) {
@@ -116,11 +117,11 @@ views.tasca = async (id) => {
   } }, 'Desa estat');
   const status = h('span', { class: 'actions', style: { margin: '0' } }, select, save);
   const actions = h('div', { class: 'actions' },
-    h('a', { href: t.url, target: '_blank', rel: 'noopener' }, h('button', { type: 'button' }, 'Obre a Moodle')),
+    h('a', { class: 'btn', href: t.url, target: '_blank', rel: 'noopener' }, 'Obre a Moodle'),
     status,
     t.source === 'ai' && t.ai_confirmed == null && [
-      h('button', { type: 'button', onclick: async () => { await api(`/api/tasks/${enc(id)}/ai`, { method: 'POST', body: { keep: true } }); route(); } }, 'Mantén'),
-      h('button', { type: 'button', onclick: async () => { await api(`/api/tasks/${enc(id)}/ai`, { method: 'POST', body: { keep: false } }); location.hash = '#/tauler'; } }, 'Descarta')],
+      h('button', { type: 'button', onclick: async () => { try { await api(`/api/tasks/${enc(id)}/ai`, { method: 'POST', body: { keep: true } }); route(); } catch (e) { toast(e.message); } } }, 'Mantén'),
+      h('button', { type: 'button', onclick: async () => { try { await api(`/api/tasks/${enc(id)}/ai`, { method: 'POST', body: { keep: false } }); location.hash = '#/tauler'; } catch (e) { toast(e.message); } } }, 'Descarta')],
     taskExtras.map((f) => f(tv)));
   const atts = t.attachments.map((a) => h('li', {}, h('a', { href: `/api/moodle-file?url=${enc(a.fileurl)}`, target: '_blank' }, a.filename)));
   const files = l.files.map((f) => h('li', {}, h('a', { href: `#/fitxers/${enc(f)}` }, f)));
@@ -145,10 +146,10 @@ views.tasca = async (id) => {
 function linkFiles(id, current) {
   const input = h('input', { list: 'submit-files', placeholder: 'submit/…/fitxer_amin.docx', 'aria-label': 'Fitxer a vincular', style: { minWidth: '320px' } });
   const dl = h('datalist', { id: 'submit-files' });
-  api('/api/submit-files').then((fs) => dl.replaceChildren(...fs.map((f) => h('option', { value: f }))));
-  return h('div', { class: 'actions' }, input, dl, h('button', { type: 'button', onclick: async () => {
+  api('/api/submit-files').then((fs) => dl.replaceChildren(...fs.map((f) => h('option', { value: f })))).catch((e) => toast(e.message));
+  return h('div', { class: 'actions' }, input, dl, h('button', { type: 'button', id: 'vincula', onclick: async () => {
     if (!input.value) return;
-    try { await api(`/api/tasks/${enc(id)}/files`, { method: 'POST', body: { files: [...current, input.value] } }); route(); }
+    try { await api(`/api/tasks/${enc(id)}/files`, { method: 'POST', body: { files: [...current, input.value] } }); await route(); $('#vincula')?.focus(); }
     catch (e) { toast(e.message); }
   } }, 'Vincula fitxer'));
 }
@@ -178,9 +179,9 @@ async function loadCourses() {
 
 $('#sync').addEventListener('click', async (e) => {
   const b = e.currentTarget; b.disabled = true;
-  try { const r = await api('/api/sync', { method: 'POST' }); toast(`Sincronitzat (${r.events} canvis)`); route(); }
+  try { const r = await api('/api/sync', { method: 'POST' }); toast(`Sincronitzat (${r.events} canvis)`); await route(); }
   catch (err) { toast(err.message); }
-  b.disabled = false; refreshStatus();
+  b.disabled = false; b.focus(); refreshStatus();
 });
 $('#theme').addEventListener('click', () => {
   const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
