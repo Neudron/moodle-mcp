@@ -148,7 +148,10 @@ async fn one_task(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
     t.body_html = tasks::proxy_urls(&t.body_html);
     t.feedback_html = tasks::proxy_urls(&t.feedback_html);
     let l = app.db.local(&id)?;
-    let dir = readme::submit_dir(&module_of(&l, &t.course), &t.title);
+    let mut dir = readme::submit_dir(&module_of(&l, &t.course), &t.title);
+    if l.status == "lliurat" {
+        dir = dir.replacen("submit/", "submit/_lliurat/", 1);
+    }
     Ok(Json(json!({"task": t, "local": l, "submit_dir": dir})))
 }
 
@@ -167,18 +170,22 @@ async fn set_status(
     let t = app.db.task(&id)?.ok_or(bad("no existeix"))?;
     let mut l = app.db.local(&id)?;
     l.status = b.status;
-    app.db.set_local(&l)?;
+    let from_rel = readme::submit_dir(&module_of(&l, &t.course), &t.title);
     if l.status == "lliurat" {
-        let from = std::path::Path::new(&app.root)
-            .join(readme::submit_dir(&module_of(&l, &t.course), &t.title));
-        if from.is_dir() {
-            let to = std::path::Path::new(&app.root)
-                .join("submit/_lliurat")
-                .join(from.file_name().unwrap_or_default());
+        let root = std::path::Path::new(&app.root);
+        let to_rel = from_rel.replacen("submit/", "submit/_lliurat/", 1);
+        if root.join(&from_rel).is_dir() {
+            let to = root.join(&to_rel);
             std::fs::create_dir_all(to.parent().unwrap_or(&to)).map_err(anyhow::Error::from)?;
-            std::fs::rename(&from, &to).map_err(anyhow::Error::from)?;
+            std::fs::rename(root.join(&from_rel), &to).map_err(anyhow::Error::from)?;
+            for f in &mut l.files {
+                if f == &from_rel || f.starts_with(&format!("{from_rel}/")) {
+                    *f = format!("{to_rel}{}", &f[from_rel.len()..]);
+                }
+            }
         }
     }
+    app.db.set_local(&l)?;
     readme::write(&app.db, &app.root)?;
     Ok(Json(l))
 }

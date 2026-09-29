@@ -170,3 +170,48 @@ async fn moodle_file_is_sandboxed_and_ignores_fragment_ext() {
         );
     }
 }
+
+#[tokio::test]
+async fn lliurat_moves_folder_under_module_and_rewrites_files() {
+    let (base, _app, _m, root) = start("lliurat").await;
+    let c = reqwest::Client::new();
+    post(&c, &base, "/api/sync").send().await.unwrap();
+    let one: serde_json::Value = c
+        .get(format!("{base}/api/tasks/assign:7"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let dir = one["submit_dir"].as_str().unwrap().to_string();
+    std::fs::create_dir_all(root.join(&dir)).unwrap();
+    std::fs::write(root.join(&dir).join("a.txt"), "x").unwrap();
+    let file = format!("{dir}/a.txt");
+    let r = post(&c, &base, "/api/tasks/assign:7/files")
+        .json(&serde_json::json!({"files": [file]}))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    let r = post(&c, &base, "/api/tasks/assign:7/status")
+        .json(&serde_json::json!({"status": "lliurat"}))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    let to = dir.replacen("submit/", "submit/_lliurat/", 1);
+    assert!(!root.join(&dir).exists());
+    assert!(root.join(&to).join("a.txt").exists());
+    let one: serde_json::Value = c
+        .get(format!("{base}/api/tasks/assign:7"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(one["submit_dir"], to);
+    assert_eq!(one["local"]["files"][0], format!("{to}/a.txt"));
+    assert!(root.join("submit/README.md").exists());
+}
