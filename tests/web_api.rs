@@ -141,3 +141,32 @@ async fn raw_serves_accented_path_and_refuses_dotfiles() {
         .unwrap();
     assert_eq!(courses[0]["course_id"], 101);
 }
+
+#[tokio::test]
+async fn moodle_file_is_sandboxed_and_ignores_fragment_ext() {
+    let (base, _app, m, _root) = start("mfile").await;
+    let c = reqwest::Client::new();
+    let f = format!(
+        "{}/webservice/pluginfile.php/101/mod_resource/content/6/s1-m3-0.txt",
+        m.base()
+    );
+    for u in [f.clone(), format!("{f}#.html")] {
+        let r = c
+            .get(format!(
+                "{base}/api/moodle-file?url={}",
+                moodle_mcp::web::tasks::pct(&u)
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200, "{u}");
+        assert_eq!(r.headers()["content-security-policy"], "sandbox");
+        assert!(
+            r.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/plain"),
+            "{u}"
+        );
+    }
+}

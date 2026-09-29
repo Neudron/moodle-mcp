@@ -331,11 +331,16 @@ pub struct UrlQ {
 }
 async fn moodle_file(State(app): S, Query(q): Query<UrlQ>) -> R<Response> {
     let bytes = app.moodle.download(&q.url).await?;
-    let ct = files::mime(std::path::Path::new(q.url.split('?').next().unwrap_or("")));
+    let ct = files::mime(std::path::Path::new(
+        q.url.split(['?', '#']).next().unwrap_or(""),
+    ));
+    // Remote bytes on our origin: always sandbox (blocks script in html/svg).
     Ok((
         [
             (header::CONTENT_TYPE, ct),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::CONTENT_DISPOSITION, "inline"),
+            (header::CONTENT_SECURITY_POLICY, "sandbox"),
         ],
         bytes,
     )
