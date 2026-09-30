@@ -6,6 +6,7 @@ pub mod env;
 pub mod files;
 pub mod guard;
 pub mod ide;
+pub mod jev;
 pub mod lan;
 pub mod office;
 pub mod organize;

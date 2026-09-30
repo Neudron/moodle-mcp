@@ -4,7 +4,7 @@
 use crate::web::{
     api::{ApiErr, R},
     db::Task,
-    env, files, office, shots, App,
+    env, files, jev, office, shots, App,
 };
 use anyhow::{anyhow, ensure};
 use axum::{
@@ -67,6 +67,15 @@ pub struct Cand {
     pub due: i64,
     pub deliverable: String,
     pub evidence: String,
+    /// Jev's verdict, None when Jev was unavailable.
+    pub score: Option<f64>,
+}
+
+const GATE_Q: &str = "Does this document ask the student to do or hand in an assignment, exercise, exam or activity (a task with a deliverable or deadline)?";
+const VERIFY_Q: &str = "Is this a real task the student must do or hand in (a concrete assignment, exercise, exam or activity with a deliverable or deadline), not just an example, theory or explanation?";
+
+fn keep_min() -> f64 {
+    jev::thr("JEV_KEEP", 0.5)
 }
 
 pub fn sha_hex(bytes: &[u8]) -> String {
@@ -230,6 +239,7 @@ pub fn validate(raw: &str, doc: &str) -> anyhow::Result<Vec<Cand>> {
                 due,
                 deliverable: s("deliverable").chars().take(200).collect(),
                 evidence: quote.chars().take(500).collect(),
+                score: None,
             })
         })
         .take(20)
@@ -286,12 +296,13 @@ pub fn to_tasks(sha: &str, item: &Item, cands: &[Cand], existing: &[Task]) -> Ve
         .iter()
         .enumerate()
         .filter(|(_, c)| {
-            !is_dup(
-                existing,
-                &item.course,
-                &c.title,
-                &format!("ai:{}:", &sha[..12]),
-            )
+            c.score.is_none_or(|p| p >= keep_min())
+                && !is_dup(
+                    existing,
+                    &item.course,
+                    &c.title,
+                    &format!("ai:{}:", &sha[..12]),
+                )
         })
         .map(|(i, c)| {
             let mut body = format!("<p>{}</p>", esc(&c.description));
@@ -309,10 +320,37 @@ pub fn to_tasks(sha: &str, item: &Item, cands: &[Cand], existing: &[Task]) -> Ve
                 url: item.src.clone(),
                 due: c.due,
                 source: "ai".into(),
+                ai_score: c.score,
                 ..Default::default()
             }
         })
         .collect()
+}
+
+/// Window of `doc` around `quote` (first 3000 chars when the quote is not verbatim).
+fn excerpt(doc: &str, quote: &str) -> String {
+    let at = doc
+        .find(quote)
+        .map_or(0, |i| doc[..i].chars().count().saturating_sub(1500));
+    doc.chars().skip(at).take(3000).collect()
+}
+
+/// Jev's verdict on each candidate; `None` scores (Jev down) are kept.
+pub async fn verify(mut cands: Vec<Cand>, doc: &str) -> Vec<Cand> {
+    for c in &mut cands {
+        let st = format!(
+            "{}\n{}\nEvidence: {}\n\nDocument excerpt:\n{}",
+            c.title,
+            c.description,
+            c.evidence,
+            excerpt(doc, &c.evidence)
+        );
+        c.score = jev::noul(&st, VERIFY_Q).await;
+        if c.score.is_none() {
+            break; // Jev is down or slow: keep the old behaviour for the rest
+        }
+    }
+    cands
 }
 
 /// `.moodle/scan/ws/opencode.json`: `classifier` has no tools at all; bash, edit and webfetch are
@@ -675,20 +713,60 @@ async fn web_get(url: &str) -> anyhow::Result<(String, String, Vec<u8>)> {
     Ok((ct, name, body))
 }
 
-/// Private Google file: the logged-in browser saves the text export (complete, unlike the DOM);
-/// the HTML view is the fallback when that download does not arrive.
-async fn browser_doc(kind: &str, id: &str) -> anyhow::Result<String> {
-    let dir = env::get("SCAN_DOWNLOADS").map_or_else(
+fn downloads_dir() -> PathBuf {
+    env::get("SCAN_DOWNLOADS").map_or_else(
         || Path::new(&std::env::var("HOME").unwrap_or_default()).join("Downloads"),
         PathBuf::from,
-    );
-    let fmt = if kind == "spreadsheets" { "csv" } else { "txt" };
-    let url = format!("https://docs.google.com/{kind}/d/{id}/export?format={fmt}");
-    let cmd = env::get("SHOT_CMD").unwrap_or_else(|| shots::DEFAULT_CMD.into());
-    match shots::download_text(&cmd, &url, &dir).await {
-        Ok(t) if !short(&t) => Ok(t),
-        _ => browser_text(&view_url(kind, id)).await,
+    )
+}
+
+/// The logged-in browser saves `url` and the file is kept as `.moodle/gdocs/<id>.<ext>` for the
+/// student; a copy younger than a week is reused without the browser.
+async fn local_copy(app: &App, id: &str, url: &str) -> anyhow::Result<PathBuf> {
+    let dir = Path::new(&app.root).join(".moodle/gdocs");
+    tokio::fs::create_dir_all(&dir).await?;
+    let week = Duration::from_secs(7 * 86400);
+    let fresh = std::fs::read_dir(&dir)?
+        .filter_map(|e| Some(e.ok()?.path()))
+        .find(|p| {
+            p.file_stem().is_some_and(|s| s == id)
+                && p.metadata().is_ok_and(|m| m.len() > 0) // empty: a failed download
+                && p.metadata()
+                    .and_then(|m| m.modified())
+                    .is_ok_and(|t| t.elapsed().is_ok_and(|e| e < week))
+        });
+    if let Some(p) = fresh {
+        return Ok(p);
     }
+    let cmd = env::get("SHOT_CMD").unwrap_or_else(|| shots::DEFAULT_CMD.into());
+    let got = shots::download(&cmd, url, &downloads_dir()).await?;
+    let ext = ext_of(&got.to_string_lossy());
+    let dest = dir.join(format!(
+        "{id}.{}",
+        if ext.is_empty() { "bin" } else { &ext }
+    ));
+    tokio::fs::copy(&got, &dest).await?;
+    tokio::fs::remove_file(&got).await.ok();
+    Ok(dest)
+}
+
+/// Extract a kept local copy like any other file (DS reads through the jail, so it is staged).
+async fn local_item(app: &App, it: &Item, p: &Path) -> anyhow::Result<Out> {
+    let ext = ext_of(&p.file_name().unwrap_or_default().to_string_lossy());
+    if !extractable(p, &ext) {
+        return Ok(skip(format!("format .{ext} sense text extraïble")));
+    }
+    stage(app, it, &tokio::fs::read(p).await?, &ext).await
+}
+
+/// Private Google file: downloaded as docx/pptx/xlsx through the browser, then the local pipeline.
+async fn browser_doc(app: &App, it: &Item, kind: &str, id: &str) -> anyhow::Result<Out> {
+    let url = match kind {
+        "document" => format!("https://docs.google.com/document/d/{id}/export?format=docx"),
+        "presentation" => format!("https://docs.google.com/presentation/d/{id}/export/pptx"),
+        _ => format!("https://docs.google.com/spreadsheets/d/{id}/export?format=xlsx"),
+    };
+    local_item(app, it, &local_copy(app, id, &url).await?).await
 }
 
 /// Google pages through the logged-in browser: fixed MCP tool sequence, then tag-stripped.
@@ -859,18 +937,22 @@ pub async fn classify(app: &App, sha: &str, text: &str) -> anyhow::Result<Vec<Ca
     found.ok_or(last)
 }
 
-async fn classify_store(app: &App, sha: &str, it: &Item, text: &str) -> anyhow::Result<()> {
-    let cands = classify(app, sha, text).await?;
+/// Jev gate, then the model chain, then Jev verification. Returns the UI note.
+async fn classify_store(app: &App, sha: &str, it: &Item, text: &str) -> anyhow::Result<String> {
+    let now = crate::web::now();
+    if let Some(p) = jev::noul(text, GATE_Q).await {
+        if p < jev::thr("JEV_GATE", 0.15) {
+            app.db.cache_put(sha, &it.src, "[]", now)?;
+            return Ok(format!("Jev: sense tasques (p={p:.2})"));
+        }
+    }
+    let cands = verify(classify(app, sha, text).await?, text).await;
     let existing = app.db.all_tasks()?;
     app.db
         .upsert_ai_tasks(&to_tasks(sha, it, &cands, &existing))?;
-    app.db.cache_put(
-        sha,
-        &it.src,
-        &serde_json::to_string(&cands)?,
-        crate::web::now(),
-    )?;
-    Ok(())
+    app.db
+        .cache_put(sha, &it.src, &serde_json::to_string(&cands)?, now)?;
+    Ok(String::new())
 }
 
 async fn file_item(app: &App, it: &Item, p: &Path, rel: &str, sha: &str) -> anyhow::Result<Out> {
@@ -883,10 +965,7 @@ async fn file_item(app: &App, it: &Item, p: &Path, rel: &str, sha: &str) -> anyh
             app.db.cache_put(sha, &it.src, "[]", crate::web::now())?;
             (sha.into(), "done", note)
         }
-        Ex::Text(t) => {
-            classify_store(app, sha, it, &t).await?;
-            (sha.into(), "done", String::new())
-        }
+        Ex::Text(t) => (sha.into(), "done", classify_store(app, sha, it, &t).await?),
     })
 }
 
@@ -901,14 +980,19 @@ async fn url_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
         return Ok((sha, "cached", String::new()));
     }
     let text = match google_public(&export_url(&kind, &id)).await {
-        Some(t) => t,
-        None => browser_doc(&kind, &id).await?,
+        Some(t) if !short(&t) => t,
+        _ => {
+            if let Ok(o) = browser_doc(app, it, &kind, &id).await {
+                return Ok(o);
+            }
+            browser_text(&view_url(&kind, &id)).await? // download failed: the HTML view
+        }
     };
     if short(&text) {
         return Ok((sha, "needs_review", "Google Doc privat o buit".into()));
     }
-    classify_store(app, &sha, it, &text).await?;
-    Ok((sha, "done", String::new()))
+    let note = classify_store(app, &sha, it, &text).await?;
+    Ok((sha, "done", note))
 }
 
 /// Any other link: a Drive file is downloaded and extracted, a page becomes text (forms.gle and
@@ -933,8 +1017,15 @@ async fn link_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
             return stage(app, it, bytes, &ext).await;
         }
     }
-    if drive.is_some() {
-        return Ok(skip("fitxer de Drive privat".into())); // the browser cannot save bytes
+    if let Some(id) = &drive {
+        // authuser is required: without it Google picks another signed-in account (403)
+        let au = env::get("SCAN_AUTHUSER").unwrap_or_else(|| "0".into());
+        return Ok(
+            match local_copy(app, id, &format!("{get}&authuser={au}")).await {
+                Ok(p) => local_item(app, it, &p).await?,
+                Err(_) => skip("fitxer de Drive privat".into()),
+            },
+        );
     }
     let mut text = got.map(|(_, _, b)| strip_html(&text_of(b)));
     if text.as_ref().map_or(true, |t| short(t))
@@ -947,8 +1038,8 @@ async fn link_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
         app.db.cache_put(&sha, &it.src, "[]", crate::web::now())?;
         return Ok((sha, "done", "enllaç sense text".into()));
     }
-    classify_store(app, &sha, it, &text).await?;
-    Ok((sha, "done", String::new()))
+    let note = classify_store(app, &sha, it, &text).await?;
+    Ok((sha, "done", note))
 }
 
 /// Stage bytes in a dir the sandboxed tools can see (DS reads through the jail), then extract.
@@ -1019,6 +1110,50 @@ async fn process(app: &App, job: i64, it: &Item) {
         .ok();
 }
 
+/// Jev scores the unconfirmed AI proposals that have no score yet; rejected ones are deleted
+/// (the db is copied to `.moodle/trash` first, once). Confirmed and Moodle tasks are never touched.
+async fn rescore(app: &App) {
+    let old: Vec<Task> = app
+        .db
+        .all_tasks()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|t| t.source == "ai" && t.ai_confirmed.is_none() && t.ai_score.is_none())
+        .collect();
+    let mut backed = false;
+    for t in old {
+        if CANCEL.load(SeqCst) {
+            return;
+        }
+        let st = format!("{}\n{}", t.title, strip_html(&t.body_html));
+        let Some(p) = jev::noul(&st, VERIFY_Q).await else {
+            return; // Jev is down: the next run tries again
+        };
+        if p >= keep_min() {
+            app.db.set_ai_score(&t.id, p).ok();
+            continue;
+        }
+        if !backed {
+            let d = Path::new(&app.root).join(".moodle/trash");
+            let to = d.join(format!("web.db.pre-jev-{}", crate::web::now()));
+            if std::fs::create_dir_all(&d).is_err() || app.db.backup(&to).is_err() {
+                return;
+            }
+            backed = true;
+        }
+        // the student may have answered while Jev thought
+        if app
+            .db
+            .task(&t.id)
+            .ok()
+            .flatten()
+            .is_some_and(|t| t.ai_confirmed.is_none())
+        {
+            app.db.delete_task(&t.id).ok();
+        }
+    }
+}
+
 async fn run_job(app: Arc<App>, job: i64) {
     let (a, tasks) = (Arc::clone(&app), app.db.all_tasks().unwrap_or_default());
     let items = tokio::task::spawn_blocking(move || inventory(Path::new(&a.root), &tasks))
@@ -1047,6 +1182,9 @@ async fn run_job(app: Arc<App>, job: i64) {
         });
     }
     while set.join_next().await.is_some() {}
+    if !CANCEL.load(SeqCst) {
+        rescore(&app).await;
+    }
     if env::get("SCAN_SHOTS").as_deref() != Some("0") {
         let cmd = env::get("SHOT_CMD").unwrap_or_else(|| shots::DEFAULT_CMD.into());
         for t in app.db.all_tasks().unwrap_or_default() {
@@ -1240,6 +1378,7 @@ mod tests {
             due: 5,
             deliverable: "pdf".into(),
             evidence: ev.into(),
+            score: None,
         };
         let cands = [
             c("Entrega 1: Memòria del projecte", "q0"),
@@ -1452,6 +1591,92 @@ mod tests {
             text_or(DOC.into(), Ex::Done("buit".into())),
             Ex::Text(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn jev_gate_verify_and_rescore_degrade_gracefully() {
+        let root = std::env::temp_dir().join(format!("scanjev-{}", uniq()));
+        let app = App::new(
+            crate::web::db::Db::memory().unwrap(),
+            crate::moodle::Moodle::new("http://127.0.0.1:1", "t"),
+            root.to_str().unwrap(),
+            0,
+        );
+        let it = Item {
+            src: "A/x.txt".into(),
+            course: "A".into(),
+            kind: "file",
+        };
+        let sha = "ab".repeat(32);
+        let cand = |t: &str| Cand {
+            title: t.into(),
+            description: String::new(),
+            due: 0,
+            deliverable: String::new(),
+            evidence: "ev".into(),
+            score: None,
+        };
+        let ai = |i: u8, t: &str, c: Option<bool>| Task {
+            id: format!("ai:x:{i}"),
+            course: "A".into(),
+            source: "ai".into(),
+            title: t.into(),
+            ai_confirmed: c,
+            ..Default::default()
+        };
+        std::env::set_var("JEV_URL", jev::mock::serve().await);
+        // gate: a document Jev sees no task in is cached empty and never reaches the models
+        let note = classify_store(&app, &sha, &it, "NOPE res a fer")
+            .await
+            .unwrap();
+        assert!(note.starts_with("Jev: sense tasques (p=0.02"), "{note}");
+        assert_eq!(app.db.cache_get(&sha).unwrap().as_deref(), Some("[]"));
+        // verify: low-scored candidates are not proposed, the score is kept
+        let v = verify(vec![cand("Bona tasca"), cand("NOPE tasca")], "doc").await;
+        assert_eq!((v[0].score, v[1].score), (Some(0.9), Some(0.02)));
+        let t = to_tasks(&sha, &it, &v, &[]);
+        assert_eq!((t.len(), t[0].ai_score), (1, Some(0.9)));
+        // rescore: only unconfirmed AI rows below the threshold go, after a db backup
+        let moodle = Task {
+            id: "assign:1".into(),
+            title: "NOPE moodle".into(),
+            source: "moodle".into(),
+            ..Default::default()
+        };
+        app.db
+            .upsert_tasks(&[
+                ai(0, "NOPE vella", None),
+                ai(1, "Bona vella", None),
+                ai(2, "NOPE confirmada", Some(true)),
+                moodle,
+            ])
+            .unwrap();
+        rescore(&app).await;
+        let ids: Vec<_> = app
+            .db
+            .all_tasks()
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, ["ai:x:1", "ai:x:2", "assign:1"]);
+        assert_eq!(app.db.task("ai:x:1").unwrap().unwrap().ai_score, Some(0.9));
+        assert_eq!(
+            std::fs::read_dir(root.join(".moodle/trash"))
+                .unwrap()
+                .count(),
+            1
+        );
+        // Jev down: no score, candidates kept, rescore leaves rows alone
+        std::env::set_var("JEV_URL", "http://127.0.0.1:1");
+        let v = verify(vec![cand("NOPE tasca")], "doc").await;
+        assert_eq!(v[0].score, None);
+        assert_eq!(to_tasks(&sha, &it, &v, &[]).len(), 1);
+        app.db.upsert_tasks(&[ai(3, "NOPE nova", None)]).unwrap();
+        rescore(&app).await;
+        assert!(app.db.task("ai:x:3").unwrap().is_some());
+        std::env::remove_var("JEV_URL");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[tokio::test]

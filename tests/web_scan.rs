@@ -268,6 +268,7 @@ async fn scan_end_to_end() {
     std::env::set_var("SCAN_LOG", &log);
     std::env::set_var("SCAN_GOOGLE_BASE", &gbase);
     std::env::set_var("SCAN_SHOTS", "0");
+    std::env::set_var("JEV_URL", "http://127.0.0.1:1"); // Jev down: the old path
     std::env::set_var("SCAN_DOWNLOADS", d.join("no-downloads")); // missing dir: the browser falls back to the DOM view
     let mcp = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_mcp.sh");
     let mcplog = d.join("mcp.log");

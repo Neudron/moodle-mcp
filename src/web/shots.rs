@@ -203,20 +203,20 @@ pub async fn page_dom(cmd: &str, url: &str) -> Result<String> {
         .unwrap_or(t))
 }
 
-/// Text export of a Google file through the browser's own login: opening an `export` URL makes
-/// Firefox save the file into `dir`; the new .txt/.csv is read and removed. The DOM cannot do this
-/// (Docs editors draw on a canvas, `get_dom` cuts HTML at 50k chars, `execute_js` is blocked).
-/// ponytail: assumes Firefox saves without asking into `dir`; a .txt/.csv the user downloads
+/// File download through the browser's own login: opening an export URL makes Firefox save the
+/// file into `dir`; the path of the new complete file is returned (the caller moves it away).
+/// The DOM cannot do this (Docs editors draw on a canvas, `get_dom` cuts HTML at 50k chars).
+/// ponytail: assumes Firefox saves without asking into `dir`; a file the user downloads
 /// meanwhile would be mistaken for ours. Upgrade path: a Firefox profile dedicated to the scanner.
-pub async fn download_text(cmd: &str, url: &str, dir: &Path) -> Result<String> {
+pub async fn download(cmd: &str, url: &str, dir: &Path) -> Result<PathBuf> {
     let ls = || -> Result<Vec<std::ffi::OsString>> {
         std::fs::read_dir(dir)
             .with_context(|| format!("no downloads dir {}", dir.display()))?
             .map(|e| Ok(e?.file_name()))
             .collect()
     };
-    let before = ls()?;
-    let mut g = acquire(cmd).await?; // held while polling: one export at a time
+    let mut g = acquire(cmd).await?; // held while polling: one download at a time
+    let before = ls()?; // after the lock: the previous download's file is already in here
     if let Err(e) = g
         .as_mut()
         .expect("acquired")
@@ -229,20 +229,18 @@ pub async fn download_text(cmd: &str, url: &str, dir: &Path) -> Result<String> {
     }
     for _ in 0..30 {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        // Firefox writes `name.part` and renames when complete, so a match is a whole file.
+        // Firefox writes `name.part` and renames when complete, so any other match is a whole file.
         let new = ls()?.into_iter().map(|n| dir.join(n)).find(|p| {
             !before.contains(&p.file_name().unwrap_or_default().to_owned())
-                && matches!(p.extension().and_then(|e| e.to_str()), Some("txt" | "csv"))
+                && p.extension().is_some_and(|e| e != "part")
+                && p.metadata().is_ok_and(|m| m.len() > 0) // an empty placeholder is not done
         });
         if let Some(p) = new {
-            let t = tokio::fs::read(&p).await?;
-            tokio::fs::remove_file(&p).await.ok();
-            return Ok(String::from_utf8_lossy(&t)
-                .trim_start_matches('\u{feff}')
-                .into());
+            return Ok(p);
         }
     }
-    bail!("l'exportació no ha arribat a {}", dir.display())
+    *g = None; // the tab may sit on an error page
+    bail!("la baixada no ha arribat a {}", dir.display())
 }
 
 /// Open `url` in the shared tab, screenshot the enunciat, save the PNG at `dest`.
@@ -449,32 +447,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn download_text_reads_and_removes_the_new_export() {
+    async fn download_returns_the_new_whole_file_of_any_type() {
         let d = tmp("dl");
-        std::fs::write(d.join("old.txt"), "no").unwrap(); // already there: not ours
         let dir = d.join("dl");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("old.txt"), "no").unwrap();
-        let (p, q) = (dir.join("doc.txt.part"), dir.join("doc.txt"));
+        std::fs::write(dir.join("old.pdf"), "no").unwrap(); // already there: not ours
+        let (p, q) = (dir.join("doc.docx.part"), dir.join("doc.docx"));
+        let q2 = q.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(700)).await;
-            std::fs::write(&p, "\u{feff}hola").unwrap();
-            std::fs::rename(&p, q).unwrap();
+            std::fs::write(&p, "PK").unwrap();
+            std::fs::rename(&p, &q2).unwrap();
+            let done = std::fs::read(&q2).unwrap();
+            std::fs::write(&q2, "").unwrap(); // a zero-byte placeholder is not whole yet
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            std::fs::write(&q2, done).unwrap();
         });
         let cmd = format!(
             "sh {FAKE} {} {}",
             d.join("s.png").display(),
             d.join("log").display()
         );
-        let t = download_text(
+        let got = download(
             &cmd,
-            "https://docs.google.com/document/d/x/export?format=txt",
+            "https://docs.google.com/document/d/x/export?format=docx",
             &dir,
         )
-        .await;
-        assert_eq!(t.unwrap(), "hola");
-        assert!(!dir.join("doc.txt").exists() && dir.join("old.txt").exists());
-        let e = download_text(&cmd, "https://x", &d.join("missing"))
+        .await
+        .unwrap();
+        assert_eq!(got, q);
+        assert_eq!(std::fs::read(&q).unwrap(), b"PK");
+        assert!(dir.join("old.pdf").exists());
+        let e = download(&cmd, "https://x", &d.join("missing"))
             .await
             .unwrap_err();
         assert!(e.to_string().contains("no downloads dir"), "{e}");

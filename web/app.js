@@ -192,7 +192,7 @@ function proposal(tv) {
     try { await api(`/api/tasks/${enc(t.id)}/ai`, { method: 'POST', body: { keep } }); setText($('#live'), keep ? `Mantinguda: ${t.title}` : `Descartada: ${t.title}`); route({ soft: true }); } catch (e) { toast(e.message, true); } } }, label);
   return h('article', { class: 'v-prop' },
     h('h3', {}, h('a', { href: `#/tasca/${enc(t.id)}` }, t.title)),
-    h('p', { class: 'm' }, h('span', { class: 'cn', style: { '--h': hue(t.course) } }, cname(t.course)), t.due ? ` · ${when(t.due)}` : null),
+    h('p', { class: 'm' }, h('span', { class: 'cn', style: { '--h': hue(t.course) } }, cname(t.course)), t.due ? ` · ${when(t.due)}` : null, t.ai_score != null ? ` · Jev ${t.ai_score.toFixed(2)}` : null),
     evidenceOf(t.body_html) ? h('blockquote', {}, evidenceOf(t.body_html)) : null,
     h('p', { class: 'dim' }, 'Font: ', web ? h('a', { href: t.url, target: '_blank', rel: 'noopener' }, t.url, ic('ext'), h('span', { class: 'sr-only' }, ' (obre en una pestanya nova)')) : h('a', { href: `#/fitxers/${enc(t.url)}` }, t.url)),
     h('details', { ontoggle: (e) => { if (e.target.open && !box.hasChildNodes()) preview(box, web ? { moodleUrl: t.url } : { path: t.url }); } }, h('summary', {}, 'Previsualitza'), box),

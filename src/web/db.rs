@@ -39,6 +39,8 @@ pub struct Task {
     pub feedback_html: String,
     pub source: String,
     pub ai_confirmed: Option<bool>,
+    /// Jev's 0..1 verdict that this AI proposal is a real task.
+    pub ai_score: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -125,6 +127,7 @@ impl Db {
             let mut t = t.clone();
             if let Some(old) = self.task(&t.id)? {
                 t.ai_confirmed = old.ai_confirmed;
+                t.ai_score = t.ai_score.or(old.ai_score);
             }
             merged.push(t);
         }
@@ -144,6 +147,27 @@ impl Db {
             .query_row("SELECT json FROM task WHERE id=?1", [id], |r| r.get(0))
             .optional()?;
         Ok(j.map(|j| serde_json::from_str(&j)).transpose()?)
+    }
+
+    /// Only for unconfirmed AI proposals that Jev rejected.
+    pub fn delete_task(&self, id: &str) -> Result<()> {
+        self.c().execute("DELETE FROM task WHERE id=?1", [id])?;
+        Ok(())
+    }
+
+    /// Consistent copy of the whole database (WAL-safe).
+    pub fn backup(&self, to: &Path) -> Result<()> {
+        self.c()
+            .execute("VACUUM INTO ?1", [to.to_string_lossy().as_ref()])?;
+        Ok(())
+    }
+
+    pub fn set_ai_score(&self, id: &str, p: f64) -> Result<()> {
+        if let Some(mut t) = self.task(id)? {
+            t.ai_score = Some(p);
+            self.upsert_tasks(&[t])?;
+        }
+        Ok(())
     }
 
     pub fn set_ai_confirmed(&self, id: &str, keep: bool) -> Result<()> {

@@ -75,6 +75,7 @@ pub fn from_assign(c: &Course, a: &Value, st: &Value, base: &str) -> Task {
         feedback_html: feedback,
         source: "moodle".into(),
         ai_confirmed: None,
+        ai_score: None,
     }
 }
 
