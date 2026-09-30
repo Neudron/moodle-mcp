@@ -51,6 +51,10 @@ async fn main() -> Result<()> {
             }
         }
     }
+    if let (Some(bind), Some(peer)) = (web::env::get("WEB_LAN_BIND"), web::env::get("WEB_LAN_PEER"))
+    {
+        web::lan::spawn(Arc::clone(&app), &bind, &peer, std::path::Path::new(&root)).await;
+    }
     tracing::info!("moodle-web on http://localhost:{port}");
     web::serve_on(listener, app).await
 }
