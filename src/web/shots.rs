@@ -132,9 +132,8 @@ fn shot_path(r: &Value) -> Option<String> {
     })
 }
 
-/// Open `url` in a fresh tab, screenshot the enunciat, save the PNG at `dest`.
-pub async fn shoot(cmd: &str, url: &str, dest: &Path) -> Result<()> {
-    let _g = LOCK.lock().await;
+/// Spawn the MCP server and run the handshake.
+async fn session(cmd: &str) -> Result<Mcp> {
     let mut m = Mcp::spawn(cmd)?;
     m.request(
         "initialize",
@@ -143,6 +142,35 @@ pub async fn shoot(cmd: &str, url: &str, dest: &Path) -> Result<()> {
     )
     .await?;
     m.notify("notifications/initialized").await?;
+    Ok(m)
+}
+
+/// Page text of `url` for the scanner: fixed tool sequence, no LLM, so page content can never
+/// steer the browser. ponytail: joins every `content[].text` of get_dom; tune to the live reply.
+pub async fn page_dom(cmd: &str, url: &str) -> Result<String> {
+    let _g = LOCK.lock().await;
+    let mut m = session(cmd).await?;
+    m.tool("browser_new_tab", json!({"url": url})).await?;
+    m.tool("browser_wait", json!({"selector": "body"}))
+        .await
+        .ok();
+    let r = m.tool("browser_get_dom", json!({})).await;
+    m.tool("browser_close_tab", json!({})).await.ok();
+    Ok(r?["content"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| c["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default())
+}
+
+/// Open `url` in a fresh tab, screenshot the enunciat, save the PNG at `dest`.
+pub async fn shoot(cmd: &str, url: &str, dest: &Path) -> Result<()> {
+    let _g = LOCK.lock().await;
+    let mut m = session(cmd).await?;
     m.tool("browser_new_tab", json!({"url": url})).await?;
     let res = async {
         m.tool("browser_navigate", json!({"url": url})).await?;

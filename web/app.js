@@ -284,7 +284,7 @@ const fsize = (n) => (typeof n !== 'number' ? '' : n < 1024 ? `${n} B` : n < 104
 // preview(el, {path|moodleUrl, name, size}): fills el with the file. Never innerHTML; html/svg stay sandboxed.
 const EXT = {
   img: 'png jpg jpeg gif webp', pdf: 'pdf', html: 'html htm svg', video: 'mp4 webm ogv m4v mov', audio: 'mp3 wav ogg m4a flac', zip: 'zip',
-  text: 'txt md csv json xml css js ts rs py sql url sh java toml yaml yml c h cpp php log ini',
+  office: 'doc docx odt rtf ppt pptx odp xls xlsx ods', text: 'txt md csv json xml css js ts rs py sql url sh java toml yaml yml c h cpp php log ini',
 };
 const kindOf = (n) => { const e = (n.split(/[?#]/)[0].split('.').pop() || '').toLowerCase(); return Object.keys(EXT).find((k) => EXT[k].split(' ').includes(e)); };
 // Names and sizes from the zip central directory (no library, no inflate).
@@ -305,6 +305,7 @@ async function preview(el, o) {
   const name = o.name || (o.path || o.moodleUrl.split(/[?#]/)[0]).split('/').pop();
   const src = o.path != null ? `/api/raw?path=${enc(o.path)}` : `/api/moodle-file?url=${enc(o.moodleUrl)}`;
   const k = kindOf(name), big = o.size > 2e6;
+  const pv = `/api/preview?${o.path != null ? 'path' : 'moodle'}=${enc(o.path ?? o.moodleUrl)}`; // office -> PDF, .url -> target + scanner text
   const fail = (t, b) => h('div', { class: 'pv-none' }, h('p', {}, t), b);
   const dl = h('a', { class: 'btn', href: src, download: name }, ic('file'), 'Descarrega');
   let node;
@@ -314,7 +315,8 @@ async function preview(el, o) {
     else if (k === 'html') node = h('iframe', { class: 'sheet v-frame', src, sandbox: '', referrerpolicy: 'no-referrer', title: `Previsualització: ${name}` });
     else if (k === 'video') node = h('video', { class: 'v-img', src, controls: true, 'aria-label': name });
     else if (k === 'audio') node = h('audio', { src, controls: true, 'aria-label': name });
-    else if (k === 'text' && !big) node = h('pre', { tabindex: 0, role: 'region', 'aria-label': `Contingut de ${name}` }, (await api(src)).slice(0, 2e5));
+    else if (k === 'office') node = h('iframe', { class: 'sheet v-frame', src: pv, title: `PDF: ${name}` });
+    else if (k === 'text' && !big) node = h('pre', { tabindex: 0, role: 'region', 'aria-label': `Contingut de ${name}` }, (await api(name.toLowerCase().endsWith('.url') ? pv : src)).slice(0, 2e5));
     else if (k === 'zip' && !big) {
       const es = zipEntries(await (await fetch(src)).arrayBuffer());
       node = es.length ? h('div', { class: 'tablewrap', role: 'region', tabindex: 0, 'aria-label': `Contingut de ${name}` },
@@ -551,7 +553,11 @@ try { const t = localStorage.getItem('theme'); if (t) document.documentElement.d
 $('#theme-use').setAttribute('href', curTheme() === 'light' ? '#i-sun' : '#i-moon');
 $('#theme').setAttribute('aria-pressed', String(curTheme() === 'dark'));
 $('.skip').addEventListener('click', (e) => { e.preventDefault(); $('#main').focus(); });
-addEventListener('hashchange', () => route());
+let curHash = location.hash;
+addEventListener('hashchange', async () => {
+  if (route.guard && !(await route.guard())) { history.replaceState(null, '', curHash || '#/'); return; }
+  curHash = location.hash; route();
+});
 // Sticky offsets from the real header/banner heights (scroll-padding + sticky group headings).
 {
   const root = document.documentElement, side = $('.side'), banner = $('#banner');
@@ -929,7 +935,10 @@ views.ide = async (...parts) => {
       if (live) refresh();
       const stop = (ev) => { if (dirty) ev.preventDefault(); };
       addEventListener('beforeunload', stop);
-      addEventListener('hashchange', () => { ed.dispose(); removeEventListener('beforeunload', stop); }, { once: true });
+      route.guard = async () => {
+        if (dirty && !(await confirmDialog('Canvis sense desar', h('p', {}, 'Si surts es perdran els canvis.'), 'Descarta'))) return false;
+        ed.dispose(); removeEventListener('beforeunload', stop); route.guard = null; return true;
+      };
     } catch (e) { wrap.replaceChildren(errorPanel(e.message)); }
   }, { once: true });
   return wrap;

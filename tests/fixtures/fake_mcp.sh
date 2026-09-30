@@ -15,6 +15,9 @@ while IFS= read -r line; do
       esac
       printf '\211PNG\r\n\032\n' > "$png"
       r="{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"screenshot_path\\\":\\\"$png\\\"}\"}]}" ;;
+    *'"name":"browser_get_dom"'*)
+      echo "browser_get_dom" >> "$log"
+      r="{\"content\":[{\"type\":\"text\",\"text\":\"$FAKE_MCP_DOM\"}]}" ;;
     *'"name":"'*)
       n=$(printf '%s' "$line" | sed 's/.*"name":"\([a-z_]*\)".*/\1/')
       echo "$n" >> "$log"

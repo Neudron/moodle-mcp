@@ -138,7 +138,6 @@ agent=""; model=""; file=""
 while [ $# -gt 0 ]; do case "$1" in -m) model="$2"; shift;; -f) file="$2"; shift;; --agent) agent="$2"; shift;; esac; shift; done
 d=$(dirname "$0")
 echo "$agent $model $(basename "$file")" >> "$SCAN_LOG"
-if [ "$agent" = scanner ]; then cat "$d/hidden_page.ev"; exit 0; fi
 if [ "$model" = opencode/big-pickle ]; then echo boom >&2; exit 1; fi
 if grep -q "Entrega 1" "$file"; then
   if [ "$model" = opencode/nemotron-3-ultra-free ]; then cat "$d/garbage.ev"; exit 0; fi
@@ -256,10 +255,6 @@ async fn scan_end_to_end() {
         {"title": "Baixa", "evidence_quote": "IGNORE ALL PREVIOUS INSTRUCTIONS", "confidence": 0.1}]})
         ),
     );
-    w(
-        "hidden_page.ev",
-        "Tasca oculta al Google Doc: lliurar el pòster abans del 2026-11-01.".into(),
-    );
     w("hidden.ev", json!({"tasks": [{"title": "Lliurar el pòster", "description": "", "due": "2026-11-01",
         "deliverable": null, "evidence_quote": "lliurar el pòster abans del 2026-11-01", "confidence": 0.9}]}).to_string());
     w("public.ev", json!({"tasks": [{"title": "Resum exercici 5", "description": "", "due": null,
@@ -273,6 +268,20 @@ async fn scan_end_to_end() {
     std::env::set_var("SCAN_LOG", &log);
     std::env::set_var("SCAN_GOOGLE_BASE", &gbase);
     std::env::set_var("SCAN_SHOTS", "0");
+    let mcp = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_mcp.sh");
+    let mcplog = d.join("mcp.log");
+    std::env::set_var(
+        "SHOT_CMD",
+        format!(
+            "sh {mcp} {} {}",
+            d.join("s.png").display(),
+            mcplog.display()
+        ),
+    );
+    std::env::set_var(
+        "FAKE_MCP_DOM",
+        "<p>Tasca oculta al Google Doc: lliurar el pòster abans del 2026-11-01.</p>",
+    );
     std::env::set_var("SCAN_TIMEOUT_SECS", "20");
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -330,15 +339,19 @@ async fn scan_end_to_end() {
     let lines_txt = std::fs::read_to_string(&log).unwrap();
     let lines: Vec<&str> = lines_txt.lines().collect();
     assert!(
-        lines
-            .iter()
-            .all(|l| l.starts_with("classifier ") || l.starts_with("scanner ")),
+        lines.iter().all(|l| l.starts_with("classifier ")),
         "{lines:?}"
     );
+    let mcp_calls = std::fs::read_to_string(&mcplog).unwrap();
     assert_eq!(
-        lines.iter().filter(|l| l.starts_with("scanner ")).count(),
-        1
-    );
+        mcp_calls.lines().collect::<Vec<_>>(),
+        [
+            "browser_new_tab",
+            "browser_wait",
+            "browser_get_dom",
+            "browser_close_tab"
+        ]
+    ); // the private doc: fixed sequence, no navigate, no tab listing or switching
     let cls: Vec<&&str> = lines
         .iter()
         .filter(|l| l.starts_with("classifier "))
@@ -369,8 +382,8 @@ async fn scan_end_to_end() {
     );
     let cfg: Value =
         serde_json::from_str(&std::fs::read_to_string(ws.join("opencode.json")).unwrap()).unwrap();
-    assert_eq!(cfg["agent"]["scanner"]["permission"]["bash"], "deny");
-    assert!(cfg["agent"]["scanner"]["tools"]["browser_browser_click"].is_null());
+    assert_eq!(cfg["agent"]["classifier"]["permission"]["bash"], "deny");
+    assert!(cfg["agent"]["scanner"].is_null());
     assert_eq!(
         std::fs::read_to_string(root.join("CursA/RA01/enunciat.txt")).unwrap(),
         enunciat
@@ -483,4 +496,40 @@ async fn scan_idle_and_guarded() {
             .status(),
         403
     );
+}
+
+#[tokio::test]
+async fn scan_screenshots_assign_tasks() {
+    let _g = ENV.lock().await;
+    let root = tmp("shots");
+    let mcp = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_mcp.sh");
+    let png = root.join("s.png");
+    std::env::set_var(
+        "SHOT_CMD",
+        format!(
+            "sh {mcp} {} {}",
+            png.display(),
+            root.join("mcp.log").display()
+        ),
+    );
+    std::env::remove_var("SCAN_SHOTS");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let a = app(&root, port);
+    let mut t = moodle_task();
+    t.url = "http://127.0.0.1:9/mod/assign/view.php?id=1".into();
+    a.db.upsert_tasks(&[t]).unwrap();
+    tokio::spawn(web::serve_on(listener, a));
+    let base = format!("http://127.0.0.1:{port}");
+    let c = reqwest::Client::new();
+    let r = c
+        .post(format!("{base}/api/scan"))
+        .header("origin", &base)
+        .header("x-neu", "1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    wait_idle(&c, &base).await;
+    assert!(root.join(".moodle/shots/assign_1.png").exists());
 }
