@@ -117,6 +117,7 @@ pub fn routes() -> Router<Arc<App>> {
         .merge(crate::web::scan::router())
         .merge(crate::web::ide::router())
         .merge(crate::web::organize::router())
+        .route("/api/apple-sync", post(apple_sync))
         .route("/api/office/config", post(office_config))
         .route("/api/open", post(open_local))
 }
@@ -504,6 +505,10 @@ async fn status(State(app): S) -> R<Json<Value>> {
         "syncing": app.syncing.try_lock().is_err(),
         "error": app.db.kv_get("last_error")?.unwrap_or_default(),
     })))
+}
+
+async fn apple_sync(State(app): S) -> Json<Value> {
+    Json(json!(crate::web::apple::sync(&app).await))
 }
 
 async fn sync_now(State(app): S) -> R<Json<Value>> {
