@@ -138,7 +138,7 @@ agent=""; model=""; file=""
 while [ $# -gt 0 ]; do case "$1" in -m) model="$2"; shift;; -f) file="$2"; shift;; --agent) agent="$2"; shift;; esac; shift; done
 d=$(dirname "$0")
 echo "$agent $model $(basename "$file")" >> "$SCAN_LOG"
-if [ "$model" = opencode/big-pickle ]; then echo boom >&2; exit 1; fi
+if [ "$model" = opencode/space-bunny-free ]; then echo boom >&2; exit 1; fi
 if grep -q "Entrega 1" "$file"; then
   if [ "$model" = opencode/nemotron-3-ultra-free ]; then cat "$d/garbage.ev"; exit 0; fi
   cat "$d/entrega.ev"
@@ -363,10 +363,10 @@ async fn scan_end_to_end() {
             .len(),
         4
     ); // own files, submit/, png never sent
-    assert!(cls.iter().any(|l| l.contains("opencode/big-pickle")));
+    assert!(cls.iter().any(|l| l.contains("opencode/space-bunny-free")));
     assert!(cls
         .iter()
-        .any(|l| l.contains("opencode/mimo-v2.6-flash-free"))); // fell through garbage and exit 1
+        .any(|l| l.contains("opencode/nemotron-3.5-lightning-free"))); // fell through garbage and exit 1
 
     let ws = root.join(".moodle/scan/ws");
     assert!(std::fs::read_dir(&ws)
