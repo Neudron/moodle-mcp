@@ -3,6 +3,7 @@
 use anyhow::Result;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -62,6 +63,8 @@ CREATE TABLE IF NOT EXISTS notify_log(key TEXT PRIMARY KEY, at INT);
 CREATE TABLE IF NOT EXISTS caldav_map(task_id TEXT PRIMARY KEY, hash TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS manual_rows(n INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS scan_job(id INTEGER PRIMARY KEY AUTOINCREMENT, started INT NOT NULL, finished INT, state TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS scan_item(job INT NOT NULL, src TEXT NOT NULL, course TEXT NOT NULL, kind TEXT NOT NULL, sha TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', error TEXT NOT NULL DEFAULT '', at INT, PRIMARY KEY(job, src));
 ";
 
 fn json_rows(c: &Connection, sql: &str) -> Result<Vec<String>> {
@@ -268,6 +271,90 @@ impl Db {
             .execute("INSERT INTO manual_rows(json) VALUES(?1)", [v.to_string()])?;
         Ok(())
     }
+
+    pub fn scan_new_job(&self, now: i64) -> Result<i64> {
+        let c = self.c();
+        c.execute(
+            "INSERT INTO scan_job(started,state) VALUES(?1,'running')",
+            [now],
+        )?;
+        Ok(c.last_insert_rowid())
+    }
+
+    pub fn scan_add_item(&self, job: i64, src: &str, course: &str, kind: &str) -> Result<()> {
+        self.c().execute(
+            "INSERT OR IGNORE INTO scan_item(job,src,course,kind) VALUES(?1,?2,?3,?4)",
+            params![job, src, course, kind],
+        )?;
+        Ok(())
+    }
+
+    pub fn scan_item_done(
+        &self,
+        job: i64,
+        src: &str,
+        sha: &str,
+        status: &str,
+        error: &str,
+        at: i64,
+    ) -> Result<()> {
+        self.c().execute(
+            "UPDATE scan_item SET sha=?3,status=?4,error=?5,at=?6 WHERE job=?1 AND src=?2",
+            params![job, src, sha, status, error, at],
+        )?;
+        Ok(())
+    }
+
+    pub fn scan_finish(&self, job: i64, state: &str, at: i64) -> Result<()> {
+        self.c().execute(
+            "UPDATE scan_job SET state=?2,finished=?3 WHERE id=?1",
+            params![job, state, at],
+        )?;
+        Ok(())
+    }
+
+    pub fn scan_progress(&self) -> Result<Option<serde_json::Value>> {
+        let c = self.c();
+        let Some((id, started, finished, state)) = c
+            .query_row(
+                "SELECT id,started,COALESCE(finished,0),state FROM scan_job ORDER BY id DESC LIMIT 1",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
+        let mut counts = serde_json::Map::new();
+        let mut st =
+            c.prepare("SELECT status,COUNT(*) FROM scan_item WHERE job=?1 GROUP BY status")?;
+        for r in st.query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+            let (k, n) = r?;
+            counts.insert(k, n.into());
+        }
+        let mut it = c.prepare(
+            "SELECT src,course,status,error FROM scan_item WHERE job=?1 AND status IN ('needs_review','error') ORDER BY src LIMIT 200",
+        )?;
+        let items = it
+            .query_map([id], |r| {
+                Ok(
+                    json!({"src": r.get::<_, String>(0)?, "course": r.get::<_, String>(1)?,
+                          "status": r.get::<_, String>(2)?, "error": r.get::<_, String>(3)?}),
+                )
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Some(
+            json!({"job": id, "state": state, "started": started, "finished": finished,
+                   "counts": counts, "items": items}),
+        ))
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -352,5 +439,38 @@ mod tests {
         assert_eq!(db.kv_get("a").unwrap().as_deref(), Some("2"));
         db.set_caldav_hash("t", "h").unwrap();
         assert_eq!(db.caldav_hash("t").unwrap().as_deref(), Some("h"));
+    }
+
+    #[test]
+    fn scan_job_progress_counts() {
+        let db = Db::memory().unwrap();
+        assert!(db.scan_progress().unwrap().is_none());
+        let j = db.scan_new_job(10).unwrap();
+        db.scan_add_item(j, "A/x.pdf", "A", "file").unwrap();
+        db.scan_add_item(j, "A/x.pdf", "A", "file").unwrap(); // duplicate ignored
+        db.scan_add_item(j, "A/y.png", "A", "file").unwrap();
+        db.scan_add_item(j, "A/z.txt", "A", "file").unwrap();
+        db.scan_item_done(j, "A/x.pdf", "sha1", "done", "", 11)
+            .unwrap();
+        db.scan_item_done(j, "A/y.png", "", "needs_review", "sense text", 12)
+            .unwrap();
+        let p = db.scan_progress().unwrap().unwrap();
+        assert_eq!(p["job"], j);
+        assert_eq!(p["state"], "running");
+        assert_eq!(p["counts"]["done"], 1);
+        assert_eq!(p["counts"]["needs_review"], 1);
+        assert_eq!(p["counts"]["pending"], 1);
+        assert_eq!(p["items"].as_array().unwrap().len(), 1);
+        assert_eq!(p["items"][0]["src"], "A/y.png");
+        assert_eq!(p["items"][0]["error"], "sense text");
+        db.scan_finish(j, "done", 20).unwrap();
+        let p = db.scan_progress().unwrap().unwrap();
+        assert_eq!(
+            (p["state"].as_str(), p["finished"].as_i64()),
+            (Some("done"), Some(20))
+        );
+        let j2 = db.scan_new_job(30).unwrap();
+        assert!(j2 > j);
+        assert_eq!(db.scan_progress().unwrap().unwrap()["job"], j2);
     }
 }
