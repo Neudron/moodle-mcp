@@ -420,3 +420,4 @@ small{font-size:16px}
 .v-prop{background:var(--raised);border:1px solid var(--line);border-radius:var(--r-lg);padding:var(--s2);display:flex;flex-direction:column;gap:var(--s1)}
 .v-prop h3{margin:0;font-size:18px;color:var(--text)}.v-prop p{margin:0}.v-prop blockquote{margin:0;border-left:3px solid var(--accent);padding-left:var(--s2);color:var(--dim)}
 @media (max-width:899px){#scan-slot{display:none}}
+.oplog{list-style:none;margin:0;padding:0}.oplog li{padding:var(--s1) 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}

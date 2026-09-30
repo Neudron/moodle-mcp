@@ -563,9 +563,9 @@ addEventListener('hashchange', () => route());
 }
 // Keyboard nav (single-key shortcuts, WCAG 2.1.4: can be turned off in the ? dialog).
 // Never bound to an action button (Puja/Envia/Desa/Sincronitza).
-const GO = { t: 'tauler', c: 'calendari', f: 'fitxers', n: 'notes', o: 'forums' };
+const GO = { t: 'tauler', c: 'calendari', f: 'fitxers', n: 'notes', o: 'forums', z: 'organitza' };
 const keysOn = () => { try { return localStorage.getItem('keys') !== 'off'; } catch (e) { return true; } };
-const KEYS = [['j / k', 'fila següent / anterior'], ['g t', 'Tauler'], ['g c', 'Calendari'], ['g f', 'Fitxers'], ['g n', 'Notes'], ['g o', 'Fòrums'], ['/', 'filtra el tauler'], ['Esc', 'esborra el filtre']];
+const KEYS = [['j / k', 'fila següent / anterior'], ['g t', 'Tauler'], ['g c', 'Calendari'], ['g f', 'Fitxers'], ['g n', 'Notes'], ['g o', 'Fòrums'], ['g z', 'Organitza'], ['/', 'filtra el tauler'], ['Esc', 'esborra el filtre']];
 function showKeys() {
   const on = h('input', { type: 'checkbox', checked: keysOn(), onchange: (e) => { try { localStorage.setItem('keys', e.target.checked ? 'on' : 'off'); } catch (x) { /* ignore */ } } });
   confirmDialog('Dreceres de teclat', h('div', {},
@@ -733,6 +733,36 @@ views.notes = async () => {
               h('td', { class: 'num pc' }, p != null ? h('span', { class: 'bar acc', 'aria-hidden': 'true' }, h('i', { style: { width: `${p}%` } })) : null, dash(i.percentageformatted)));
           })))));
   }), blank.length ? h('p', { class: 'dim' }, `Sense notes: ${blank.map(nm).join(', ')}`) : null);
+};
+
+// Organitza: last organize log + organize/undo/delivered/Apple actions. Text only via h().
+views.organitza = async () => {
+  const log = await api('/api/organize');
+  const KINDS = { move: 'Mou', replace: 'Substitueix', module: 'Mòdul' };
+  const act = (label, run, confirm) => h('button', { type: 'button', class: confirm ? '' : 'primary', onclick: async (e) => {
+    const b = e.currentTarget;
+    if (b.getAttribute('aria-busy') === 'true') return;
+    if (confirm && !(await confirmDialog(confirm[0], h('p', {}, confirm[1]), label))) { b.focus(); return; }
+    b.setAttribute('aria-busy', 'true'); b.setAttribute('aria-disabled', 'true');
+    try { const r = await api(run[0], { method: 'POST' }); toast(run[1](r), !!run[2]?.(r)); await route({ soft: true }); }
+    catch (err) { toast(err.message, true); }
+    b.removeAttribute('aria-busy'); b.removeAttribute('aria-disabled');
+  } }, label);
+  const errs = (r) => (r.errors?.length ? r.errors.join('; ') : null);
+  const withErr = (msg) => (r) => msg(r) + (errs(r) ? ` · ${errs(r)}` : '');
+  const ops = log.ops || [];
+  return h('section', { class: 'v-organitza' }, h('h1', {}, 'Organitza'),
+    h('div', { class: 'actions' },
+      act('Ordena ~/smx', ['/api/organize', withErr((r) => `Ordenat: ${r.ops} canvis${r.skipped.length ? `, ${r.skipped.length} omesos` : ''}`), errs],
+        ['Ordenar ~/smx?', 'Mourà fitxers dins de ~/smx. Es pot desfer amb «Desfés».']),
+      act('Desfés', ['/api/organize/undo', (r) => `Desfet: ${r.restored} restaurats${r.skipped.length ? `, ${r.skipped.length} no s'han pogut desfer` : ''}`],
+        ['Desfer l\'última ordenació?', 'Es restauraran els fitxers a la ubicació anterior.']),
+      act('Sincronitza lliurades', ['/api/delivered-sync', withErr((r) => `Lliurades: ${r.tasks} tasques, ${r.downloaded} baixats`), errs]),
+      act('Sincronitza amb Apple', ['/api/apple-sync', withErr((r) => `Apple: ${r.created} noves, ${r.updated} actualitzades, ${r.done} fetes, ${r.deleted} esborrades`), errs])),
+    h('h2', {}, 'Última ordenació'),
+    !ops.length ? empty('Encara no s\'ha ordenat res') : h('div', {},
+      h('p', { class: 'dim' }, `Execució ${log.run} · ${when(log.at)} · ${ops.length} operacions`),
+      h('ul', { class: 'oplog' }, ops.map((o) => h('li', {}, h('b', {}, KINDS[o.kind] || o.kind), ' ', h('span', { class: 'mono' }, o.from), ' → ', h('span', { class: 'mono' }, o.to))))));
 };
 
 views.forums = async () => {
