@@ -6,6 +6,7 @@ pub mod files;
 pub mod guard;
 pub mod office;
 pub mod readme;
+pub mod scan;
 pub mod tasks;
 pub mod upload;
 
