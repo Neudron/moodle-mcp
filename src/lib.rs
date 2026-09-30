@@ -1,5 +1,6 @@
 pub mod config;
 pub mod errors;
+pub mod firefox;
 pub mod html2md;
 pub mod moodle;
 pub mod observe;

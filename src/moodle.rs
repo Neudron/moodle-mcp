@@ -21,7 +21,7 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::errors::{redact_token, CoreError};
@@ -38,7 +38,7 @@ const SLOW_FILE_WARN: Duration = Duration::from_secs(30);
 
 pub struct Moodle {
     base: String,
-    token: String,
+    token: Arc<RwLock<String>>,
     http: reqwest::Client,
     limiter: Arc<retry::RateLimiter>,
     breaker: Arc<retry::CircuitBreaker>,
@@ -61,7 +61,7 @@ impl Clone for Moodle {
     fn clone(&self) -> Self {
         Self {
             base: self.base.clone(),
-            token: self.token.clone(),
+            token: Arc::clone(&self.token),
             http: self.http.clone(),
             limiter: Arc::clone(&self.limiter),
             breaker: Arc::clone(&self.breaker),
@@ -170,7 +170,7 @@ impl Moodle {
         let http = tuned.unwrap_or_else(|_| reqwest::Client::new());
         Self {
             base: base.trim_end_matches('/').to_string(),
-            token: token.to_string(),
+            token: Arc::new(RwLock::new(token.to_string())),
             http,
             limiter: Arc::new(retry::RateLimiter::default_governor()),
             breaker: Arc::new(retry::CircuitBreaker::new()),
@@ -200,6 +200,17 @@ impl Moodle {
         Ok(Self::new(&base, &token))
     }
 
+    fn token(&self) -> String {
+        self.token.read().map(|t| t.clone()).unwrap_or_default()
+    }
+
+    /// Swap the in-memory token (shared by every clone of this client).
+    pub fn set_token(&self, token: &str) {
+        if let Ok(mut t) = self.token.write() {
+            *t = token.to_string();
+        }
+    }
+
     /// Base URL without trailing slash (for building `mod/*/view.php` links).
     pub fn base(&self) -> &str {
         &self.base
@@ -221,7 +232,7 @@ impl Moodle {
         let url = format!("{}/webservice/upload.php", self.base);
         let part = reqwest::multipart::Part::bytes(bytes).file_name(filename.to_string());
         let form = reqwest::multipart::Form::new()
-            .text("token", self.token.clone())
+            .text("token", self.token())
             .text("filearea", "draft")
             .text("itemid", itemid.to_string())
             .part("file_1", part);
@@ -274,7 +285,7 @@ impl Moodle {
     ) -> Result<serde_json::Value> {
         let url = format!("{}/webservice/rest/server.php", self.base);
         let mut form: Vec<(&str, String)> = vec![
-            ("wstoken", self.token.clone()),
+            ("wstoken", self.token()),
             ("wsfunction", function.to_string()),
             ("moodlewsrestformat", "json".into()),
         ];
@@ -336,7 +347,7 @@ impl Moodle {
             let _guard = span.enter();
             let started = Instant::now();
             let mut form: Vec<(&str, String)> = Vec::with_capacity(params.len() + 3);
-            form.push(("wstoken", self.token.clone()));
+            form.push(("wstoken", self.token()));
             form.push(("wsfunction", function.to_string()));
             form.push(("moodlewsrestformat", "json".into()));
             form.extend(params.iter().map(|p| (p.0, p.1.clone())));
@@ -492,7 +503,7 @@ impl Moodle {
         let authority = authority_of(url).unwrap_or_default();
         let mut current = url.to_string();
         for _ in 0..=MAX_REDIRECT_HOPS {
-            let target = authed_url(&current, &self.token, &authority);
+            let target = authed_url(&current, &self.token(), &authority);
             let resp = self
                 .http
                 .get(&target)
@@ -603,7 +614,7 @@ impl Moodle {
     ) -> Attempt {
         let mut current = start.to_string();
         for _ in 0..=MAX_REDIRECT_HOPS {
-            let target = authed_url(&current, &self.token, authority);
+            let target = authed_url(&current, &self.token(), authority);
             let mut req = self.http.get(&target).timeout(FILE_TIMEOUT);
             if resume_from > 0 {
                 req = req.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
@@ -984,6 +995,141 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let doy = (153 * mp + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146_097 + doe - 719_468
+}
+
+/// Outcome of [`Moodle::refresh_token`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Renew {
+    Ok,
+    /// Moodle wants an interactive confirmation in the browser.
+    NeedsBrowser,
+    /// No usable Firefox Moodle session (not logged in).
+    NoSession,
+    Failed(String),
+}
+
+const MIN_TOKEN: usize = 16;
+
+/// Extract the WS token from a `moodlemobile://token=<b64>` link (bare or
+/// inside HTML). `b64` decodes to `siteid:::token[:::private]`.
+pub fn parse_launch(text: &str) -> Result<String, CoreError> {
+    const BAD: &str = "unexpected launch reply";
+    let rest = text
+        .split_once("moodlemobile://token=")
+        .ok_or_else(|| CoreError::Invalid(BAD.into()))?
+        .1;
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || "+/=".contains(c)))
+        .unwrap_or(rest.len());
+    let raw =
+        crate::firefox::b64_decode(&rest[..end]).ok_or_else(|| CoreError::Invalid(BAD.into()))?;
+    let raw = String::from_utf8(raw).map_err(|_| CoreError::Invalid(BAD.into()))?;
+    let token = raw.split(":::").nth(1).unwrap_or("");
+    if token.len() < MIN_TOKEN || token.chars().any(char::is_whitespace) {
+        return Err(CoreError::Invalid(BAD.into()));
+    }
+    Ok(token.to_string())
+}
+
+fn write_token_atomic(path: &Path, token: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let tmp = path.with_extension("tmp");
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    f.write_all(token.as_bytes())?;
+    f.sync_all()?;
+    std::fs::rename(&tmp, path)
+}
+
+impl Moodle {
+    /// Renew the WS token from the live Firefox Moodle session (paths from
+    /// `MOODLE_FIREFOX_ROOT` / `MOODLE_TOKEN_FILE`, else the usual ones).
+    pub async fn refresh_token(&self) -> Renew {
+        let root = std::env::var("MOODLE_FIREFOX_ROOT").unwrap_or_else(|_| {
+            format!(
+                "{}/.mozilla/firefox",
+                std::env::var("HOME").unwrap_or_default()
+            )
+        });
+        let file = std::env::var("MOODLE_TOKEN_FILE")
+            .unwrap_or_else(|_| format!("{}/.moodle/token", Self::moodle_root()));
+        self.refresh_token_at(Path::new(&root), Path::new(&file))
+            .await
+    }
+
+    pub async fn refresh_token_at(&self, firefox_root: &Path, token_file: &Path) -> Renew {
+        let (name, value) = match crate::firefox::session_cookie(firefox_root) {
+            Ok(c) => c,
+            Err(crate::firefox::FfError::NoSession) => return Renew::NoSession,
+            Err(e) => return Renew::Failed(e.to_string()),
+        };
+        let passport = {
+            use sha2::{Digest, Sha256};
+            let t = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let h = Sha256::digest(format!("{t}{}", std::process::id()));
+            h.iter()
+                .take(8)
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        };
+        let url = format!(
+            "{}/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport={passport}",
+            self.base
+        );
+        let resp = match self
+            .http
+            .get(&url)
+            .header(reqwest::header::COOKIE, format!("{name}={value}"))
+            .timeout(API_TIMEOUT)
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Renew::Failed(redact_token(&e.to_string())),
+        };
+        let status = resp.status();
+        let loc = resp
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let found = if status.is_redirection() {
+            if !loc.starts_with("moodlemobile://") {
+                return Renew::NoSession; // bounced to the login page
+            }
+            parse_launch(&loc)
+        } else if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Renew::NoSession;
+        } else if status.is_success() {
+            match resp.text().await {
+                Ok(body) => parse_launch(&body),
+                Err(e) => return Renew::Failed(redact_token(&e.to_string())),
+            }
+        } else {
+            return Renew::Failed(format!("launch http {status}"));
+        };
+        let Ok(new) = found else {
+            return Renew::NeedsBrowser;
+        };
+        // Validate with a fresh client (own breaker) before touching anything.
+        if Moodle::new(&self.base, &new).site_info().await.is_err() {
+            return Renew::Failed("renewed token rejected by site_info".into());
+        }
+        if let Err(e) = write_token_atomic(token_file, &new) {
+            return Renew::Failed(format!("writing token file: {}", e.kind()));
+        }
+        self.set_token(&new);
+        Renew::Ok
+    }
 }
 
 #[cfg(test)]
