@@ -107,8 +107,18 @@ pub fn mime(path: &Path) -> &'static str {
         "ogg" => "audio/ogg",
         "zip" => "application/zip",
         "html" | "htm" => "text/html; charset=utf-8",
-        "md" | "txt" | "csv" | "json" | "xml" | "css" | "js" | "rs" | "py" | "sql" | "url"
-        | "sh" | "java" | "toml" | "yaml" | "yml" => "text/plain; charset=utf-8",
+        "md" | "txt" | "csv" | "tsv" | "json" | "xml" | "css" | "js" | "ts" | "rs" | "py"
+        | "sql" | "url" | "sh" | "java" | "toml" | "yaml" | "yml" | "log" | "ini" | "c" | "h"
+        | "cpp" | "php" | "go" | "srt" | "ipynb" => "text/plain; charset=utf-8",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        "m4a" => "audio/mp4",
+        "doc" => "application/msword",
+        "rtf" => "application/rtf",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "odp" => "application/vnd.oasis.opendocument.presentation",
+        "xls" => "application/vnd.ms-excel",
+        "ods" => "application/vnd.oasis.opendocument.spreadsheet",
         "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -120,6 +130,24 @@ pub fn mime(path: &Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mime_covers_preview_types() {
+        let m = |n: &str| mime(Path::new(n));
+        assert_eq!(m("a.doc"), "application/msword");
+        assert_eq!(m("a.rtf"), "application/rtf");
+        assert_eq!(m("a.ppt"), "application/vnd.ms-powerpoint");
+        assert_eq!(
+            m("a.odp"),
+            "application/vnd.oasis.opendocument.presentation"
+        );
+        assert_eq!(m("a.xls"), "application/vnd.ms-excel");
+        assert_eq!(m("a.ods"), "application/vnd.oasis.opendocument.spreadsheet");
+        assert_eq!(m("a.bmp"), "image/bmp");
+        assert_eq!(m("a.log"), "text/plain; charset=utf-8");
+        assert_eq!(m("a.cpp"), "text/plain; charset=utf-8");
+        assert_eq!(m("a.bin"), "application/octet-stream");
+    }
 
     #[test]
     fn mime_media() {

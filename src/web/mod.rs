@@ -5,6 +5,7 @@ pub mod env;
 pub mod files;
 pub mod guard;
 pub mod office;
+pub mod preview;
 pub mod readme;
 pub mod tasks;
 pub mod upload;
