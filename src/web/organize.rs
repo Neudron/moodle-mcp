@@ -25,6 +25,7 @@ use std::{
 /// One writer at a time (a second caller waits): both jobs move files under `submit/`.
 static BUSY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const LOG: &str = ".moodle/moves.jsonl";
+const LLIURAT: &str = "submit/_lliurat/";
 
 fn ae(e: ApiErr) -> anyhow::Error {
     anyhow::anyhow!(e.1)
@@ -45,11 +46,37 @@ fn base(rel: &str) -> &str {
     rel.rsplit('/').next().unwrap_or(rel)
 }
 
-fn norm(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_alphanumeric())
-        .flat_map(char::to_lowercase)
+/// `*_Amin.*` -> `*_amin.*`.
+fn amin(name: &str) -> String {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) => (s, format!(".{e}")),
+        None => (name, String::new()),
+    };
+    match stem.len().checked_sub(5).and_then(|i| stem.get(i..)) {
+        Some(t) if t.eq_ignore_ascii_case("_amin") => {
+            format!("{}_amin{ext}", &stem[..stem.len() - 5])
+        }
+        _ => name.to_string(),
+    }
+}
+
+fn toks(s: &str) -> HashSet<String> {
+    s.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.chars().count() >= 4)
+        .map(str::to_lowercase)
         .collect()
+}
+
+/// (file is one of the task's Moodle submission names, number of shared title words).
+fn affinity(t: &Task, name: &str) -> (bool, usize) {
+    let n = amin(name).to_lowercase();
+    let exact = t
+        .submission_files
+        .iter()
+        .any(|a| amin(&a.filename).to_lowercase() == n);
+    let stem = name.rsplit_once('.').map_or(name, |p| p.0);
+    let stem = stem.strip_suffix("_amin").unwrap_or(stem);
+    (exact, toks(&t.title).intersection(&toks(stem)).count())
 }
 
 /// Removes each dir and its parents while they are empty (never the root itself).
@@ -86,7 +113,7 @@ fn safe_name(n: &str) -> String {
     if n.is_empty() || n.starts_with('.') {
         format!("_{}", n.trim_start_matches('.'))
     } else {
-        n.to_string()
+        amin(n)
     }
 }
 
@@ -123,6 +150,19 @@ pub async fn delivered_sync(app: &Arc<App>) -> Result<Delivered> {
     Ok(out)
 }
 
+/// Any file under `submit/` with these exact bytes (sha compared only when the size matches).
+fn same_in_submit(root: &str, bytes: &[u8]) -> bool {
+    let root = Path::new(root);
+    let mut v = Vec::new();
+    files::walk(root, "submit", &mut v);
+    let sha = sha_bytes(bytes);
+    v.iter().any(|f| {
+        let p = root.join(f);
+        std::fs::metadata(&p).is_ok_and(|m| m.len() == bytes.len() as u64)
+            && sha_file(&p).is_ok_and(|s| s == sha)
+    })
+}
+
 async fn deliver(app: &Arc<App>, t: &Task, out: &mut Delivered) -> Result<bool> {
     let mut changed = false;
     if app.db.local(&t.id)?.status != "lliurat" {
@@ -150,6 +190,9 @@ async fn deliver(app: &Arc<App>, t: &Task, out: &mut Delivered) -> Result<bool> 
             continue;
         }
         let bytes = app.moodle.download(&a.fileurl).await?;
+        if have.is_none() && same_in_submit(&app.root, &bytes) {
+            continue; // already delivered under another name
+        }
         tokio::fs::create_dir_all(&dir).await?;
         match have {
             None => {
@@ -356,13 +399,19 @@ impl Cx {
         if from == to || self.protected(from) || self.protected(to) || !self.abs(from).is_file() {
             return Ok(()); // stale link (file deleted or moved by hand)
         }
+        let (lf, lt) = (from.starts_with(LLIURAT), to.starts_with(LLIURAT));
         if self.abs(to).exists() {
             if sha_file(&self.abs(from))? == sha_file(&self.abs(to))? {
-                api::repoint(&self.app, from, to).map_err(ae)?;
-                return self.trash(from);
+                // same bytes: the delivered copy is the one that stays
+                let (keep, drop) = if lf && !lt { (from, to) } else { (to, from) };
+                api::repoint(&self.app, drop, keep).map_err(ae)?;
+                return self.trash(drop);
             }
             self.skipped.push(format!("{from}: {to} ja existeix"));
             return Ok(());
+        }
+        if lf && !lt {
+            return Ok(()); // a delivered file never leaves _lliurat
         }
         self.raw_mv(from, to)?;
         api::repoint(&self.app, from, to).map_err(ae)
@@ -398,27 +447,35 @@ impl Cx {
         }
     }
 
-    /// The task a loose file belongs to: linked under the same file name, else a unique title match.
-    fn find_task(&self, name: &str) -> Result<Option<(Task, Local)>> {
-        for l in self.app.db.all_local()? {
-            if l.files.iter().any(|f| base(f) == name) {
-                if let Some(t) = self.app.db.task(&l.task_id)? {
-                    return Ok(Some((t, l)));
-                }
+    /// The task a loose file belongs to: best by (same name/sha among its Moodle or linked files,
+    /// shared title words). No evidence or a tie: none.
+    fn find_task(&self, rel: &str) -> Result<Option<(Task, Local)>> {
+        let name = base(rel);
+        let sha = sha_file(&self.abs(rel)).ok();
+        let mut best: Vec<((bool, usize), Task, Local)> = Vec::new();
+        for t in self
+            .app
+            .db
+            .all_tasks()?
+            .into_iter()
+            .filter(|t| t.kind != "post")
+        {
+            let l = self.app.db.local(&t.id)?;
+            let (exact, ov) = affinity(&t, name);
+            let linked = l.files.iter().any(|f| {
+                base(f).eq_ignore_ascii_case(name)
+                    || sha.is_some() && sha_file(&self.abs(f)).ok() == sha
+            });
+            let key = (exact || linked, ov);
+            if key != (false, 0) {
+                best.push((key, t, l));
             }
         }
-        let stem = name.rsplit_once('.').map_or(name, |p| p.0);
-        let stem = norm(stem.strip_suffix("_amin").unwrap_or(stem));
-        let mut hits = self.app.db.all_tasks()?.into_iter().filter(|t| {
-            let n = norm(&t.title);
-            t.kind != "post" && n.len() >= 4 && stem.contains(&n)
-        });
-        Ok(match (hits.next(), hits.next()) {
-            (Some(t), None) => {
-                let l = self.app.db.local(&t.id)?;
-                Some((t, l))
-            }
-            _ => None,
+        best.sort_by_key(|a| std::cmp::Reverse(a.0));
+        Ok(match best.as_slice() {
+            [] => None,
+            [x, y, ..] if x.0 == y.0 => None,
+            [x, ..] => Some((x.1.clone(), x.2.clone())),
         })
     }
 
@@ -426,15 +483,8 @@ impl Cx {
     fn case_fix(&mut self) -> Result<()> {
         for f in self.all_files() {
             let (dir, name) = f.rsplit_once('/').unwrap_or(("", f.as_str()));
-            let (stem, ext) = match name.rsplit_once('.') {
-                Some((s, e)) => (s, format!(".{e}")),
-                None => (name, String::new()),
-            };
-            let wrong = stem
-                .get(stem.len().saturating_sub(5)..)
-                .is_some_and(|t| t.eq_ignore_ascii_case("_amin") && t != "_amin");
-            if wrong {
-                let fixed = format!("{}_amin{ext}", &stem[..stem.len() - 5]);
+            let fixed = amin(name);
+            if fixed != name {
                 let to = if dir.is_empty() {
                     fixed
                 } else {
@@ -484,14 +534,12 @@ impl Cx {
                 if !(in_lliuraments || stem.ends_with("_amin")) || self.protected(&f) {
                     continue;
                 }
-                if in_lliuraments {
-                    if let Some(keep) = by_sha.get(&sha_file(&self.abs(&f))?) {
-                        api::repoint(&self.app, &f, keep).map_err(ae)?;
-                        self.trash(&f)?;
-                        continue;
-                    }
+                if let Some(keep) = by_sha.get(&sha_file(&self.abs(&f))?) {
+                    api::repoint(&self.app, &f, keep).map_err(ae)?;
+                    self.trash(&f)?;
+                    continue;
                 }
-                let to = match self.find_task(&name)? {
+                let to = match self.find_task(&f)? {
                     Some((t, l)) => format!("{}/{name}", self.task_dir(&t, &l, in_lliuraments)),
                     None => format!("submit/_solts/{name}"),
                 };
@@ -538,7 +586,9 @@ impl Cx {
                     }
                 }
             }
-            if l.module != label {
+            // a label is only ever given to a task that has none when a linked file belongs to it
+            let owns = |l: &Local| l.files.iter().any(|f| affinity(&t, base(f)) != (false, 0));
+            if l.module != label && (!l.module.is_empty() || owns(&l)) {
                 let mut l2 = self.app.db.local(&l.task_id)?;
                 let from = std::mem::replace(&mut l2.module, label.clone());
                 self.app.db.set_local(&l2)?;

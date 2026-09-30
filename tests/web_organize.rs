@@ -96,7 +96,7 @@ async fn delivered_sync_downloads_and_keeps_differing_copy() {
     t.submission_files = vec![
         attachment(&m, "s1-m0-0.pdf", "0/s1-m0-0.pdf"),
         attachment(&m, "s1-m0-1.pptx", "1/s1-m0-1.pptx"),
-        attachment(&m, "../evil.txt", "0/s1-m0-0.pdf"),
+        attachment(&m, "../evil.txt", "2/s1-m1-0.xlsx"),
     ];
     app.db.upsert_tasks(&[t]).unwrap();
     app.db
@@ -532,4 +532,99 @@ async fn stale_link_does_not_abort_modules_rule() {
     );
     assert!(rep.ops >= 1, "real file must still be placed");
     assert!(!r.join("submit/Old/real.docx").exists());
+}
+
+fn listing(r: &Path, dir: &str) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(r.join(dir))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    v.sort();
+    v
+}
+
+#[tokio::test]
+async fn dedupe_keeps_lliurat_copy_and_task_matches_by_name() {
+    let r = root("lliurat-keep");
+    let app = app_at(&r, "http://127.0.0.1:9");
+    put(&r, "S/index.md", "---\ntitle: S\n---\n");
+    let del = "submit/_lliurat/Sost/Entrega Activitat 1 - Unilever/Tasca-RA1-Unilever_amin.docx";
+    put(&r, del, "same");
+    put(&r, "S/Tasca-RA1-Unilever_amin.docx", "same");
+    let mut real = task("assign:63028", "S", "Entrega Activitat 1 - Unilever");
+    real.moodle_status = "submitted".into();
+    real.submission_files = vec![Attachment {
+        filename: "Tasca-RA1-Unilever_amin.docx".into(),
+        ..Default::default()
+    }];
+    app.db
+        .upsert_tasks(&[real, task("assign:59388", "S", "Activitats 1")])
+        .unwrap();
+    // the wrong task is listed first and also links the file
+    app.db
+        .set_local(&local(
+            "assign:59388",
+            "",
+            "",
+            &[del, "S/Tasca-RA1-Unilever_amin.docx"],
+        ))
+        .unwrap();
+    app.db
+        .set_local(&local("assign:63028", "Sost", "lliurat", &[del]))
+        .unwrap();
+    for _ in 0..2 {
+        organize::run(&app).await.unwrap();
+    }
+    assert_eq!(read(&r, del), "same", "lliurat copy must survive");
+    assert!(!r.join("S/Tasca-RA1-Unilever_amin.docx").exists());
+    assert!(!r.join("submit/Sost/Activitats 1").exists());
+    assert_eq!(app.db.local("assign:59388").unwrap().module, "");
+    // same bytes at the non-lliurat target of a not-lliurat task: the other copy goes
+    let wrong = "submit/Sost/Activitats 1/Tasca-RA1-Unilever_amin.docx";
+    put(&r, wrong, "same");
+    app.db
+        .set_local(&local("assign:59388", "Sost", "", &[del, wrong]))
+        .unwrap();
+    organize::run(&app).await.unwrap();
+    assert_eq!(read(&r, del), "same");
+    assert!(!r.join(wrong).exists());
+}
+
+#[tokio::test]
+async fn delivered_sync_skips_same_sha_under_other_name() {
+    let m = MockMoodle::start(MockConfig::default()).await;
+    let r = root("delivered-dup");
+    let app = app_at(&r, m.base());
+    let pdf = m
+        .pluginfile("/101/mod_resource/content/0/s1-m0-0.pdf")
+        .unwrap()
+        .to_vec();
+    let pptx = m
+        .pluginfile("/101/mod_resource/content/1/s1-m0-1.pptx")
+        .unwrap()
+        .to_vec();
+    let d = "submit/_lliurat/Mod A/Entrega A";
+    std::fs::create_dir_all(r.join(d)).unwrap();
+    std::fs::write(r.join(format!("{d}/s1-m0-0_amin.pdf")), &pdf).unwrap();
+    std::fs::write(r.join(format!("{d}/renamed.pptx")), &pptx).unwrap();
+    let mut t = task("assign:7", "C1", "Entrega A");
+    t.moodle_status = "submitted".into();
+    t.submission_files = vec![
+        attachment(&m, "s1-m0-0_Amin.pdf", "0/s1-m0-0.pdf"),
+        attachment(&m, "s1-m0-1.pptx", "1/s1-m0-1.pptx"),
+    ];
+    app.db.upsert_tasks(&[t]).unwrap();
+    app.db
+        .set_local(&local("assign:7", "Mod A", "lliurat", &[]))
+        .unwrap();
+    for _ in 0..2 {
+        let rep = organize_delivered(&app).await;
+        assert_eq!(
+            (rep.downloaded, rep.moodle_copies),
+            (0, 0),
+            "{:?}",
+            rep.errors
+        );
+    }
+    assert_eq!(listing(&r, d), ["renamed.pptx", "s1-m0-0_amin.pdf"]);
 }
