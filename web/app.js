@@ -133,7 +133,7 @@ function card(tv, hideCourse) {
   return h('a', { class: 'row' + (done ? ' done' : left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
     h('span', { class: 'dot', style: { '--h': hue(t.course) } }),
     h('span', { class: 't', title: t.title }, t.title),
-    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', style: { '--h': hue(t.course) } }, cname(t.course)), h('span', {}, KIND[t.kind] || t.kind), badges),
+    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hue(t.course) } }, cname(t.course)), h('span', {}, KIND[t.kind] || t.kind), badges),
     dueChip(tv));
 }
 
@@ -266,7 +266,7 @@ views.tasca = async (id) => {
     ic('file'), h('span', { class: 't mono' }, f)));
 
   const main = h('div', { class: 'v-main' },
-    h('h2', { class: 'eyebrow' }, 'Enunciat'), body,
+    body.tagName === 'P' ? body : [h('h2', { class: 'eyebrow' }, 'Enunciat'), body],
     attRows.length ? [h('h2', { class: 'eyebrow' }, 'Adjunts del professor'), h('div', { class: 'list' }, attRows)] : null,
     fb ? [h('h2', { class: 'eyebrow' }, 'Retroacció'), fb] : null,
     h('h2', { class: 'eyebrow' }, 'Els meus fitxers'),
@@ -277,7 +277,7 @@ views.tasca = async (id) => {
     h('a', { class: 'btn ghost', href: '#/tauler' }, ic('arrow-l'), 'Tauler'),
     h('h1', {}, t.title),
     h('div', { class: 'meta' },
-      h('span', { class: 'chip' }, h('span', { class: 'dot', style: { '--h': hue(t.course) } }), cname(t.course)),
+      h('a', { class: 'chip', href: `#/curs/${enc(t.course)}` }, h('span', { class: 'dot', style: { '--h': hue(t.course) } }), cname(t.course)),
       dueChip(tv, true), badges),
     h('div', { class: 'split' }, h('div', { class: 'grid' }, main, rail)));
 };

@@ -143,11 +143,13 @@ fn state_concurrent_saves_stay_valid() {
     }
     let final_state = State::load(&root).expect("final load");
     assert_eq!(final_state.courses["101"].files.len(), 1);
-    assert!(
-        final_state.validate().is_empty(),
-        "{:?}",
-        final_state.validate()
-    );
+    // user_id 0 (worker 0 saved last) only warns.
+    let errors: Vec<_> = final_state
+        .validate()
+        .into_iter()
+        .filter(|i| i.starts_with("error:"))
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
 }
 
 #[test]

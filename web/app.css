@@ -263,6 +263,8 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
   .foot #lastsync{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .side .sec{display:none}
   .courses{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);order:3;flex:0 0 100%;flex-direction:row;overflow-x:auto;scroll-snap-type:x proximity;scroll-padding-inline:16px 32px;gap:var(--s1);padding:var(--s1) var(--s2) 0;margin:0 calc(-1*var(--s2))}
+  body:not(:has(main[data-view=curs])) .courses{display:none}
+  a.chip{min-height:44px;color:inherit}
   .courses a .nm{-webkit-line-clamp:1}
   .courses a{scroll-snap-align:start;flex:none;max-width:240px;border:1px solid var(--line);background:var(--raised)}
   html{scroll-padding-bottom:96px}
@@ -287,10 +289,6 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 @media (max-width:599px){
   .row{grid-template-columns:16px minmax(0,1fr);grid-template-areas:"dot t" "dot m" "dot due"}
   .row>.due{justify-self:start;margin:var(--s1) 0 0 -8px}
-}
-@media (min-width:900px){
-  .g-later .row,.g-old .row,.g-done .row{grid-template-columns:16px minmax(0,1fr) auto auto;grid-template-areas:"dot t m due";min-height:48px;padding-block:var(--s1)}
-  .g-later .row>.m,.g-old .row>.m,.g-done .row>.m{flex-wrap:nowrap}
 }
 @media (prefers-reduced-motion:reduce){
   *,::before,::after{animation:none!important;transition-duration:.01ms!important}
@@ -389,6 +387,6 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
   .v-notes table{table-layout:fixed}.v-notes th.num{width:96px}.v-notes th.num:last-child{width:176px}
   .v-notes td.pc .bar{display:inline-block;vertical-align:middle;width:64px;margin-right:var(--s2)}
 }
-@media (min-width:900px){.g-later .row>.m .cn,.g-old .row>.m .cn,.g-done .row>.m .cn{max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+.row .cn{display:inline-block;vertical-align:bottom;max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 small{font-size:16px}
