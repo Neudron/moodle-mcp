@@ -1,6 +1,6 @@
 //! Enunciat screenshots through a hand-rolled MCP stdio client (no LLM).
 //! Spawns `SHOT_CMD` (default `npx -y open-browser-control`), which drives
-//! the user's Firefox; one browser means one global lock.
+//! the user's Firefox; one browser means one shared session behind a lock.
 use crate::web::{
     api::{bad, ApiErr, R},
     App,
@@ -21,17 +21,26 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, MutexGuard};
 
 pub const SELECTOR: &str = "#intro, .activity-description, [role=main]";
 pub const DEFAULT_CMD: &str = "npx -y open-browser-control";
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// The extension connection flaps: "not connected" replies are retried.
+const ATTEMPTS: u32 = 5;
+const RETRY_WAIT: Duration = Duration::from_secs(2);
 
-static LOCK: Mutex<()> = Mutex::const_new(());
+/// The one shared MCP session (keyed by command). The server has no close-tab tool and opens a
+/// tab per session on first use, so keeping one session alive means one tab in total.
+static SESSION: Mutex<Option<(String, Mcp)>> = Mutex::const_new(None);
 
-/// The one-Firefox lock; the WP3 browser agent takes it too.
-pub fn lock() -> &'static Mutex<()> {
-    &LOCK
+/// Locked session for `cmd`, spawned on first use. Callers clear it (`*g = None`) on error.
+async fn acquire(cmd: &str) -> Result<MutexGuard<'static, Option<(String, Mcp)>>> {
+    let mut g = SESSION.lock().await;
+    if g.as_ref().is_none_or(|(c, _)| c != cmd) {
+        *g = Some((cmd.into(), session(cmd).await?));
+    }
+    Ok(g)
 }
 
 /// Same scheme family, host and port as the Moodle base URL (SSRF guard).
@@ -111,15 +120,39 @@ impl Mcp {
         .context("mcp timeout")?
     }
 
-    async fn tool(&mut self, name: &str, args: Value) -> Result<Value> {
-        let r = self
-            .request("tools/call", json!({"name": name, "arguments": args}))
-            .await?;
-        if r["isError"] == true {
-            bail!("tool {name} failed");
-        }
-        Ok(r)
+    async fn call(&mut self, name: &str, args: &Value) -> Result<Value> {
+        self.request("tools/call", json!({"name": name, "arguments": args}))
+            .await
     }
+
+    /// `request` for a tool call: `isError` replies become errors carrying the tool's own text.
+    async fn tool(&mut self, name: &str, args: Value) -> Result<Value> {
+        for left in (0..ATTEMPTS).rev() {
+            let r = self.call(name, &args).await?;
+            if r["isError"] != true {
+                return Ok(r);
+            }
+            let why = texts(&r, "\n");
+            if left == 0 || !why.contains("not connected") {
+                bail!("tool {name} failed: {why}");
+            }
+            tokio::time::sleep(RETRY_WAIT).await;
+        }
+        unreachable!()
+    }
+}
+
+/// Every `content[].text` of a tool reply.
+fn texts(r: &Value, sep: &str) -> String {
+    r["content"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|c| c["text"].as_str())
+                .collect::<Vec<_>>()
+                .join(sep)
+        })
+        .unwrap_or_default()
 }
 
 /// `{screenshot_path}` either at the top level or JSON-encoded in `content[].text`.
@@ -145,33 +178,77 @@ async fn session(cmd: &str) -> Result<Mcp> {
     Ok(m)
 }
 
-/// Page text of `url` for the scanner: fixed tool sequence, no LLM, so page content can never
-/// steer the browser. ponytail: joins every `content[].text` of get_dom; tune to the live reply.
+/// HTML of `url` for the scanner: fixed tool sequence, no LLM, so page content can never steer
+/// the browser. `get_dom` needs `simplified:false` (the default keeps only interactive elements)
+/// and replies `{"html":..}`. Google pages block `execute_js`, so the DOM is the only route.
 pub async fn page_dom(cmd: &str, url: &str) -> Result<String> {
-    let _g = LOCK.lock().await;
-    let mut m = session(cmd).await?;
-    m.tool("browser_new_tab", json!({"url": url})).await?;
-    m.tool("browser_wait", json!({"selector": "body"}))
-        .await
-        .ok();
-    let r = m.tool("browser_get_dom", json!({})).await;
-    m.tool("browser_close_tab", json!({})).await.ok();
-    Ok(r?["content"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|c| c["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("\n")
-        })
-        .unwrap_or_default())
+    let mut g = acquire(cmd).await?;
+    let m = &mut g.as_mut().expect("acquired").1;
+    let r = async {
+        m.tool("browser_navigate", json!({"url": url})).await?;
+        m.tool("browser_wait", json!({"selector": "body"}))
+            .await
+            .ok();
+        m.tool("browser_get_dom", json!({"simplified": false}))
+            .await
+    }
+    .await;
+    if r.is_err() {
+        *g = None;
+    }
+    let t = texts(&r?, "\n");
+    Ok(serde_json::from_str::<Value>(&t)
+        .ok()
+        .and_then(|v| v["html"].as_str().map(String::from))
+        .unwrap_or(t))
 }
 
-/// Open `url` in a fresh tab, screenshot the enunciat, save the PNG at `dest`.
+/// Text export of a Google file through the browser's own login: opening an `export` URL makes
+/// Firefox save the file into `dir`; the new .txt/.csv is read and removed. The DOM cannot do this
+/// (Docs editors draw on a canvas, `get_dom` cuts HTML at 50k chars, `execute_js` is blocked).
+/// ponytail: assumes Firefox saves without asking into `dir`; a .txt/.csv the user downloads
+/// meanwhile would be mistaken for ours. Upgrade path: a Firefox profile dedicated to the scanner.
+pub async fn download_text(cmd: &str, url: &str, dir: &Path) -> Result<String> {
+    let ls = || -> Result<Vec<std::ffi::OsString>> {
+        std::fs::read_dir(dir)
+            .with_context(|| format!("no downloads dir {}", dir.display()))?
+            .map(|e| Ok(e?.file_name()))
+            .collect()
+    };
+    let before = ls()?;
+    let mut g = acquire(cmd).await?; // held while polling: one export at a time
+    if let Err(e) = g
+        .as_mut()
+        .expect("acquired")
+        .1
+        .tool("browser_navigate", json!({"url": url}))
+        .await
+    {
+        *g = None;
+        return Err(e);
+    }
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Firefox writes `name.part` and renames when complete, so a match is a whole file.
+        let new = ls()?.into_iter().map(|n| dir.join(n)).find(|p| {
+            !before.contains(&p.file_name().unwrap_or_default().to_owned())
+                && matches!(p.extension().and_then(|e| e.to_str()), Some("txt" | "csv"))
+        });
+        if let Some(p) = new {
+            let t = tokio::fs::read(&p).await?;
+            tokio::fs::remove_file(&p).await.ok();
+            return Ok(String::from_utf8_lossy(&t)
+                .trim_start_matches('\u{feff}')
+                .into());
+        }
+    }
+    bail!("l'exportació no ha arribat a {}", dir.display())
+}
+
+/// Open `url` in the shared tab, screenshot the enunciat, save the PNG at `dest`.
 pub async fn shoot(cmd: &str, url: &str, dest: &Path) -> Result<()> {
-    let _g = LOCK.lock().await;
-    let mut m = session(cmd).await?;
-    m.tool("browser_new_tab", json!({"url": url})).await?;
+    let mut g = acquire(cmd).await?;
+    let m = &mut g.as_mut().expect("acquired").1;
     let res = async {
         m.tool("browser_navigate", json!({"url": url})).await?;
         // ponytail: wait args are unverified against the live server; a failed wait is ignored.
@@ -196,7 +273,9 @@ pub async fn shoot(cmd: &str, url: &str, dest: &Path) -> Result<()> {
         Ok(())
     }
     .await;
-    m.tool("browser_close_tab", json!({})).await.ok();
+    if res.is_err() {
+        *g = None;
+    }
     res
 }
 
@@ -299,13 +378,7 @@ mod tests {
             .collect();
         assert_eq!(
             calls,
-            [
-                "browser_new_tab",
-                "browser_navigate",
-                "browser_wait",
-                "browser_screenshot",
-                "browser_close_tab"
-            ]
+            ["browser_navigate", "browser_wait", "browser_screenshot"]
         );
         shoot_falls_back_to_full_page().await;
     }
@@ -337,6 +410,74 @@ mod tests {
             .is_err());
         assert!(shoot("  ", "http://127.0.0.1:1/x", &dest).await.is_err());
         assert!(!dest.exists());
+    }
+
+    #[tokio::test]
+    async fn tool_errors_carry_the_tool_text() {
+        let d = tmp("err");
+        std::fs::write(d.join("flap"), "").unwrap(); // flap file present: no "not connected" reply
+        let cmd = format!(
+            "sh {FAKE} {} {} {} Error:_boom",
+            d.join("s.png").display(),
+            d.join("log").display(),
+            d.join("flap").display()
+        );
+        let e = shoot(&cmd, "http://127.0.0.1:1/x", &d.join("x.png"))
+            .await
+            .unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("tool browser_navigate failed: Error:_boom"),
+            "{e}"
+        );
+    }
+
+    #[tokio::test]
+    async fn not_connected_is_retried_and_dom_html_is_unwrapped() {
+        let d = tmp("flap");
+        let cmd = format!(
+            "sh {FAKE} {} {} {}",
+            d.join("s.png").display(),
+            d.join("log").display(),
+            d.join("flap").display()
+        );
+        std::env::set_var("FAKE_MCP_DOM", r#"{\"html\":\"<p>hola</p>\"}"#);
+        let t = page_dom(&cmd, "https://docs.google.com/document/d/x/mobilebasic").await;
+        std::env::remove_var("FAKE_MCP_DOM");
+        assert_eq!(t.unwrap(), "<p>hola</p>");
+        assert!(d.join("flap").exists());
+    }
+
+    #[tokio::test]
+    async fn download_text_reads_and_removes_the_new_export() {
+        let d = tmp("dl");
+        std::fs::write(d.join("old.txt"), "no").unwrap(); // already there: not ours
+        let dir = d.join("dl");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("old.txt"), "no").unwrap();
+        let (p, q) = (dir.join("doc.txt.part"), dir.join("doc.txt"));
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            std::fs::write(&p, "\u{feff}hola").unwrap();
+            std::fs::rename(&p, q).unwrap();
+        });
+        let cmd = format!(
+            "sh {FAKE} {} {}",
+            d.join("s.png").display(),
+            d.join("log").display()
+        );
+        let t = download_text(
+            &cmd,
+            "https://docs.google.com/document/d/x/export?format=txt",
+            &dir,
+        )
+        .await;
+        assert_eq!(t.unwrap(), "hola");
+        assert!(!dir.join("doc.txt").exists() && dir.join("old.txt").exists());
+        let e = download_text(&cmd, "https://x", &d.join("missing"))
+            .await
+            .unwrap_err();
+        assert!(e.to_string().contains("no downloads dir"), "{e}");
     }
 
     #[test]

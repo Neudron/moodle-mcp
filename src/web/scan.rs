@@ -18,6 +18,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    net::IpAddr,
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
@@ -326,6 +327,8 @@ pub fn ws_config() -> Value {
 pub enum Ex {
     Text(String),
     Review(String),
+    /// Nothing to classify and nothing to review (empty file, library, diagram); note for the UI.
+    Done(String),
 }
 
 pub fn scan_cmd() -> String {
@@ -363,6 +366,114 @@ async fn pdf_text(p: &Path) -> anyhow::Result<String> {
     let mut c = Command::new("pdftotext");
     c.arg("-layout").arg(p).arg("-");
     exec(c).await
+}
+
+async fn ocr(img: &Path) -> anyhow::Result<String> {
+    let mut c = Command::new("tesseract");
+    c.arg(img).args(["stdout", "-l", "cat+spa+eng"]);
+    exec(c).await
+}
+
+/// Scanned PDF: first 20 pages rendered into a unique scratch dir under `scratch`, OCR'd one by one.
+async fn ocr_pdf(scratch: &Path, p: &Path) -> anyhow::Result<String> {
+    let dir = scratch.join(format!("ocr-{}", uniq()));
+    tokio::fs::create_dir_all(&dir).await?;
+    let mut c = Command::new("pdftoppm");
+    c.args(["-r", "200", "-png", "-l", "20"])
+        .arg(p)
+        .arg(dir.join("p"));
+    let r = async {
+        exec(c).await?;
+        let mut pages: Vec<_> = std::fs::read_dir(&dir)?
+            .filter_map(|e| Some(e.ok()?.path()))
+            .collect();
+        pages.sort();
+        let mut out = String::new();
+        for pg in pages {
+            out += &ocr(&pg).await?;
+        }
+        Ok(out)
+    }
+    .await;
+    tokio::fs::remove_dir_all(&dir).await.ok();
+    r
+}
+
+/// Bytes as UTF-8, else Latin-1 (course files are often ISO-8859-1 with CRLF).
+pub fn text_of(b: Vec<u8>) -> String {
+    String::from_utf8(b).unwrap_or_else(|e| e.as_bytes().iter().map(|&c| c as char).collect())
+}
+
+async fn read_text(p: &Path) -> anyhow::Result<String> {
+    Ok(text_of(tokio::fs::read(p).await?))
+}
+
+const ZIP_TEXT: [&str; 20] = [
+    "java",
+    "txt",
+    "md",
+    "html",
+    "htm",
+    "css",
+    "js",
+    "sql",
+    "xml",
+    "json",
+    "csv",
+    "py",
+    "properties",
+    "fxml",
+    "c",
+    "h",
+    "cpp",
+    "php",
+    "sh",
+    "yml",
+];
+const ZIP_CAP: usize = 2_000_000;
+
+/// Text-like entries of a zip under `== path ==` headers. Capped in entries and bytes (zip bombs):
+/// each entry is read through a pipe that stops at the remaining budget.
+pub async fn zip_text(p: &Path) -> anyhow::Result<String> {
+    use tokio::io::AsyncReadExt;
+    let mut c = Command::new("unzip");
+    c.arg("-Z1").arg(p);
+    let names = exec(c).await?;
+    let mut out = String::new();
+    for n in names
+        .lines()
+        .filter(|n| !n.starts_with("__MACOSX") && ZIP_TEXT.contains(&ext_of(n).as_str()))
+        .take(300)
+    {
+        if out.len() >= ZIP_CAP {
+            break;
+        }
+        // unzip takes member names as globs
+        let mut pat = String::new();
+        for ch in n.chars() {
+            if "\\*?[".contains(ch) {
+                pat.push('\\');
+            }
+            pat.push(ch);
+        }
+        let mut c = Command::new("unzip");
+        c.arg("-p")
+            .arg(p)
+            .arg(pat)
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .kill_on_drop(true);
+        let mut ch = c.spawn()?;
+        let mut buf = Vec::new();
+        let Some(so) = ch.stdout.take() else { continue };
+        so.take((ZIP_CAP - out.len()) as u64)
+            .read_to_end(&mut buf)
+            .await?;
+        ch.kill().await.ok();
+        out += &format!("== {n} ==\n{}\n", text_of(buf));
+    }
+    Ok(out)
 }
 
 /// OnlyOffice ConvertService: `rel` is fetched by the container through a signed `/oo/file` link.
@@ -434,9 +545,160 @@ pub async fn google_public(url: &str) -> Option<String> {
     r.text().await.ok()
 }
 
-/// Private Google files: fixed MCP tool sequence on the canonical URL, then tag-stripped.
-pub async fn agent_text(url: &str) -> anyhow::Result<String> {
-    ensure!(google_parts(url).is_some(), "només enllaços de Google Docs");
+/// Server-rendered page of a Google file: the editors draw on a canvas, these are plain HTML.
+/// ponytail: htmlview (Sheets) is unverified live; only Docs and Slides were.
+pub fn view_url(kind: &str, id: &str) -> String {
+    let v = match kind {
+        "document" => "mobilebasic",
+        "presentation" => "htmlpresent",
+        _ => "htmlview",
+    };
+    format!("https://docs.google.com/{kind}/d/{id}/{v}")
+}
+
+pub fn drive_id(u: &str) -> Option<String> {
+    let re =
+        regex::Regex::new(r"^https://drive\.google\.com/file/d/([\w-]+)").expect("static regex");
+    Some(re.captures(u)?[1].to_string())
+}
+
+fn google_host(h: &str) -> bool {
+    h == "forms.gle"
+        || h == "google.com"
+        || h.ends_with(".google.com")
+        || h.ends_with(".googleusercontent.com")
+}
+
+fn public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(a) => {
+            !(a.is_loopback()
+                || a.is_private()
+                || a.is_link_local()
+                || a.is_unspecified()
+                || a.is_broadcast())
+        }
+        IpAddr::V6(a) => {
+            !(a.is_loopback()
+                || a.is_unspecified()
+                || a.is_unique_local()
+                || a.is_unicast_link_local())
+                && a.to_ipv4_mapped().is_none_or(|v4| public_ip(v4.into()))
+        }
+    }
+}
+
+/// Links from course pages may only reach the public internet (SSRF guard).
+/// Names that resolve to a private address are refused at connect time by `PublicDns`.
+pub fn public_url(u: &reqwest::Url) -> bool {
+    let h = u
+        .host_str()
+        .unwrap_or("")
+        .trim_matches(['[', ']'])
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    matches!(u.scheme(), "http" | "https")
+        && match h.parse::<IpAddr>() {
+            Ok(ip) => public_ip(ip),
+            Err(_) => {
+                !h.is_empty()
+                    && h != "localhost"
+                    && !h.ends_with(".localhost")
+                    && !h.ends_with(".local")
+                    && !h.ends_with(".internal")
+            }
+        }
+}
+
+/// Resolver for `web_get`: drops non-public addresses, for the start URL and every redirect hop.
+struct PublicDns;
+impl reqwest::dns::Resolve for PublicDns {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async move {
+            let a: Vec<_> = tokio::net::lookup_host((name.as_str(), 0))
+                .await?
+                .filter(|a| public_ip(a.ip()))
+                .collect();
+            if a.is_empty() {
+                return Err("adreça no permesa".into());
+            }
+            Ok(Box::new(a.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+/// Public GET of a scanner link: (content-type, file name, body). Redirects are followed hop by
+/// hop through `public_url`; from a Google host they stay on Google and never reach the login.
+async fn web_get(url: &str) -> anyhow::Result<(String, String, Vec<u8>)> {
+    let start = reqwest::Url::parse(url).map_err(|_| anyhow!("enllaç no vàlid"))?;
+    ensure!(public_url(&start), "enllaç no permès");
+    let g = start.host_str().is_some_and(google_host);
+    let http = reqwest::Client::builder()
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64) moodle-web")
+        .timeout(Duration::from_secs(30))
+        .dns_resolver(Arc::new(PublicDns))
+        .redirect(reqwest::redirect::Policy::custom(move |a| {
+            let h = a.url().host_str().unwrap_or("");
+            if a.previous().len() < 5
+                && public_url(a.url())
+                && h != "accounts.google.com"
+                && (!g || google_host(h))
+            {
+                a.follow()
+            } else {
+                a.stop()
+            }
+        }))
+        .build()?;
+    let mut r = http.get(start).send().await?;
+    ensure!(r.status().is_success(), "HTTP {}", r.status());
+    let hdr = |k| {
+        r.headers()
+            .get(k)
+            .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned()) // names may be raw UTF-8
+            .unwrap_or_default()
+    };
+    let ct = hdr("content-type").to_lowercase();
+    let name = hdr("content-disposition")
+        .split("filename=\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .map_or_else(|| r.url().path().to_string(), String::from);
+    let mut body = Vec::new();
+    while let Some(c) = r.chunk().await? {
+        body.extend_from_slice(&c);
+        ensure!(
+            body.len() as u64 <= super::preview::MAX_BYTES,
+            "fitxer massa gran"
+        );
+    }
+    Ok((ct, name, body))
+}
+
+/// Private Google file: the logged-in browser saves the text export (complete, unlike the DOM);
+/// the HTML view is the fallback when that download does not arrive.
+async fn browser_doc(kind: &str, id: &str) -> anyhow::Result<String> {
+    let dir = env::get("SCAN_DOWNLOADS").map_or_else(
+        || Path::new(&std::env::var("HOME").unwrap_or_default()).join("Downloads"),
+        PathBuf::from,
+    );
+    let fmt = if kind == "spreadsheets" { "csv" } else { "txt" };
+    let url = format!("https://docs.google.com/{kind}/d/{id}/export?format={fmt}");
+    let cmd = env::get("SHOT_CMD").unwrap_or_else(|| shots::DEFAULT_CMD.into());
+    match shots::download_text(&cmd, &url, &dir).await {
+        Ok(t) if !short(&t) => Ok(t),
+        _ => browser_text(&view_url(kind, id)).await,
+    }
+}
+
+/// Google pages through the logged-in browser: fixed MCP tool sequence, then tag-stripped.
+pub async fn browser_text(url: &str) -> anyhow::Result<String> {
+    ensure!(
+        ["https://docs.google.com/", "https://forms.gle/"]
+            .iter()
+            .any(|p| url.starts_with(p)),
+        "el navegador només obre enllaços de Google"
+    );
     let cmd = env::get("SHOT_CMD").unwrap_or_else(|| shots::DEFAULT_CMD.into());
     Ok(strip_html(&shots::page_dom(&cmd, url).await?))
 }
@@ -458,6 +720,13 @@ fn extractable(p: &Path, ext: &str) -> bool {
             | "ods"
             | "html"
             | "htm"
+            | "zip"
+            | "jar"
+            | "jpg"
+            | "jpeg"
+            | "png"
+            | "gif"
+            | "webp"
     ) || files::mime(p).starts_with("text/plain")
 }
 
@@ -465,12 +734,28 @@ fn skip(why: String) -> Out {
     (String::new(), "needs_review", why)
 }
 
-/// Deterministic text from a local file. Unreadable formats become `Review` (needs_review).
+fn short(t: &str) -> bool {
+    t.trim().chars().count() < 20
+}
+
+fn text_or(t: String, none: Ex) -> Ex {
+    if short(&t) {
+        none
+    } else {
+        Ex::Text(t)
+    }
+}
+
+/// Deterministic text from a local file. Unreadable formats become `Review` (needs_review);
+/// files with nothing to classify (empty, library jar, textless image) become `Done`.
 pub async fn extract(app: &App, p: &Path, rel: &str, sha: &str) -> anyhow::Result<Ex> {
     let ext = ext_of(rel);
-    let read = || tokio::fs::read_to_string(p);
+    let buit = || Ex::Done("buit".into());
     let text = match ext.as_str() {
-        "pdf" => pdf_text(p).await?,
+        "pdf" => match pdf_text(p).await? {
+            t if short(&t) => ocr_pdf(&ws(app), p).await?,
+            t => t,
+        },
         "docx" | "doc" | "odt" | "rtf" => {
             String::from_utf8_lossy(&ds_convert(app, rel, &ext, "txt", sha).await?).into_owned()
         }
@@ -482,15 +767,21 @@ pub async fn extract(app: &App, p: &Path, rel: &str, sha: &str) -> anyhow::Resul
             tokio::fs::remove_file(&tmp).await.ok();
             t?
         }
-        "html" | "htm" => strip_html(&read().await?),
-        _ if files::mime(p).starts_with("text/plain") => read().await?,
+        "zip" => zip_text(p).await?,
+        "jar" => return Ok(Ex::Done("biblioteca .jar, res a escanejar".into())),
+        "jpg" | "jpeg" | "png" | "gif" | "webp" => {
+            return Ok(text_or(ocr(p).await?, Ex::Done("imatge sense text".into())))
+        }
+        "html" | "htm" => return Ok(text_or(strip_html(&read_text(p).await?), buit())),
+        _ if files::mime(p).starts_with("text/plain") => {
+            return Ok(text_or(read_text(p).await?, buit()))
+        }
         _ => return Ok(Ex::Review(format!("format .{ext} sense text extraïble"))),
     };
-    Ok(if text.trim().chars().count() < 20 {
-        Ex::Review("sense text (escanejat o buit?)".into())
-    } else {
-        Ex::Text(text)
-    })
+    Ok(text_or(
+        text,
+        Ex::Review("sense text (escanejat o buit?)".into()),
+    ))
 }
 /// Scratch names must be unique per call: identical files (same sha) are processed concurrently.
 fn uniq() -> u64 {
@@ -588,6 +879,10 @@ async fn file_item(app: &App, it: &Item, p: &Path, rel: &str, sha: &str) -> anyh
     }
     Ok(match extract(app, p, rel, sha).await? {
         Ex::Review(why) => (sha.into(), "needs_review", why),
+        Ex::Done(note) => {
+            app.db.cache_put(sha, &it.src, "[]", crate::web::now())?;
+            (sha.into(), "done", note)
+        }
         Ex::Text(t) => {
             classify_store(app, sha, it, &t).await?;
             (sha.into(), "done", String::new())
@@ -595,14 +890,10 @@ async fn file_item(app: &App, it: &Item, p: &Path, rel: &str, sha: &str) -> anyh
     })
 }
 
-/// Google link: public export first, browser agent when Google asks for a login.
+/// Google Doc/Slides/Sheet: public export first, the logged-in browser's HTML view otherwise.
 async fn url_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
     let Some((kind, id)) = google_parts(u) else {
-        return Ok((
-            String::new(),
-            "needs_review",
-            "enllaç que no és de Google Docs".into(),
-        ));
+        return link_item(app, it, u).await;
     };
     let canon = format!("https://docs.google.com/{kind}/d/{id}/edit");
     let sha = sha_hex(canon.as_bytes());
@@ -611,13 +902,69 @@ async fn url_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
     }
     let text = match google_public(&export_url(&kind, &id)).await {
         Some(t) => t,
-        None => agent_text(&canon).await?,
+        None => browser_doc(&kind, &id).await?,
     };
-    if text.trim().chars().count() < 20 {
+    if short(&text) {
         return Ok((sha, "needs_review", "Google Doc privat o buit".into()));
     }
     classify_store(app, &sha, it, &text).await?;
     Ok((sha, "done", String::new()))
+}
+
+/// Any other link: a Drive file is downloaded and extracted, a page becomes text (forms.gle and
+/// Forms fall back to the browser when they need the student's login).
+async fn link_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
+    let drive = drive_id(u);
+    let get = match &drive {
+        Some(id) => format!("https://drive.google.com/uc?export=download&id={id}"),
+        None => u.to_string(),
+    };
+    let sha = sha_hex(get.as_bytes());
+    if app.db.cache_get(&sha)?.is_some() {
+        return Ok((sha, "cached", String::new()));
+    }
+    let got = web_get(&get).await;
+    if let Ok((ct, name, bytes)) = &got {
+        if !ct.contains("html") {
+            let ext = ext_of(name);
+            if !extractable(Path::new(name), &ext) {
+                return Ok(skip(format!("format .{ext} sense text extraïble")));
+            }
+            return stage(app, it, bytes, &ext).await;
+        }
+    }
+    if drive.is_some() {
+        return Ok(skip("fitxer de Drive privat".into())); // the browser cannot save bytes
+    }
+    let mut text = got.map(|(_, _, b)| strip_html(&text_of(b)));
+    if text.as_ref().map_or(true, |t| short(t))
+        && google_host(reqwest::Url::parse(u)?.host_str().unwrap_or(""))
+    {
+        text = browser_text(u).await; // errors here are real: the page is Google's own
+    }
+    let text = text?;
+    if short(&text) {
+        app.db.cache_put(&sha, &it.src, "[]", crate::web::now())?;
+        return Ok((sha, "done", "enllaç sense text".into()));
+    }
+    classify_store(app, &sha, it, &text).await?;
+    Ok((sha, "done", String::new()))
+}
+
+/// Stage bytes in a dir the sandboxed tools can see (DS reads through the jail), then extract.
+async fn stage(app: &App, it: &Item, bytes: &[u8], ext: &str) -> anyhow::Result<Out> {
+    if bytes.len() as u64 > super::preview::MAX_BYTES {
+        return Ok(skip("fitxer massa gran".into()));
+    }
+    let root = Path::new(&app.root);
+    let sha = sha_hex(bytes);
+    let rel = format!("_scan/{}.{ext}", &sha_hex(it.src.as_bytes())[..16]);
+    tokio::fs::create_dir_all(root.join("_scan")).await?;
+    let p = root.join(&rel);
+    tokio::fs::write(&p, bytes).await?;
+    let r = file_item(app, it, &p, &rel, &sha).await;
+    tokio::fs::remove_file(&p).await.ok();
+    r
 }
 
 async fn item_run(app: &App, it: &Item) -> anyhow::Result<Out> {
@@ -631,25 +978,11 @@ async fn item_run(app: &App, it: &Item) -> anyhow::Result<Out> {
                 return Ok(skip(format!("format .{ext} sense text extraïble")));
             }
             let bytes = app.moodle.download(&it.src).await?;
-            if bytes.len() as u64 > super::preview::MAX_BYTES {
-                return Ok(skip("fitxer massa gran".into()));
-            }
-            let sha = sha_hex(&bytes);
-            let rel = format!(
-                "_scan/{}.{}",
-                &sha_hex(it.src.as_bytes())[..16],
-                ext_of(&it.src)
-            );
-            tokio::fs::create_dir_all(root.join("_scan")).await?;
-            let p = root.join(&rel);
-            tokio::fs::write(&p, &bytes).await?;
-            let r = file_item(app, it, &p, &rel, &sha).await;
-            tokio::fs::remove_file(&p).await.ok();
-            r
+            stage(app, it, &bytes, &ext).await
         }
         _ if ext_of(&it.src) == "url" => {
             let p = files::jail(root, &it.src).map_err(|e| anyhow!(e))?;
-            let stub = tokio::fs::read_to_string(p).await?;
+            let stub = read_text(&p).await?;
             let u = stub
                 .lines()
                 .find_map(|l| l.strip_prefix("URL="))
@@ -1023,6 +1356,63 @@ mod tests {
     }
 
     #[test]
+    fn link_classification() {
+        let id = |u| drive_id(u).unwrap_or_default();
+        assert_eq!(
+            id("https://drive.google.com/file/d/1aB-_c/view?usp=sharing"),
+            "1aB-_c"
+        );
+        assert_eq!(id("https://drive.google.com/drive/folders/1aB"), "");
+        assert_eq!(id("https://drive.google.com.evil.com/file/d/1aB/view"), "");
+        assert_eq!(
+            view_url("document", "X"),
+            "https://docs.google.com/document/d/X/mobilebasic"
+        );
+        assert!(view_url("presentation", "X").ends_with("/htmlpresent"));
+        assert!(google_host("forms.gle") && google_host("drive.usercontent.google.com"));
+        assert!(!google_host("google.com.evil.com") && !google_host("evilgoogle.com"));
+    }
+
+    #[test]
+    fn only_public_http_links() {
+        let ok = |u: &str| public_url(&reqwest::Url::parse(u).unwrap());
+        assert!(ok("https://moure.dev") && ok("http://dev.mysql.com/doc/"));
+        assert!(ok("https://forms.gle/inN9W8G8NbxWF1627"));
+        for u in [
+            "file:///etc/passwd",
+            "ftp://example.com/x",
+            "http://localhost:8080/",
+            "http://x.localhost/",
+            "http://nas.local/",
+            "http://localhost./",
+            "http://x.internal./",
+            "http://127.0.0.1:9/",
+            "http://127.1/",
+            "http://0.0.0.0/",
+            "http://10.0.0.5/",
+            "http://192.168.1.1/",
+            "http://172.16.0.1/",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[::1]/",
+            "http://[fd00::1]/",
+            "http://[::ffff:127.0.0.1]/",
+        ] {
+            assert!(!ok(u), "{u}");
+        }
+    }
+
+    #[tokio::test]
+    async fn web_get_refuses_private_hosts_before_connecting() {
+        for u in ["http://127.0.0.1:1/", "file:///etc/passwd", "no url"] {
+            assert!(web_get(u).await.is_err(), "{u}");
+        }
+        assert!(browser_text("http://127.0.0.1/x").await.is_err());
+        assert!(browser_text("https://docs.google.com.evil.com/x")
+            .await
+            .is_err());
+    }
+
+    #[test]
     fn html_and_event_text() {
         let t = strip_html(
             "<html><style>p{}</style><script>evil()</script><p>Fer la memòria</p></html>",
@@ -1048,5 +1438,54 @@ mod tests {
         for p in ["bash", "edit", "webfetch"] {
             assert_eq!(cls["permission"][p], "deny");
         }
+    }
+
+    #[test]
+    fn latin1_fallback_and_empty_is_done() {
+        assert_eq!(text_of(b"cl\xe0ssic\r\n".to_vec()), "clàssic\r\n");
+        assert_eq!(text_of("açò".as_bytes().to_vec()), "açò");
+        assert!(matches!(
+            text_or("Continguts".into(), Ex::Done("buit".into())),
+            Ex::Done(_)
+        ));
+        assert!(matches!(
+            text_or(DOC.into(), Ex::Done("buit".into())),
+            Ex::Text(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn zip_text_lists_text_entries_only() {
+        let d = std::env::temp_dir().join(format!("scanzip-{}", uniq()));
+        std::fs::create_dir_all(d.join("__MACOSX")).unwrap();
+        std::fs::write(
+            d.join("A[1].java"),
+            b"class A { String s = \"cl\xe0ssic\"; }",
+        )
+        .unwrap();
+        std::fs::write(d.join("x.class"), b"\xca\xfe\xba\xbe").unwrap();
+        std::fs::write(d.join("__MACOSX/m.txt"), b"mac junk").unwrap();
+        let z = d.join("t.zip");
+        let st = std::process::Command::new("bsdtar")
+            .current_dir(&d)
+            .args([
+                "--format",
+                "zip",
+                "-cf",
+                "t.zip",
+                "A[1].java",
+                "x.class",
+                "__MACOSX",
+            ])
+            .status()
+            .unwrap();
+        assert!(st.success());
+        let t = zip_text(&z).await.unwrap();
+        std::fs::remove_dir_all(&d).ok();
+        assert!(
+            t.contains("== A[1].java ==") && t.contains("clàssic"),
+            "{t}"
+        );
+        assert!(!t.contains("x.class") && !t.contains("mac junk"), "{t}");
     }
 }

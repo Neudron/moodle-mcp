@@ -49,7 +49,7 @@ async fn extract_text_html_and_unreadable() {
         "C/b.html",
         "<html><script>evil()</script><p>Fer la memòria abans de dilluns</p></html>",
     );
-    put(&root, "C/c.png", "PNGDATA-not-text");
+    put(&root, "C/c.mp4", "MP4DATA-not-text");
     put(&root, "C/d.txt", "curt");
     let a = app(&root, 8787);
     let run = |rel: &str| {
@@ -60,8 +60,8 @@ async fn extract_text_html_and_unreadable() {
     assert!(
         matches!(run("C/b.html").await, Ex::Text(t) if t.contains("Fer la memòria") && !t.contains("evil"))
     );
-    assert!(matches!(run("C/c.png").await, Ex::Review(_)));
-    assert!(matches!(run("C/d.txt").await, Ex::Review(_)));
+    assert!(matches!(run("C/c.mp4").await, Ex::Review(_)));
+    assert!(matches!(run("C/d.txt").await, Ex::Done(n) if n == "buit"));
 }
 
 #[tokio::test]
@@ -209,7 +209,7 @@ async fn scan_end_to_end() {
         "CursA/RA01/privat.url",
         "[InternetShortcut]\nURL=https://docs.google.com/document/d/PRIV/edit?usp=sharing\n",
     );
-    put(&root, "CursA/foto.png", "PNGDATA");
+    put(&root, "CursA/foto.mp4", "PNGDATA");
     put(
         &root,
         "CursA/RA01/feina_amin.txt",
@@ -268,6 +268,7 @@ async fn scan_end_to_end() {
     std::env::set_var("SCAN_LOG", &log);
     std::env::set_var("SCAN_GOOGLE_BASE", &gbase);
     std::env::set_var("SCAN_SHOTS", "0");
+    std::env::set_var("SCAN_DOWNLOADS", d.join("no-downloads")); // missing dir: the browser falls back to the DOM view
     let mcp = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_mcp.sh");
     let mcplog = d.join("mcp.log");
     std::env::set_var(
@@ -304,7 +305,7 @@ async fn scan_end_to_end() {
     assert_eq!(v["counts"]["done"], 4, "{v}");
     assert_eq!(v["counts"]["needs_review"], 1);
     assert!(v["counts"]["error"].is_null());
-    assert_eq!(v["items"][0]["src"], "CursA/foto.png");
+    assert_eq!(v["items"][0]["src"], "CursA/foto.mp4");
     assert_eq!(v["proposed"], 3);
 
     let all = a.db.all_tasks().unwrap();
@@ -345,13 +346,8 @@ async fn scan_end_to_end() {
     let mcp_calls = std::fs::read_to_string(&mcplog).unwrap();
     assert_eq!(
         mcp_calls.lines().collect::<Vec<_>>(),
-        [
-            "browser_new_tab",
-            "browser_wait",
-            "browser_get_dom",
-            "browser_close_tab"
-        ]
-    ); // the private doc: fixed sequence, no navigate, no tab listing or switching
+        ["browser_navigate", "browser_wait", "browser_get_dom"]
+    ); // the private doc: fixed sequence, no tab listing or switching
     let cls: Vec<&&str> = lines
         .iter()
         .filter(|l| l.starts_with("classifier "))
@@ -362,7 +358,7 @@ async fn scan_end_to_end() {
             .collect::<HashSet<_>>()
             .len(),
         4
-    ); // own files, submit/, png never sent
+    ); // own files, submit/, mp4 never sent
     assert!(cls.iter().any(|l| l.contains("opencode/space-bunny-free")));
     assert!(cls
         .iter()
