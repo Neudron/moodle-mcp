@@ -100,6 +100,12 @@ pub fn mime(path: &Path) -> &'static str {
         "gif" => "image/gif",
         "svg" => "image/svg+xml",
         "webp" => "image/webp",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "zip" => "application/zip",
         "html" | "htm" => "text/html; charset=utf-8",
         "md" | "txt" | "csv" | "json" | "xml" | "css" | "js" | "rs" | "py" | "sql" | "url"
         | "sh" | "java" | "toml" | "yaml" | "yml" => "text/plain; charset=utf-8",
@@ -114,6 +120,12 @@ pub fn mime(path: &Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mime_media() {
+        assert_eq!(mime(Path::new("a.MP4")), "video/mp4");
+        assert_eq!(mime(Path::new("a.zip")), "application/zip");
+    }
 
     fn root(tag: &str) -> std::path::PathBuf {
         let r = std::env::temp_dir().join(format!("mweb-jail-{tag}-{}", std::process::id()));

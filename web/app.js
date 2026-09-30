@@ -216,6 +216,51 @@ views.tauler = async () => {
 
 const fsize = (n) => (typeof n !== 'number' ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${Math.ceil(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
+// preview(el, {path|moodleUrl, name, size}): fills el with the file. Never innerHTML; html/svg stay sandboxed.
+const EXT = {
+  img: 'png jpg jpeg gif webp', pdf: 'pdf', html: 'html htm svg', video: 'mp4 webm ogv m4v mov', audio: 'mp3 wav ogg m4a flac', zip: 'zip',
+  text: 'txt md csv json xml css js ts rs py sql url sh java toml yaml yml c h cpp php log ini',
+};
+const kindOf = (n) => { const e = (n.split(/[?#]/)[0].split('.').pop() || '').toLowerCase(); return Object.keys(EXT).find((k) => EXT[k].split(' ').includes(e)); };
+// Names and sizes from the zip central directory (no library, no inflate).
+function zipEntries(buf) {
+  const v = new DataView(buf), td = new TextDecoder(), out = [];
+  let i = buf.byteLength - 22;
+  while (i >= 0 && v.getUint32(i, true) !== 0x06054b50) i--;
+  if (i < 0) return out;
+  let p = v.getUint32(i + 16, true);
+  for (let n = v.getUint16(i + 10, true); n-- > 0 && v.getUint32(p, true) === 0x02014b50;) {
+    const nl = v.getUint16(p + 28, true), skip = nl + v.getUint16(p + 30, true) + v.getUint16(p + 32, true);
+    out.push({ name: td.decode(new Uint8Array(buf, p + 46, nl)), size: v.getUint32(p + 24, true) });
+    p += 46 + skip;
+  }
+  return out;
+}
+async function preview(el, o) {
+  const name = o.name || (o.path || o.moodleUrl.split(/[?#]/)[0]).split('/').pop();
+  const src = o.path != null ? `/api/raw?path=${enc(o.path)}` : `/api/moodle-file?url=${enc(o.moodleUrl)}`;
+  const k = kindOf(name), big = o.size > 2e6;
+  const fail = (t, b) => h('div', { class: 'pv-none' }, h('p', {}, t), b);
+  const dl = h('a', { class: 'btn', href: src, download: name }, ic('file'), 'Descarrega');
+  let node;
+  try {
+    if (k === 'img') node = h('img', { class: 'v-img', src, alt: name });
+    else if (k === 'pdf') node = h('iframe', { class: 'sheet v-frame', src, title: `PDF: ${name}` });
+    else if (k === 'html') node = h('iframe', { class: 'sheet v-frame', src, sandbox: '', referrerpolicy: 'no-referrer', title: `Previsualització: ${name}` });
+    else if (k === 'video') node = h('video', { class: 'v-img', src, controls: true, 'aria-label': name });
+    else if (k === 'audio') node = h('audio', { src, controls: true, 'aria-label': name });
+    else if (k === 'text' && !big) node = h('pre', { tabindex: 0, role: 'region', 'aria-label': `Contingut de ${name}` }, (await api(src)).slice(0, 2e5));
+    else if (k === 'zip' && !big) {
+      const es = zipEntries(await (await fetch(src)).arrayBuffer());
+      node = es.length ? h('div', { class: 'tablewrap', role: 'region', tabindex: 0, 'aria-label': `Contingut de ${name}` },
+        h('table', {}, h('caption', { class: 'sr-only' }, `Entrades de ${name}`),
+          h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Nom'), h('th', { scope: 'col', class: 'num' }, 'Mida'))),
+          h('tbody', {}, es.map((e) => h('tr', {}, h('td', { class: 'mono' }, e.name), h('td', { class: 'num' }, e.name.endsWith('/') ? '' : fsize(e.size))))))) : fail('Zip buit o il·legible.', dl);
+    } else node = fail(big ? 'Fitxer massa gran per previsualitzar.' : "Aquest tipus de fitxer no es pot previsualitzar. Descarrega'l per obrir-lo.", dl);
+  } catch (e) { node = fail(`No s'ha pogut carregar: ${e.message}`, dl); }
+  el.replaceChildren(node);
+}
+
 views.tasca = async (id) => {
   const tv = await api(`/api/tasks/${enc(id)}`);
   const t = tv.task, l = tv.local;
@@ -260,8 +305,12 @@ views.tasca = async (id) => {
   const fb = t.feedback_html ? sandboxed(t.feedback_html, 'Retroacció') : null;
   if (fb && fb.tagName === 'IFRAME') fb.classList.add('fb');
 
-  const attRows = t.attachments.map((a) => h('a', { class: 'row v-file', href: `/api/moodle-file?url=${enc(a.fileurl)}`, target: '_blank' },
-    ic('file'), h('span', { class: 't' }, a.filename), a.filesize != null && h('span', { class: 'mono dim' }, fsize(a.filesize)), NEWTAB.cloneNode(true)));
+  const attRows = t.attachments.map((a) => {
+    const box = h('div', { class: 'v-preview' });
+    return h('details', { class: 'att', ontoggle: (e) => { if (e.target.open && !box.hasChildNodes()) preview(box, { moodleUrl: a.fileurl, name: a.filename, size: a.filesize }); } },
+      h('summary', { class: 'row v-file' }, ic('file'), h('span', { class: 't' }, a.filename), a.filesize != null && h('span', { class: 'mono dim' }, fsize(a.filesize))),
+      box, h('a', { class: 'btn ghost', href: `/api/moodle-file?url=${enc(a.fileurl)}`, download: a.filename }, 'Descarrega'));
+  });
   const fileRows = l.files.map((f) => h('a', { class: 'row v-file', href: `#/fitxers/${enc(f)}` },
     ic('file'), h('span', { class: 't mono' }, f)));
 
@@ -481,12 +530,8 @@ views.fitxers = async (...parts) => {
   }
   const raw = `/api/raw?path=${enc(rel)}`;
   const name = rel.split('/').pop();
-  let body;
-  if (info.mime.startsWith('image/')) body = h('img', { class: 'v-img', src: raw, alt: name });
-  else if (info.mime === 'application/pdf') body = h('iframe', { class: 'sheet v-frame', src: raw, title: `PDF: ${name}` });
-  else if (info.mime.startsWith('text/html')) body = h('iframe', { class: 'sheet v-frame', src: raw, sandbox: '', title: `HTML: ${name}` });
-  else if (info.mime.startsWith('text/')) body = h('pre', { tabindex: 0, role: 'region', 'aria-label': `Contingut de ${name}` }, info.size > 2e6 ? 'Fitxer massa gran per previsualitzar.' : await api(raw));
-  else body = empty('Sense previsualització', "Aquest tipus de fitxer no es pot mostrar. Descarrega'l per obrir-lo.");
+  const body = h('div', {});
+  preview(body, { path: rel, name, size: info.size });
   return h('section', { class: 'v-fitxers' }, h('h1', {}, name), crumbs,
     h('div', { class: 'actions' },
       h('a', { class: 'btn', href: raw, download: name }, 'Descarrega'),

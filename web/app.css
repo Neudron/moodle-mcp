@@ -312,6 +312,10 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 .v-tasca .v-file{grid-template-columns:24px 1fr auto;grid-template-areas:none;min-height:48px;padding:var(--s1) var(--s2)}
 .v-tasca .v-file>*{grid-area:auto}
 .v-tasca .v-file .t.mono{font-weight:400}
+.v-tasca .att>summary.v-file{grid-template-columns:16px 24px 1fr auto;cursor:pointer}
+.pv-none{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s2);padding:var(--s3);border:1px dashed var(--line);border-radius:var(--r-md);color:var(--dim)}
+.v-preview video,.v-preview audio{max-width:100%}
+.v-preview pre{max-height:70vh;overflow:auto}
 .v-tasca .rail{order:-1}
 .v-tasca .v-deliver{display:flex;flex-direction:column;gap:var(--s1);order:-1}
 @container (min-width:40rem){
