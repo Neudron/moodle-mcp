@@ -62,6 +62,7 @@ pub fn token(root: &std::path::Path) -> std::io::Result<String> {
 }
 
 struct Lan {
+    bind: String,
     peer: IpAddr,
     token: String,
     port: u16,
@@ -100,7 +101,7 @@ async fn mw(
         Admit::Pass => {
             // Same-origin on the LAN host becomes same-origin on localhost; any other Origin
             // is left as is and still rejected by guard::check.
-            let lan_origin = format!("http://{}", h(&req, header::HOST));
+            let lan_origin = format!("http://{}:{}", lan.bind, lan.port);
             let local = format!("localhost:{}", lan.port);
             let hs = req.headers_mut();
             if hs.get(header::ORIGIN).and_then(|v| v.to_str().ok()) == Some(lan_origin.as_str()) {
@@ -127,7 +128,12 @@ pub async fn spawn(app: Arc<App>, bind: &str, peer: &str, root: &std::path::Path
         Ok(l) => l,
         Err(e) => return tracing::warn!(error = %e, %bind, "LAN bind failed, LAN listener off"),
     };
-    let lan = Arc::new(Lan { peer, token, port });
+    let lan = Arc::new(Lan {
+        bind: bind.into(),
+        peer,
+        token,
+        port,
+    });
     let r = super::router(app).layer(axum::middleware::from_fn_with_state(lan, mw));
     tracing::info!("LAN access on http://{bind}:{port} for {peer} only");
     tokio::spawn(async move {
