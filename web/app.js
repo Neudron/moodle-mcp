@@ -261,6 +261,30 @@ async function preview(el, o) {
   el.replaceChildren(node);
 }
 
+// WAI-ARIA tabs; panels render once on first select; active id survives soft refreshes in tabs.sel[key].
+function tabs(key, items) {
+  tabs.sel ??= {};
+  const btns = [], panels = [];
+  const pick = (i, focus) => {
+    tabs.sel[key] = items[i].id;
+    items.forEach((it, j) => {
+      btns[j].setAttribute('aria-selected', String(j === i)); btns[j].tabIndex = j === i ? 0 : -1; panels[j].hidden = j !== i;
+    });
+    if (!panels[i].hasChildNodes()) panels[i].append(items[i].render());
+    if (focus) btns[i].focus();
+  };
+  items.forEach((it, i) => {
+    btns.push(h('button', { type: 'button', role: 'tab', id: `tab-${key}-${it.id}`, 'aria-controls': `pn-${key}-${it.id}`, onclick: () => pick(i),
+      onkeydown: (e) => {
+        const n = { ArrowRight: (i + 1) % items.length, ArrowLeft: (i + items.length - 1) % items.length, Home: 0, End: items.length - 1 }[e.key];
+        if (n != null) { e.preventDefault(); pick(n, true); }
+      } }, it.label));
+    panels.push(h('div', { role: 'tabpanel', id: `pn-${key}-${it.id}`, 'aria-labelledby': `tab-${key}-${it.id}`, tabindex: 0, hidden: true }));
+  });
+  pick(Math.max(0, items.findIndex((it) => it.id === tabs.sel[key])));
+  return h('div', { class: 'tabs2' }, h('div', { role: 'tablist', 'aria-label': 'Seccions de la tasca' }, btns), panels);
+}
+
 views.tasca = async (id) => {
   const tv = await api(`/api/tasks/${enc(id)}`);
   const t = tv.task, l = tv.local;
@@ -301,26 +325,52 @@ views.tasca = async (id) => {
     l.status && h('span', { class: 'badge ' + (l.status === 'revisat OK' ? 'ok' : 'warn') }, LSTATUS[l.status] || l.status),
     t.source === 'ai' && aiBadge()];
 
-  const body = sandboxed(t.body_html, `Enunciat: ${t.title}`);
+  const intro = sandboxed(t.body_html, `Enunciat: ${t.title}`);
   const fb = t.feedback_html ? sandboxed(t.feedback_html, 'Retroacció') : null;
   if (fb && fb.tagName === 'IFRAME') fb.classList.add('fb');
-
   const attRows = t.attachments.map((a) => {
     const box = h('div', { class: 'v-preview' });
     return h('details', { class: 'att', ontoggle: (e) => { if (e.target.open && !box.hasChildNodes()) preview(box, { moodleUrl: a.fileurl, name: a.filename, size: a.filesize }); } },
       h('summary', { class: 'row v-file' }, ic('file'), h('span', { class: 't' }, a.filename), a.filesize != null && h('span', { class: 'mono dim' }, fsize(a.filesize))),
       box, h('a', { class: 'btn ghost', href: `/api/moodle-file?url=${enc(a.fileurl)}`, download: a.filename }, 'Descarrega'));
   });
-  const fileRows = l.files.map((f) => h('a', { class: 'row v-file', href: `#/fitxers/${enc(f)}` },
-    ic('file'), h('span', { class: 't mono' }, f)));
-
-  const main = h('div', { class: 'v-main' },
-    body.tagName === 'P' ? body : [h('h2', { class: 'eyebrow' }, 'Enunciat'), body],
-    attRows.length ? [h('h2', { class: 'eyebrow' }, 'Adjunts del professor'), h('div', { class: 'list' }, attRows)] : null,
-    fb ? [h('h2', { class: 'eyebrow' }, 'Retroacció'), fb] : null,
-    h('h2', { class: 'eyebrow' }, 'Els meus fitxers'),
-    fileRows.length ? h('div', { class: 'list' }, fileRows) : h('p', { class: 'dim' }, `Cap fitxer vinculat. Carpeta suggerida: ${tv.submit_dir}`),
+  const shotUrl = () => `/api/shot/${enc(id)}?t=${Date.now()}`;
+  const enunciat = () => {
+    const slot = h('div', { class: 'v-shotbox' });
+    const showText = () => slot.replaceChildren(h('p', { class: 'dim' }, 'Sense captura.'), intro);
+    const showShot = () => { const img = h('img', { class: 'v-shot', src: shotUrl(), alt: "Captura de l'enunciat" }); img.onerror = showText; slot.replaceChildren(img); };
+    const snap = h('button', { type: 'button', onclick: async () => {
+      snap.setAttribute('aria-busy', 'true'); snap.disabled = true;
+      try { await api(`/api/shot/${enc(id)}`, { method: 'POST' }); showShot(); toast('Captura feta'); }
+      catch (e) { toast(e.message, true); }
+      snap.removeAttribute('aria-busy'); snap.disabled = false;
+    } }, 'Fes captura');
+    showShot();
+    return h('div', { class: 'v-pane' }, h('div', { class: 'field-row' }, snap), slot,
+      attRows.length ? [h('h2', { class: 'eyebrow' }, 'Adjunts del professor'), h('div', { class: 'list' }, attRows)] : null,
+      fb ? [h('h2', { class: 'eyebrow' }, 'Retroacció'), fb] : null);
+  };
+  const feina = () => h('div', { class: 'v-pane' },
+    l.files.length ? l.files.map((f) => {
+      const box = h('div', { class: 'v-preview' });
+      preview(box, { path: f });
+      return h('section', { class: 'v-item', 'aria-label': f },
+        h('h3', { class: 'mono' }, f), h('div', { class: 'field-row' }, fileExtras.map((x) => x({ rel: f }))), box);
+    }) : h('p', { class: 'dim' }, `Cap fitxer vinculat. Carpeta suggerida: ${tv.submit_dir}`),
     linkFiles(id, l.files));
+  const lliurat = () => h('div', { class: 'v-pane' },
+    (t.submission_files || []).length ? t.submission_files.map((f) => {
+      const box = h('div', { class: 'v-preview' });
+      preview(box, { moodleUrl: f.fileurl, name: f.filename, size: f.filesize });
+      return h('section', { class: 'v-item', 'aria-label': f.filename },
+        h('h3', {}, f.filename, ' ', h('span', { class: 'mono dim' }, fsize(f.filesize))),
+        h('div', { class: 'field-row' }, h('a', { class: 'btn ghost', href: `/api/moodle-file?url=${enc(f.fileurl)}`, download: f.filename }, 'Descarrega')), box);
+    }) : empty('Res lliurat', "Encara no hi ha cap fitxer entregat a Moodle."));
+
+  const main = h('div', { class: 'v-main' }, tabs('tasca', [
+    { id: 'enunciat', label: 'Enunciat', render: enunciat },
+    { id: 'feina', label: 'La meva feina', render: feina },
+    { id: 'lliurat', label: 'Lliurat a Moodle', render: lliurat }]));
 
   return h('article', { class: 'v-tasca' },
     h('a', { class: 'btn ghost', href: '#/tauler' }, ic('arrow-l'), 'Tauler'),
@@ -374,6 +424,7 @@ async function route(o) {
   const paint = () => {
     main.dataset.view = nm; main.classList.toggle('edit', nm === 'edita');
     main.replaceChildren(node); main.removeAttribute('aria-busy');
+    node.dispatchEvent?.(new Event('mounted'));
     const h1 = main.querySelector('h1');
     document.title = `${h1 ? h1.textContent.trim() + ' · ' : ''}Institut`;
     if (!soft && h1 && (first || same)) setText($('#live'), h1.textContent.trim()); // announced only when the h1 is not focused
@@ -698,13 +749,14 @@ views.edita = async (...parts) => {
   const wrap = h('section', { class: 'v-edita' }, h('h1', { class: 'sr-only' }, `Edita ${cfg.rel}`), bar, holder);
   // DocsAPI injects an untitled iframe: name it once it appears.
   new MutationObserver((_, o) => { const f = holder.querySelector('iframe'); if (f) { f.title = 'Editor de documents'; o.disconnect(); } }).observe(holder, { childList: true, subtree: true });
-  const open = () => new window.DocsAPI.DocEditor('oo', cfg.config);
-  if (window.DocsAPI) setTimeout(open, 0); // holder is attached once route() swaps the view in
-  else {
+  // api.js does getElementById(placeholderId): it takes the id only, so build once the holder is in the document.
+  const open = () => { if (holder.isConnected) new window.DocsAPI.DocEditor('oo', cfg.config); };
+  wrap.addEventListener('mounted', () => {
+    if (window.DocsAPI) return open();
     const s = h('script', { src: cfg.api_js });
     s.onload = open;
     s.onerror = () => wrap.replaceChildren(fallback('OnlyOffice no disponible.'));
     document.head.append(s);
-  }
+  }, { once: true });
   return wrap;
 };

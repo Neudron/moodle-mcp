@@ -351,6 +351,13 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 .v-frame{height:75vh}
 .v-img{display:block;max-width:100%;height:auto;border-radius:var(--r-md);margin-inline:auto}
 .v-fitxers .actions .num-t{margin-left:auto}
+/* tabs2 */
+.tabs2>[role=tablist]{display:flex;gap:var(--s1);border-bottom:1px solid var(--line);overflow-x:auto}
+.tabs2 [role=tab]{min-height:44px;padding:0 var(--s2);background:none;border:0;border-bottom:2px solid transparent;border-radius:0;color:var(--dim);font-weight:600;white-space:nowrap}
+.tabs2 [role=tab][aria-selected=true]{color:var(--text);border-bottom-color:var(--accent)}
+.tabs2 [role=tabpanel]{padding-top:var(--s2)}
+.v-pane,.v-item{display:flex;flex-direction:column;gap:var(--s2);min-width:0}
+.v-shot{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:var(--r-md)}
 /* edita */
 .v-editbar{display:flex;align-items:center;gap:var(--s2);height:48px;padding:0 var(--s2);min-width:0}
 .v-editname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)}
