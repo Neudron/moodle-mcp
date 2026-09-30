@@ -28,7 +28,21 @@ fn attachments(v: &Value) -> Vec<Attachment> {
             filename: s(&a["filename"]),
             fileurl: s(&a["fileurl"]),
             mimetype: s(&a["mimetype"]),
+            filesize: i(&a["filesize"]),
+            timemodified: i(&a["timemodified"]),
         })
+        .collect()
+}
+
+/// `lastattempt.submission.plugins[type=file].fileareas[].files[]`
+fn submission_files(st: &Value) -> Vec<Attachment> {
+    st["lastattempt"]["submission"]["plugins"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|p| p["type"] == "file")
+        .flat_map(|p| p["fileareas"].as_array().into_iter().flatten())
+        .flat_map(|fa| attachments(&fa["files"]))
         .collect()
 }
 
@@ -48,6 +62,7 @@ pub fn from_assign(c: &Course, a: &Value, st: &Value, base: &str) -> Task {
         title: s(&a["name"]),
         body_html: s(&a["intro"]),
         attachments: attachments(&a["introattachments"]),
+        submission_files: submission_files(st),
         url: format!("{base}/mod/assign/view.php?id={}", a["cmid"]),
         opens: i(&a["allowsubmissionsfromdate"]),
         due: i(&a["duedate"]),
@@ -198,10 +213,19 @@ pub async fn sync_all(
                 .await?;
                 let mut t = from_assign(c, asg, &st, &base);
                 if st.is_null() {
-                    // transient failure: keep cached status/grade/feedback
+                    // transient failure: keep cached status/grade/feedback/delivered files
                     if let Some(o) = db.task(&t.id).map_err(CoreError::Other)? {
-                        (t.moodle_status, t.grade, t.feedback_html) =
-                            (o.moodle_status, o.grade, o.feedback_html);
+                        (
+                            t.moodle_status,
+                            t.grade,
+                            t.feedback_html,
+                            t.submission_files,
+                        ) = (
+                            o.moodle_status,
+                            o.grade,
+                            o.feedback_html,
+                            o.submission_files,
+                        );
                     }
                 }
                 out.push(t);
@@ -420,5 +444,37 @@ mod tests {
         let out = proxy_urls(h);
         assert!(out.contains(r#"src="/api/moodle-file?url=https%3A%2F%2Fm%2Fwebservice%2Fpluginfile.php%2F1%2Fa%20b.png%3Fx%3D1""#), "{out}");
         assert!(out.contains("https://other/x"));
+    }
+
+    #[test]
+    fn submission_files_and_sizes_parsed() {
+        let a = json!({"id": 7, "cmid": 70, "name": "A",
+            "introattachments": [{"filename": "e.pdf", "fileurl": "u", "mimetype": "application/pdf", "filesize": 55}]});
+        let st = json!({"lastattempt": {"submission": {"status": "submitted", "plugins": [
+            {"type": "comments"},
+            {"type": "file", "fileareas": [{"area": "submission_files", "files": [
+                {"filename": "a_amin.docx", "fileurl": "https://m/pluginfile.php/1/a_amin.docx",
+                 "mimetype": "application/x", "filesize": 1234, "timemodified": 99}]}]}]}}});
+        let t = from_assign(&c(), &a, &st, "https://m");
+        assert_eq!(t.attachments[0].filesize, 55);
+        assert_eq!(t.submission_files.len(), 1);
+        let f = &t.submission_files[0];
+        assert_eq!(
+            (f.filename.as_str(), f.filesize, f.timemodified),
+            ("a_amin.docx", 1234, 99)
+        );
+    }
+
+    #[test]
+    fn no_submission_plugins_means_no_files() {
+        let st = json!({"lastattempt": {"submission": {"status": "draft"}}});
+        assert!(from_assign(&c(), &json!({"id": 9, "cmid": 90}), &st, "b")
+            .submission_files
+            .is_empty());
+        assert!(
+            from_assign(&c(), &json!({"id": 9, "cmid": 90}), &Value::Null, "b")
+                .submission_files
+                .is_empty()
+        );
     }
 }
