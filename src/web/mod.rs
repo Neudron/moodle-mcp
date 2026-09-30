@@ -7,6 +7,7 @@ pub mod guard;
 pub mod ide;
 pub mod office;
 pub mod preview;
+pub mod organize;
 pub mod readme;
 pub mod shots;
 pub mod scan;
