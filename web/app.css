@@ -401,3 +401,14 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 .row .cn{display:inline-block;vertical-align:bottom;max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 small{font-size:16px}
+
+/* AI scan */
+.v-scan{display:flex;flex-direction:column;gap:var(--s1);margin:var(--s1) 0}
+.v-scan-p:empty,.v-scan-l:empty{display:none}
+.v-scan-l{margin:0;padding-left:var(--s3);font-size:14px}
+#scan-slot{margin-top:var(--s2)}#scan-slot .v-scan button{width:100%}#scan-slot .v-scan-p .dim{font-size:14px}
+[aria-disabled=true].primary{opacity:.6;cursor:not-allowed}
+.v-props{display:flex;flex-direction:column;gap:var(--s2)}
+.v-prop{background:var(--raised);border:1px solid var(--line);border-radius:var(--r-lg);padding:var(--s2);display:flex;flex-direction:column;gap:var(--s1)}
+.v-prop h3{margin:0;font-size:18px;color:var(--text)}.v-prop p{margin:0}.v-prop blockquote{margin:0;border-left:3px solid var(--accent);padding-left:var(--s2);color:var(--dim)}
+@media (max-width:899px){#scan-slot{display:none}}

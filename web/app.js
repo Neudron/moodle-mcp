@@ -137,8 +137,67 @@ function card(tv, hideCourse) {
     dueChip(tv));
 }
 
+// AI scan: one poller shared by every scanControl() instance (sidebar + tauler).
+function scanTotals(p) {
+  const total = Object.values(p.counts || {}).reduce((a, n) => a + n, 0);
+  return { total, finished: total - ((p.counts || {}).pending || 0) };
+}
+const evidenceOf = (html) => new DOMParser().parseFromString(html || '', 'text/html').querySelector('blockquote')?.textContent.trim() || '';
+const SCAN = { nodes: new Set(), p: null, timer: 0 };
+async function scanPoll() {
+  let p;
+  try { p = await api('/api/scan'); } catch (e) { return; }
+  const was = SCAN.p?.state;
+  SCAN.p = p;
+  for (const n of SCAN.nodes) { if (n.seen && !n.isConnected) SCAN.nodes.delete(n); else { n.seen = true; n.render(p); } }
+  if (p.state === 'running') { SCAN.timer ||= setInterval(scanPoll, 2000); return; }
+  clearInterval(SCAN.timer); SCAN.timer = 0;
+  if (was !== 'running') return;
+  const c = p.counts || {};
+  setText($('#live'), p.state === 'done' ? `Escaneig acabat: ${p.proposed} proposades, ${c.needs_review || 0} per revisar, ${c.error || 0} errors` : p.state === 'cancelled' ? 'Escaneig cancel·lat' : "Escaneig interromput");
+  if (route.cur === 'tauler') route({ soft: true });
+}
+function scanControl() {
+  const SL = { needs_review: 'Per revisar', error: 'Error' };
+  const go = h('button', { type: 'button', class: 'primary', onclick: async () => {
+    if (SCAN.p?.state === 'running') return;
+    try { await api('/api/scan', { method: 'POST' }); } catch (e) { if (e.status === 409) toast('Ja hi ha un escaneig en marxa'); else return toast(e.message, true); }
+    scanPoll();
+  } }, ic('search'), 'Escaneja Moodle amb IA');
+  const stop = h('button', { type: 'button', class: 'ghost', hidden: true, onclick: async () => { try { await api('/api/scan/cancel', { method: 'POST' }); } catch (e) { toast(e.message, true); } scanPoll(); } }, 'Cancel·la');
+  const prog = h('div', { class: 'v-scan-p' }), list = h('ul', { class: 'v-scan-l' });
+  const det = h('details', { hidden: true }, h('summary', {}, 'Elements per revisar'), list);
+  const node = h('section', { class: 'v-scan', 'aria-label': 'Escaneig amb IA' }, h('div', { class: 'field-row' }, go, stop), prog, det);
+  node.render = (p) => {
+    const run = p.state === 'running', { finished, total } = scanTotals(p);
+    go.setAttribute('aria-disabled', String(run)); stop.hidden = !run;
+    prog.replaceChildren(...(run ? [bar(finished, total, "Progrés de l'escaneig", '', `${finished} de ${total} fitxers`)]
+      : p.state === 'idle' ? [] : [h('p', { class: 'dim' }, `${{ done: 'Acabat', cancelled: 'Cancel·lat', interrupted: 'Interromput' }[p.state] || p.state}: ${p.proposed || 0} proposades`)]));
+    list.replaceChildren(...(p.items || []).map((i) => h('li', {}, h('b', {}, SL[i.status] || i.status), ` ${i.course} · `, h('span', { class: 'mono' }, i.src), i.error ? ` · ${i.error}` : '')));
+    det.hidden = !(p.items || []).length;
+  };
+  SCAN.nodes.add(node);
+  if (SCAN.p) node.render(SCAN.p);
+  scanPoll();
+  return node;
+}
+// "Proposades per IA": evidence is text only, preview loads on first open.
+function proposal(tv) {
+  const t = tv.task, box = h('div', { class: 'v-preview' }), web = /^https?:\/\//.test(t.url);
+  const act = (keep, label) => h('button', { type: 'button', class: keep ? 'primary' : '', onclick: async () => {
+    try { await api(`/api/tasks/${enc(t.id)}/ai`, { method: 'POST', body: { keep } }); setText($('#live'), keep ? `Mantinguda: ${t.title}` : `Descartada: ${t.title}`); route({ soft: true }); } catch (e) { toast(e.message, true); } } }, label);
+  return h('article', { class: 'v-prop' },
+    h('h3', {}, h('a', { href: `#/tasca/${enc(t.id)}` }, t.title)),
+    h('p', { class: 'm' }, h('span', { class: 'cn', style: { '--h': hue(t.course) } }, cname(t.course)), t.due ? ` · ${when(t.due)}` : null),
+    evidenceOf(t.body_html) ? h('blockquote', {}, evidenceOf(t.body_html)) : null,
+    h('p', { class: 'dim' }, 'Font: ', web ? h('a', { href: t.url, target: '_blank', rel: 'noopener' }, t.url, ic('ext'), h('span', { class: 'sr-only' }, ' (obre en una pestanya nova)')) : h('a', { href: `#/fitxers/${enc(t.url)}` }, t.url)),
+    h('details', { ontoggle: (e) => { if (e.target.open && !box.hasChildNodes()) preview(box, web ? { moodleUrl: t.url } : { path: t.url }); } }, h('summary', {}, 'Previsualitza'), box),
+    h('div', { class: 'field-row' }, act(true, 'Mantén'), act(false, 'Descarta')));
+}
+
 views.tauler = async () => {
-  const all = (await api('/api/tasks')).filter((tv) => tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
+  const tasks = (await api('/api/tasks')).filter((tv) => tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
+  const props = tasks.filter((tv) => tv.task.source === 'ai' && tv.task.ai_confirmed == null), all = tasks.filter((tv) => !props.includes(tv));
   const now = Date.now() / 1000, week = now + 7 * 86400;
   // Overdue by more than 60 days = last school year's leftovers: collapsed, not counted as pending.
   const stale = (tv) => !isDone(tv) && tv.task.due && tv.task.due < now - 60 * 86400;
@@ -149,7 +208,7 @@ views.tauler = async () => {
     ['done', 'Lliurades', isDone],
   ];
   const pendingList = all.filter((tv) => !isDone(tv) && !stale(tv));
-  if (!all.length) return h('section', { class: 'v-tauler' }, h('h1', {}, 'Tauler'), empty('Encara no hi ha tasques', 'Sincronitza per carregar-les.'));
+  if (!all.length && !props.length) return h('section', { class: 'v-tauler' }, h('h1', {}, 'Tauler'), scanControl(), empty('Encara no hi ha tasques', 'Sincronitza per carregar-les.'));
   const pending = pendingList.length;
   const old = all.filter(stale);
   const doneN = all.filter(isDone).length, total = all.length - old.length;
@@ -209,7 +268,9 @@ views.tauler = async () => {
       next ? h('span', {}, 'La propera: ', h('a', { href: `#/tasca/${enc(next.task.id)}` }, next.task.title)) : null,
       total ? bar(doneN, total, 'Tasques lliurades', '', `${doneN} de ${total} lliurades`) : null),
     all.length ? h('div', { class: 'v-tools' }, seg, h('label', { class: 'sr-only', for: 'filter' }, 'Filtra tasques'), input) : null,
-    status, sections, oldEl, none);
+    scanControl(), status,
+    props.length ? h('section', { class: 'v-grp g-ai' }, h('h2', { class: 'grp' }, 'Proposades per IA', h('span', { class: 'n' }, props.length)), h('div', { class: 'v-props' }, props.map(proposal))) : null,
+    sections, oldEl, none);
   if (input.value) apply(); // filter survives soft refreshes
   return out;
 };
@@ -462,6 +523,7 @@ async function loadCourses() {
   markNav();
 }
 
+$('#scan-slot').append(scanControl());
 $('#sync').addEventListener('click', async (e) => {
   const b = e.currentTarget;
   if (b.getAttribute('aria-busy') === 'true') return;
