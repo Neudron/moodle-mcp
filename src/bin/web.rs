@@ -28,6 +28,7 @@ async fn main() -> Result<()> {
                 }
                 Err(e) => tracing::warn!(error = %e, "background sync failed"),
             }
+            web::apple::proactive(&bg).await;
             let r = web::apple::sync(&bg).await;
             if !r.errors.is_empty() {
                 tracing::warn!(errors = ?r.errors, "apple sync");

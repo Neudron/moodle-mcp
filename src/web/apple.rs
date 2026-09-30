@@ -6,6 +6,7 @@ use tokio::process::Command;
 
 const NAME: &str = "Institut";
 static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static IMPORT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Default, Serialize)]
 pub struct Summary {
@@ -106,14 +107,128 @@ pub async fn cli(args: &[&str]) -> Result<String, AppleErr> {
     Ok(clean(v["uid"].as_str().unwrap_or("")))
 }
 
+/// Reminders auth state for one pass: `blocked` = session dead, `tried` = importer already used.
+struct Gate {
+    blocked: bool,
+    tried: bool,
+}
+
 /// todo-* call that is skipped (no spawn) once Reminders auth is known dead.
-async fn todo_cli(args: &[&str], blocked: &mut bool, s: &mut Summary) -> Result<String, ()> {
-    if *blocked {
+/// First Auth failure triggers one cookie import and one retry of this call.
+async fn todo_cli(app: &App, args: &[&str], g: &mut Gate, s: &mut Summary) -> Result<String, ()> {
+    if g.blocked {
         return Err(());
     }
-    cli(args).await.map_err(|e| {
-        *blocked |= e.kind == Kind::Auth;
+    let mut r = cli(args).await;
+    if matches!(&r, Err(e) if e.kind == Kind::Auth) && !g.tried {
+        g.tried = true;
+        if import(app, IMPORT_GAP).await == Imp::Ok {
+            r = cli(args).await;
+        }
+    }
+    r.map_err(|e| {
+        g.blocked |= e.kind == Kind::Auth;
         s.fail(e);
+    })
+}
+
+const IMPORT_GAP: i64 = 15 * 60;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Imp {
+    Ok,
+    Failed,
+    /// Seconds until the next attempt is allowed.
+    Limited(i64),
+}
+
+/// Importer command: ICLOUD_IMPORT_CMD, else the in-repo script unless ICLOUD_GLASS_CMD is faked.
+fn importer() -> Option<Command> {
+    let bin = std::env::var("ICLOUD_IMPORT_CMD").ok().or_else(|| {
+        std::env::var_os("ICLOUD_GLASS_CMD").is_none().then(|| {
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/scripts/icloud_import_cookies.py"
+            )
+            .into()
+        })
+    })?;
+    let mut c = Command::new(bin);
+    c.kill_on_drop(true);
+    Some(c)
+}
+
+/// Import the live Firefox icloud.com cookies, at most once per `gap` seconds.
+pub async fn import(app: &App, gap: i64) -> Imp {
+    let _g = IMPORT_LOCK.lock().await;
+    let n = now();
+    let last = app
+        .db
+        .kv_get("apple_import_at")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    if n - last < gap {
+        return Imp::Limited(gap - (n - last));
+    }
+    app.db.kv_set("apple_import_at", &n.to_string()).ok();
+    let Some(mut c) = importer() else {
+        return Imp::Failed;
+    };
+    let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(120), c.output()).await else {
+        return Imp::Failed;
+    };
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    if let Some(e) = v["token_expiry"].as_i64() {
+        app.db.kv_set("apple_token_expiry", &e.to_string()).ok();
+    }
+    if out.status.success() {
+        Imp::Ok
+    } else {
+        Imp::Failed
+    }
+}
+
+/// Cookie expiry under 7 days (or passed): time to re-import.
+pub fn needs_refresh(expiry: i64, at: i64) -> bool {
+    expiry > 0 && expiry - at < 7 * 86400
+}
+
+/// Daily check from the background loop: re-import when the token nears expiry.
+pub async fn proactive(app: &App) {
+    let Some(mut c) = importer() else { return };
+    let Ok(Ok(out)) =
+        tokio::time::timeout(Duration::from_secs(60), c.arg("--check").output()).await
+    else {
+        return;
+    };
+    let Ok(exp) = String::from_utf8_lossy(&out.stdout).trim().parse::<i64>() else {
+        return;
+    };
+    app.db.kv_set("apple_token_expiry", &exp.to_string()).ok();
+    if needs_refresh(exp, now()) {
+        import(app, 86400).await;
+    }
+}
+
+/// Payload of GET /api/apple/status (no secrets).
+pub fn status(app: &App) -> serde_json::Value {
+    let kv = |k: &str| app.db.kv_get(k).ok().flatten();
+    let num = |k: &str| kv(k).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+    let state = kv("apple_state").unwrap_or_default();
+    let reminders = if marker() || state == "auth" {
+        "auth"
+    } else if !state_dir().join("pyicloud").exists() {
+        "missing"
+    } else {
+        "ok"
+    };
+    serde_json::json!({
+        "reminders": reminders,
+        "calendar": if state == "err" { "error" } else { "ok" },
+        "last_import_at": num("apple_import_at"),
+        "token_expiry": num("apple_token_expiry"),
     })
 }
 
@@ -172,8 +287,17 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
     let at = now();
     let tasks = app.db.all_tasks()?;
     let rows = app.db.caldav_rows()?;
-    let mut blocked = marker();
-    if blocked {
+    let mut g = Gate {
+        blocked: marker(),
+        tried: false,
+    };
+    if g.blocked {
+        g.tried = true;
+        if import(app, IMPORT_GAP).await == Imp::Ok {
+            g.blocked = marker();
+        }
+    }
+    if g.blocked {
         s.fail(AppleErr::new(
             Kind::Auth,
             "Recordatoris: sessió d'iCloud caducada",
@@ -194,7 +318,7 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
             }
         }
         if !todo.is_empty() {
-            match todo_cli(&["todo-done", todo, "--json"], &mut blocked, s).await {
+            match todo_cli(app, &["todo-done", todo, "--json"], &mut g, s).await {
                 Ok(_) => s.done += 1,
                 Err(_) => ok = false,
             }
@@ -268,7 +392,7 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
             }
             // Reminders have no update call: retire the old one, create a new one.
             if !todo.is_empty() {
-                match todo_cli(&["todo-done", &todo, "--json"], &mut blocked, s).await {
+                match todo_cli(app, &["todo-done", &todo, "--json"], &mut g, s).await {
                     Ok(_) => (todo, s.done) = (String::new(), s.done + 1),
                     Err(_) => ok = false,
                 }
@@ -276,6 +400,7 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
         }
         if todo.is_empty() {
             if let Ok(u) = todo_cli(
+                app,
                 &[
                     "todo-new",
                     "--list",
@@ -288,7 +413,7 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
                     &url,
                     "--json",
                 ],
-                &mut blocked,
+                &mut g,
                 s,
             )
             .await

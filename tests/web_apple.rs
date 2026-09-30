@@ -31,7 +31,31 @@ impl Fake {
         std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::env::set_var("ICLOUD_GLASS_CMD", &sh);
         std::env::set_var("ICLOUD_GLASS_STATE", dir.join("state"));
+        // Fake importer: fails unless `imp_ok` exists; success heals marker + todo failures.
+        let imp = dir.join("imp.sh");
+        std::fs::write(
+            &imp,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> {d}/imp_log\nif [ -f {d}/imp_ok ]; then rm -f {d}/state/reminders-auth-required {d}/fail_todo-new; echo '{{\"ok\":true,\"token_expiry\":1793381126}}'; exit 0; fi\necho '{{\"ok\":false,\"kind\":\"auth\",\"msg\":\"stale\"}}'; exit 2\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&imp, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("ICLOUD_IMPORT_CMD", &imp);
         Fake { dir }
+    }
+    fn import_ok(&self) {
+        std::fs::write(self.dir.join("imp_ok"), "").unwrap();
+    }
+    fn imports(&self) -> usize {
+        std::fs::read_to_string(self.dir.join("imp_log"))
+            .unwrap_or_default()
+            .lines()
+            .count()
+    }
+    fn marker(&self) {
+        std::fs::create_dir_all(self.dir.join("state")).unwrap();
+        std::fs::write(self.dir.join("state/reminders-auth-required"), "").unwrap();
     }
     fn fail(&self, cmd: &str, kind: &str) {
         std::fs::write(self.dir.join(format!("fail_{cmd}")), kind).unwrap();
@@ -233,4 +257,96 @@ async fn mirrors_lifecycle() {
         .unwrap();
     let r = apple::sync(&app).await;
     assert_eq!((r.deleted, r.done), (1, 1));
+}
+
+#[tokio::test]
+async fn marker_triggers_one_import_then_todos_run() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("impmarker");
+    f.import_ok();
+    f.marker();
+    let app = f.app();
+    let due = web::now() + 86400 * 5;
+    app.db
+        .upsert_tasks(&[task_n(1, due), task_n(2, due)])
+        .unwrap();
+    let r = apple::sync(&app).await;
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!((f.imports(), f.calls("todo-new")), (1, 2));
+    assert_eq!(app.db.kv_get("apple_state").unwrap().unwrap(), "ok");
+    assert_eq!(
+        app.db.kv_get("apple_token_expiry").unwrap().unwrap(),
+        "1793381126"
+    );
+}
+
+#[tokio::test]
+async fn todo_auth_failure_imports_once_and_retries_once() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("impretry");
+    f.fail("todo-new", "auth");
+    f.import_ok();
+    let app = f.app();
+    let due = web::now() + 86400 * 5;
+    app.db
+        .upsert_tasks(&[task_n(1, due), task_n(2, due), task_n(3, due)])
+        .unwrap();
+    let r = apple::sync(&app).await;
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!((f.imports(), f.calls("todo-new")), (1, 4));
+    assert!(app
+        .db
+        .caldav_rows()
+        .unwrap()
+        .iter()
+        .all(|r| r.3 == "U-todo-new"));
+}
+
+#[tokio::test]
+async fn failed_import_leaves_auth_and_no_retry() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("impfail");
+    f.fail("todo-new", "auth");
+    let app = f.app();
+    let due = web::now() + 86400 * 5;
+    app.db
+        .upsert_tasks(&[task_n(1, due), task_n(2, due)])
+        .unwrap();
+    let r = apple::sync(&app).await;
+    assert!(r.auth());
+    assert_eq!((f.imports(), f.calls("todo-new")), (1, 1));
+    assert_eq!(app.db.kv_get("apple_state").unwrap().unwrap(), "auth");
+}
+
+#[tokio::test]
+async fn import_rate_limited() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("imprate");
+    f.import_ok();
+    f.marker();
+    let app = f.app();
+    let due = web::now() + 86400 * 5;
+    app.db.upsert_tasks(&[task_n(1, due)]).unwrap();
+    app.db
+        .kv_set("apple_import_at", &(web::now() - 60).to_string())
+        .unwrap();
+    let r = apple::sync(&app).await;
+    assert!(r.auth(), "import skipped inside 15 min window");
+    assert_eq!(f.imports(), 0);
+    app.db
+        .kv_set("apple_import_at", &(web::now() - 1000).to_string())
+        .unwrap();
+    let r = apple::sync(&app).await;
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(f.imports(), 1);
+    assert!(matches!(apple::import(&app, 60).await, apple::Imp::Limited(n) if n > 0));
+}
+
+#[test]
+fn proactive_decision() {
+    let now = 1_000_000;
+    assert!(apple::needs_refresh(now + 86400 * 6, now));
+    assert!(!apple::needs_refresh(now + 86400 * 8, now));
+    assert!(!apple::needs_refresh(0, now), "unknown expiry: leave alone");
+    assert!(apple::needs_refresh(now - 5, now), "already expired");
 }

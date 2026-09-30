@@ -513,6 +513,42 @@ async fn apple_auth_failure_is_409_and_visible_in_status() {
         .unwrap();
     assert_eq!(st["apple"]["state"], "auth");
     assert_eq!(st["errors"][0]["kind"], "apple-auth");
+    // /api/apple/status + /api/apple/reimport (1 per minute)
+    let st: serde_json::Value = c
+        .get(format!("{base}/api/apple/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        (st["reminders"].as_str(), st["calendar"].as_str()),
+        (Some("auth"), Some("ok"))
+    );
+    let imp = root.join("imp.sh");
+    std::fs::write(
+        &imp,
+        "#!/bin/sh\necho '{\"ok\":true,\"token_expiry\":42}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&imp, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::env::set_var("ICLOUD_IMPORT_CMD", &imp);
+    app.db.kv_set("apple_import_at", "0").unwrap();
+    let r = post(&c, &base, "/api/apple/reimport").send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(v["token_expiry"], 42);
+    let r = post(&c, &base, "/api/apple/reimport").send().await.unwrap();
+    assert_eq!(r.status(), 429);
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert!(v["next_try"].as_i64().unwrap() > 0);
+    let r = c
+        .post(format!("{base}/api/apple/reimport"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403, "guard applies");
     // pruned to 200 rows
     for i in 0..250 {
         app.db.log_error("t", "k", &i.to_string()).unwrap();

@@ -118,6 +118,8 @@ pub fn routes() -> Router<Arc<App>> {
         .merge(crate::web::ide::router())
         .merge(crate::web::organize::router())
         .route("/api/apple-sync", post(apple_sync))
+        .route("/api/apple/status", get(apple_status))
+        .route("/api/apple/reimport", post(apple_reimport))
         .route("/api/office/config", post(office_config))
         .route("/api/open", post(open_local))
 }
@@ -530,6 +532,28 @@ async fn apple_sync(State(app): S) -> (StatusCode, Json<Value>) {
         StatusCode::OK
     };
     (code, Json(v))
+}
+
+async fn apple_status(State(app): S) -> Json<Value> {
+    Json(crate::web::apple::status(&app))
+}
+
+async fn apple_reimport(State(app): S) -> (StatusCode, Json<Value>) {
+    use crate::web::apple::Imp;
+    match crate::web::apple::import(&app, 60).await {
+        Imp::Limited(n) => (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"error": "massa aviat", "next_try": n})),
+        ),
+        Imp::Failed => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "no s'ha pogut importar", "kind": "auth"})),
+        ),
+        Imp::Ok => {
+            crate::web::apple::sync(&app).await;
+            (StatusCode::OK, Json(crate::web::apple::status(&app)))
+        }
+    }
 }
 
 async fn sync_now(State(app): S) -> R<Json<Value>> {
