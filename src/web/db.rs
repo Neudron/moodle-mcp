@@ -9,10 +9,13 @@ use std::sync::Mutex;
 pub const STATUSES: [&str; 4] = ["per revisar", "revisat OK", "lliurat", "llegit"];
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct Attachment {
     pub filename: String,
     pub fileurl: String,
     pub mimetype: String,
+    pub filesize: i64,
+    pub timemodified: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -25,6 +28,7 @@ pub struct Task {
     pub title: String,
     pub body_html: String,
     pub attachments: Vec<Attachment>,
+    pub submission_files: Vec<Attachment>,
     pub url: String,
     pub opens: i64,
     pub due: i64,

@@ -98,3 +98,38 @@ async fn transient_status_failure_keeps_cache_no_false_grade() {
         "{ev:?}"
     );
 }
+
+#[tokio::test]
+async fn sync_stores_submission_files_and_intro_sizes() {
+    let m = MockMoodle::healthy().await;
+    let db = Db::memory().unwrap();
+    sync_all(&Moodle::new(m.base(), TOKEN), &db, &root("subfiles"), false)
+        .await
+        .unwrap();
+    let t = db.task("assign:7").unwrap().unwrap();
+    assert_eq!(t.attachments[0].filesize, 4096);
+    assert_eq!(t.submission_files.len(), 1);
+    assert_eq!(t.submission_files[0].filename, "M4_A1_A_RA2_amin.docx");
+    assert_eq!(t.submission_files[0].filesize, 2048);
+}
+
+#[tokio::test]
+async fn transient_status_failure_keeps_submission_files() {
+    let db = Db::memory().unwrap();
+    let r = root("subkeep");
+    let ok = MockMoodle::healthy().await;
+    sync_all(&Moodle::new(ok.base(), TOKEN), &db, &r, false)
+        .await
+        .unwrap();
+    let want = db.task("assign:7").unwrap().unwrap().submission_files;
+    assert!(!want.is_empty());
+    let bad = MockMoodle::start(MockConfig {
+        fail_fn: Some("mod_assign_get_submission_status"),
+        ..Default::default()
+    })
+    .await;
+    sync_all(&Moodle::new(bad.base(), TOKEN), &db, &r, false)
+        .await
+        .unwrap();
+    assert_eq!(db.task("assign:7").unwrap().unwrap().submission_files, want);
+}
