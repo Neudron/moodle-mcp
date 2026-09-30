@@ -603,10 +603,10 @@ async fn process(app: &App, job: i64, it: &Item) {
 }
 
 async fn run_job(app: Arc<App>, job: i64) {
-    let items = inventory(
-        Path::new(&app.root),
-        &app.db.all_tasks().unwrap_or_default(),
-    );
+    let (a, tasks) = (Arc::clone(&app), app.db.all_tasks().unwrap_or_default());
+    let items = tokio::task::spawn_blocking(move || inventory(Path::new(&a.root), &tasks))
+        .await
+        .unwrap_or_default();
     for it in &items {
         app.db.scan_add_item(job, &it.src, &it.course, it.kind).ok();
     }

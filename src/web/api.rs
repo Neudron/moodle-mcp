@@ -8,7 +8,7 @@ use axum::{
     extract::{Path, Query, Request, State},
     http::{header, HeaderMap, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::{AppendHeaders, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -473,14 +473,15 @@ async fn moodle_file(State(app): S, Query(q): Query<UrlQ>) -> R<Response> {
     let ct = files::mime(std::path::Path::new(
         q.url.split(['?', '#']).next().unwrap_or(""),
     ));
-    // Remote bytes on our origin: always sandbox (blocks script in html/svg).
+    // Remote bytes on our origin: sandbox html/svg (blocks script); PDFs must not be sandboxed or Chrome will not render them.
+    let sandbox = ct.starts_with("text/html") || ct.starts_with("image/svg");
     Ok((
         [
             (header::CONTENT_TYPE, ct),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (header::CONTENT_DISPOSITION, "inline"),
-            (header::CONTENT_SECURITY_POLICY, "sandbox"),
         ],
+        AppendHeaders(sandbox.then_some((header::CONTENT_SECURITY_POLICY, "sandbox"))),
         bytes,
     )
         .into_response())
@@ -596,7 +597,13 @@ fn open_target(root: &std::path::Path, rel: &str) -> Result<(std::path::PathBuf,
 }
 
 async fn open_local(State(app): S, Json(b): Json<PathQ>) -> R<Json<Value>> {
-    let (p, rel) = open_target(std::path::Path::new(&app.root), &b.path).map_err(forbid)?;
+    let root = app.root.clone();
+    let q = b.path.clone();
+    let (p, rel) =
+        tokio::task::spawn_blocking(move || open_target(std::path::Path::new(&root), &q))
+            .await
+            .map_err(anyhow::Error::from)?
+            .map_err(forbid)?;
     repoint(&app, &b.path, &rel)?;
     std::process::Command::new("xdg-open")
         .arg(p)

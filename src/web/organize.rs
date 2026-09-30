@@ -140,25 +140,25 @@ async fn deliver(app: &App, t: &Task, out: &mut Delivered) -> Result<bool> {
     for a in &t.submission_files {
         let name = safe_name(&a.filename);
         let dst = dir.join(&name);
-        let have = std::fs::read(&dst).ok();
+        let have = tokio::fs::read(&dst).await.ok();
         // ponytail: same size == same file; a same-size edit is only caught when Moodle omits filesize.
         if a.filesize > 0 && have.as_ref().is_some_and(|h| h.len() as i64 == a.filesize) {
             delivered.push(name);
             continue;
         }
         let bytes = app.moodle.download(&a.fileurl).await?;
-        std::fs::create_dir_all(&dir)?;
+        tokio::fs::create_dir_all(&dir).await?;
         match have {
             None => {
-                std::fs::write(&dst, &bytes)?;
+                tokio::fs::write(&dst, &bytes).await?;
                 out.downloaded += 1;
                 changed = true;
             }
             Some(h) if h == bytes => {}
             Some(_) => {
                 let m = dir.join(moodle_copy_name(&name));
-                if std::fs::read(&m).ok().as_deref() != Some(&bytes[..]) {
-                    std::fs::write(&m, &bytes)?;
+                if tokio::fs::read(&m).await.ok().as_deref() != Some(&bytes[..]) {
+                    tokio::fs::write(&m, &bytes).await?;
                     out.moodle_copies += 1;
                     changed = true;
                 }
@@ -256,8 +256,8 @@ fn canon_labels(app: &App) -> Result<HashMap<String, String>> {
     Ok(best.into_iter().map(|(c, (_, m))| (c, m)).collect())
 }
 
-struct Cx<'a> {
-    app: &'a App,
+struct Cx {
+    app: Arc<App>,
     root: PathBuf,
     run: i64,
     /// Files synced from Moodle (state.json): never moved, renamed or trashed.
@@ -267,8 +267,8 @@ struct Cx<'a> {
     skipped: Vec<String>,
 }
 
-impl<'a> Cx<'a> {
-    fn new(app: &'a App) -> Result<Self> {
+impl Cx {
+    fn new(app: &Arc<App>) -> Result<Self> {
         let root = Path::new(&app.root).canonicalize()?;
         std::fs::create_dir_all(root.join(".moodle"))?;
         let teacher = crate::state::State::load(&app.root)?
@@ -278,7 +278,7 @@ impl<'a> Cx<'a> {
             .collect();
         let last = read_log(&root)?.iter().map(|o| o.run).max().unwrap_or(0);
         Ok(Self {
-            app,
+            app: Arc::clone(app),
             run: crate::web::now().max(last + 1),
             canon: canon_labels(app)?,
             root,
@@ -337,19 +337,19 @@ impl<'a> Cx<'a> {
     /// Move `from` to `to` and repoint task links. Same bytes already at `to`: the copy is trashed.
     /// Different bytes at `to`: nothing moves, the pair is reported.
     fn place(&mut self, from: &str, to: &str) -> Result<()> {
-        if from == to || self.protected(from) || self.protected(to) {
-            return Ok(());
+        if from == to || self.protected(from) || self.protected(to) || !self.abs(from).is_file() {
+            return Ok(()); // stale link (file deleted or moved by hand)
         }
         if self.abs(to).exists() {
             if sha_file(&self.abs(from))? == sha_file(&self.abs(to))? {
-                api::repoint(self.app, from, to).map_err(ae)?;
+                api::repoint(&self.app, from, to).map_err(ae)?;
                 return self.trash(from);
             }
             self.skipped.push(format!("{from}: {to} ja existeix"));
             return Ok(());
         }
         self.raw_mv(from, to)?;
-        api::repoint(self.app, from, to).map_err(ae)
+        api::repoint(&self.app, from, to).map_err(ae)
     }
 
     /// Everything outside moodle-mcp/ and dotdirs (files::list already hides those).
@@ -470,7 +470,7 @@ impl<'a> Cx<'a> {
                 }
                 if in_lliuraments {
                     if let Some(keep) = by_sha.get(&sha_file(&self.abs(&f))?) {
-                        api::repoint(self.app, &f, keep).map_err(ae)?;
+                        api::repoint(&self.app, &f, keep).map_err(ae)?;
                         self.trash(&f)?;
                         continue;
                     }
@@ -517,7 +517,9 @@ impl<'a> Cx<'a> {
             for f in &l.files {
                 if f.starts_with("submit/") && f.rsplit_once('/').map(|p| p.0) != Some(dir.as_str())
                 {
-                    self.place(f, &format!("{dir}/{}", base(f)))?;
+                    if let Err(e) = self.place(f, &format!("{dir}/{}", base(f))) {
+                        self.skipped.push(format!("{f}: {e}"));
+                    }
                 }
             }
             if l.module != label {
@@ -532,7 +534,7 @@ impl<'a> Cx<'a> {
 
     /// Rule 7: `.moodle/courses.json` rebuilt from `core_enrol_get_users_courses` (what list_courses returns).
     async fn courses_json(&mut self) -> Result<()> {
-        let app = self.app;
+        let app = Arc::clone(&self.app);
         let uid = app
             .moodle
             .call_with_retry("core_webservice_get_site_info", &[])
@@ -582,32 +584,38 @@ impl<'a> Cx<'a> {
 }
 
 /// Rules 3, 4, 1+2, 5, 6, then 7. A failing rule is reported and the others still run.
-pub async fn run(app: &App) -> Result<Report> {
+pub async fn run(app: &Arc<App>) -> Result<Report> {
     let _g = BUSY.lock().await;
-    let mut cx = Cx::new(app)?;
-    let mut errors: Vec<String> = [
-        cx.case_fix(),
-        cx.prova(),
-        cx.loose(),
-        cx.personal(),
-        cx.modules(),
-    ]
-    .into_iter()
-    .filter_map(Result::err)
-    .map(|e| e.to_string())
-    .collect();
-    let dirs = cx
-        .ops
-        .iter()
-        .filter(|o| o.kind == "move")
-        .filter_map(|o| cx.abs(&o.from).parent().map(Path::to_path_buf))
+    let a = Arc::clone(app);
+    let (mut cx, mut errors) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let mut cx = Cx::new(&a)?;
+        let errors: Vec<String> = [
+            cx.case_fix(),
+            cx.prova(),
+            cx.loose(),
+            cx.personal(),
+            cx.modules(),
+        ]
+        .into_iter()
+        .filter_map(Result::err)
+        .map(|e| e.to_string())
         .collect();
-    prune_up(&cx.root, dirs);
+        let dirs = cx
+            .ops
+            .iter()
+            .filter(|o| o.kind == "move")
+            .filter_map(|o| cx.abs(&o.from).parent().map(Path::to_path_buf))
+            .collect();
+        prune_up(&cx.root, dirs);
+        Ok((cx, errors))
+    })
+    .await??;
     if let Err(e) = cx.courses_json().await {
         errors.push(format!("courses.json: {}", redact_token(&e.to_string())));
     }
     if !cx.ops.is_empty() {
-        readme::write(&app.db, &app.root)?;
+        let a = Arc::clone(app);
+        tokio::task::spawn_blocking(move || readme::write(&a.db, &a.root)).await??;
     }
     Ok(Report {
         run: cx.run,
@@ -660,8 +668,13 @@ fn undo_op(app: &App, root: &Path, op: &Op) -> Result<()> {
 }
 
 /// Reverts the newest run in reverse order. Ops that cannot be reverted stay in the log.
-pub async fn undo(app: &App) -> Result<UndoReport> {
+pub async fn undo(app: &Arc<App>) -> Result<UndoReport> {
     let _g = BUSY.lock().await;
+    let app = Arc::clone(app);
+    tokio::task::spawn_blocking(move || undo_sync(&app)).await?
+}
+
+fn undo_sync(app: &App) -> Result<UndoReport> {
     let root = Path::new(&app.root).canonicalize()?;
     let all = read_log(&root)?;
     let Some(run) = all.iter().map(|o| o.run).max() else {

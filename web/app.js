@@ -926,20 +926,32 @@ views.ide = async (...parts) => {
     f.teacher && h('p', { class: 'v-idenote dim' }, 'Original del professor: en desar es crearà una còpia _amin.'),
     h('div', { class: 'v-idesplit' + (live ? ' live' : '') }, box, frame));
   wrap.addEventListener('mounted', async () => {
-    try {
-      await Promise.all([loadMonaco(), lang === 'markdown' && loadJs(MARKED)]);
-      if (!wrap.isConnected) return;
-      ed = window.monaco.editor.create(box, { value: f.content, language: lang, theme: curTheme() === 'light' ? 'vs' : 'vs-dark', automaticLayout: true, ariaLabel: 'Editor de codi' });
-      ed.addCommand(window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyS, save);
-      ed.onDidChangeModelContent(() => { setDirty(true); if (live) refresh(); });
-      if (live) refresh();
-      const stop = (ev) => { if (dirty) ev.preventDefault(); };
-      addEventListener('beforeunload', stop);
-      route.guard = async () => {
-        if (dirty && !(await confirmDialog('Canvis sense desar', h('p', {}, 'Si surts es perdran els canvis.'), 'Descarta'))) return false;
-        ed.dispose(); removeEventListener('beforeunload', stop); route.guard = null; return true;
-      };
-    } catch (e) { wrap.replaceChildren(errorPanel(e.message)); }
+    let m = null;
+    try { await Promise.all([loadMonaco(), lang === 'markdown' && loadJs(MARKED)]); m = window.monaco; }
+    catch (e) { /* CDN down: plain textarea below keeps the file editable */ }
+    if (!wrap.isConnected) return;
+    let onchange = () => {};
+    if (m) {
+      ed = m.editor.create(box, { value: f.content, language: lang, theme: curTheme() === 'light' ? 'vs' : 'vs-dark', automaticLayout: true, ariaLabel: 'Editor de codi' });
+      ed.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.KeyS, save);
+      ed.onDidChangeModelContent(() => onchange());
+    } else {
+      const ta = h('textarea', { class: 'v-idefall', spellcheck: 'false', 'aria-label': 'Editor de text', style: 'width:100%;height:100%;min-height:24rem;font:inherit;font-family:monospace' });
+      ta.value = f.content;
+      ta.addEventListener('input', () => onchange());
+      ta.addEventListener('keydown', (ev) => { if ((ev.ctrlKey || ev.metaKey) && ev.key === 's') { ev.preventDefault(); save(); } });
+      box.append(ta);
+      ed = { getValue: () => ta.value, dispose() {} };
+      bar.after(h('p', { class: 'v-idenote dim', role: 'status' }, "No s'ha pogut carregar l'editor avançat: s'usa un editor de text simple."));
+    }
+    onchange = () => { setDirty(true); if (live) refresh(); };
+    if (live) refresh();
+    const stop = (ev) => { if (dirty) ev.preventDefault(); };
+    addEventListener('beforeunload', stop);
+    route.guard = async () => {
+      if (dirty && !(await confirmDialog('Canvis sense desar', h('p', {}, 'Si surts es perdran els canvis.'), 'Descarta'))) return false;
+      ed.dispose(); removeEventListener('beforeunload', stop); route.guard = null; return true;
+    };
   }, { once: true });
   return wrap;
 };

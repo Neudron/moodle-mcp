@@ -67,10 +67,20 @@ fn is_teacher(root: &str, rel: &str) -> anyhow::Result<bool> {
         .any(|c| c.files.values().any(|f| f.path == rel)))
 }
 
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> R<T> + Send + 'static) -> R<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(anyhow::Error::from)?
+}
+
 async fn read(State(app): State<Arc<App>>, Query(q): Query<PathIn>) -> R<Json<Value>> {
-    let (p, rel) = resolve(&app.root, &q.path)?;
-    let (content, sha) = read_text(&p)?;
-    let teacher = is_teacher(&app.root, &rel)?;
+    let (rel, content, sha, teacher) = blocking(move || {
+        let (p, rel) = resolve(&app.root, &q.path)?;
+        let (content, sha) = read_text(&p)?;
+        let teacher = is_teacher(&app.root, &rel)?;
+        Ok((rel, content, sha, teacher))
+    })
+    .await?;
     Ok(Json(
         json!({"rel": rel, "content": content, "sha": sha, "teacher": teacher}),
     ))
@@ -114,19 +124,32 @@ fn save(root: &str, rel: &str, content: &str, base: &str) -> Result<String, Resp
     Ok(sha_hex(content.as_bytes()))
 }
 
+#[allow(clippy::result_large_err)]
+async fn save_blocking(app: Arc<App>, b: SaveIn) -> Result<String, Response> {
+    tokio::task::spawn_blocking(move || save(&app.root, &b.path, &b.content, &b.base_sha))
+        .await
+        .unwrap_or_else(|e| Err(ApiErr::from(anyhow::Error::from(e)).into_response()))
+}
+
 async fn save_h(State(app): State<Arc<App>>, Json(b): Json<SaveIn>) -> Response {
-    match save(&app.root, &b.path, &b.content, &b.base_sha) {
+    let r = save_blocking(app, b).await;
+    match r {
         Ok(sha) => Json(json!({"sha": sha})).into_response(),
         Err(r) => r,
     }
 }
 
 async fn copy(State(app): State<Arc<App>>, Json(b): Json<PathIn>) -> R<Json<Value>> {
-    let (src, _) = resolve(&app.root, &b.path)?;
-    read_text(&src)?; // refuse binary before creating anything
-    let rel = office::amin_copy(Path::new(&app.root), &b.path).map_err(forbid)?;
-    repoint(&app, &b.path, &rel)?;
-    let (_, sha) = read_text(&resolve(&app.root, &rel)?.0)?;
+    let a = Arc::clone(&app);
+    let (rel, sha) = blocking(move || {
+        let (src, _) = resolve(&a.root, &b.path)?;
+        read_text(&src)?; // refuse binary before creating anything
+        let rel = office::amin_copy(Path::new(&a.root), &b.path).map_err(forbid)?;
+        repoint(&a, &b.path, &rel)?;
+        let (_, sha) = read_text(&resolve(&a.root, &rel)?.0)?;
+        Ok((rel, sha))
+    })
+    .await?;
     Ok(Json(json!({"rel": rel, "sha": sha})))
 }
 

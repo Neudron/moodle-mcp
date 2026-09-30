@@ -509,3 +509,27 @@ async fn routes_run_log_undo_and_delivered() {
         403
     );
 }
+
+#[tokio::test]
+async fn stale_link_does_not_abort_modules_rule() {
+    let r = root("stale");
+    let app = app_at(&r, "http://127.0.0.1:9");
+    app.db.upsert_tasks(&[task("t1", "C1", "Act")]).unwrap();
+    app.db
+        .set_local(&local(
+            "t1",
+            "RA1",
+            "started",
+            &["submit/Old/ghost.docx", "submit/Old/real.docx"],
+        ))
+        .unwrap();
+    put(&r, "submit/Old/real.docx", "x");
+    let rep = organize::run(&app).await.unwrap();
+    assert!(
+        rep.errors.iter().all(|e| e.starts_with("courses.json")),
+        "{:?}",
+        rep.errors
+    );
+    assert!(rep.ops >= 1, "real file must still be placed");
+    assert!(!r.join("submit/Old/real.docx").exists());
+}

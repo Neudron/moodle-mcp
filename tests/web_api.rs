@@ -150,7 +150,7 @@ async fn raw_serves_accented_path_and_refuses_dotfiles() {
 }
 
 #[tokio::test]
-async fn moodle_file_is_sandboxed_and_ignores_fragment_ext() {
+async fn moodle_file_sandboxes_only_html_svg_and_ignores_fragment_ext() {
     let (base, _app, m, _root) = start("mfile").await;
     let c = reqwest::Client::new();
     let f = format!(
@@ -167,7 +167,14 @@ async fn moodle_file_is_sandboxed_and_ignores_fragment_ext() {
             .await
             .unwrap();
         assert_eq!(r.status(), 200, "{u}");
-        assert_eq!(r.headers()["content-security-policy"], "sandbox");
+        // text/plain (like pdf) must not be sandboxed; only html/svg are.
+        assert!(
+            r.headers()
+                .get_all("content-security-policy")
+                .iter()
+                .all(|v| v != "sandbox"),
+            "{u}"
+        );
         assert!(
             r.headers()["content-type"]
                 .to_str()
