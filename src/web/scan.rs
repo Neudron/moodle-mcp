@@ -165,6 +165,22 @@ pub fn event_text(out: &str) -> String {
         .join("\n")
 }
 
+/// Message of the first `error` event of an `opencode run --format json` stream.
+fn event_error(out: &str) -> Option<String> {
+    out.lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .find(|v| v["type"] == "error")
+        .map(|v| {
+            let e = &v["error"];
+            let m = e["data"]["message"].as_str().or(e["message"].as_str());
+            format!(
+                "{}: {}",
+                e["name"].as_str().unwrap_or("error"),
+                m.unwrap_or("")
+            )
+        })
+}
+
 /// Model text -> validated candidates. Anything that is not the schema is an error (next model).
 pub fn validate(raw: &str, doc: &str) -> anyhow::Result<Vec<Cand>> {
     let (a, b) = (raw.find('{'), raw.rfind('}'));
@@ -486,7 +502,12 @@ async fn ask(app: &App, m: Option<&str>, f: &Path, text: &str) -> anyhow::Result
             .arg(ws(app))
             .arg("-f")
             .arg(f);
-            Ok(event_text(&exec(c).await?))
+            let out = exec(c).await?;
+            let t = event_text(&out);
+            match event_error(&out) {
+                Some(e) if t.trim().is_empty() => Err(anyhow::anyhow!("{e}")),
+                _ => Ok(t),
+            }
         }
         None => {
             let mut c = Command::new(env::get("SCAN_CLINE").unwrap_or_else(|| "cline".into()));
@@ -975,6 +996,10 @@ mod tests {
         assert!(t.contains("Fer la memòria") && !t.contains("evil") && !t.contains("p{}"));
         let out = "{\"type\":\"step_start\"}\nnot json\n{\"type\":\"text\",\"part\":{\"text\":\"a\"}}\n{\"type\":\"text\",\"part\":{\"text\":\"b\"}}\n";
         assert_eq!(event_text(out), "a\nb");
+        let err =
+            "{\"type\":\"error\",\"error\":{\"name\":\"APIError\",\"data\":{\"message\":\"403\"}}}";
+        assert_eq!(event_error(err).as_deref(), Some("APIError: 403"));
+        assert_eq!(event_error(out), None);
         assert_eq!(ext_of("https://m/x/Enunciat.PDF?forcedownload=1"), "pdf");
         assert_eq!(ext_of("a.b/c"), "");
     }

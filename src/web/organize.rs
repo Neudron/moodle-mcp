@@ -150,11 +150,11 @@ pub async fn delivered_sync(app: &Arc<App>) -> Result<Delivered> {
     Ok(out)
 }
 
-/// Any file under `submit/` with these exact bytes (sha compared only when the size matches).
-fn same_in_submit(root: &str, bytes: &[u8]) -> bool {
+/// Any file under the task's own delivered folder `dir` with these exact bytes (sha compared only when the size matches).
+fn same_in_submit(root: &str, dir: &str, bytes: &[u8]) -> bool {
     let root = Path::new(root);
     let mut v = Vec::new();
-    files::walk(root, "submit", &mut v);
+    files::walk(root, dir, &mut v);
     let sha = sha_bytes(bytes);
     v.iter().any(|f| {
         let p = root.join(f);
@@ -190,7 +190,7 @@ async fn deliver(app: &Arc<App>, t: &Task, out: &mut Delivered) -> Result<bool> 
             continue;
         }
         let bytes = app.moodle.download(&a.fileurl).await?;
-        if have.is_none() && same_in_submit(&app.root, &bytes) {
+        if have.is_none() && same_in_submit(&app.root, &rel, &bytes) {
             continue; // already delivered under another name
         }
         tokio::fs::create_dir_all(&dir).await?;
@@ -795,4 +795,23 @@ async fn delivered_h(State(app): S) -> R<Json<Delivered>> {
 
 async fn run_h(State(app): S) -> R<Json<Report>> {
     Ok(Json(run(&app).await?))
+}
+
+#[cfg(test)]
+mod dedupe_tests {
+    use super::*;
+
+    #[test]
+    fn same_in_submit_is_scoped_to_task_dir() {
+        let d = std::env::temp_dir().join(format!("smx-dedupe-{}", std::process::id()));
+        for p in ["submit/draft", "submit/_lliurat/t"] {
+            std::fs::create_dir_all(d.join(p)).unwrap();
+        }
+        std::fs::write(d.join("submit/draft/a.docx"), b"x").unwrap();
+        let r = d.to_str().unwrap();
+        assert!(!same_in_submit(r, "submit/_lliurat/t", b"x"));
+        std::fs::write(d.join("submit/_lliurat/t/b.docx"), b"x").unwrap();
+        assert!(same_in_submit(r, "submit/_lliurat/t", b"x"));
+        std::fs::remove_dir_all(d).ok();
+    }
 }
