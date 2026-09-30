@@ -112,6 +112,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/status", get(status))
         .route("/api/sync", post(sync_now))
         .merge(crate::web::office::oo_router())
+        .merge(crate::web::organize::router())
         .route("/api/office/config", post(office_config))
         .route("/api/open", post(open_local))
 }
@@ -271,7 +272,7 @@ fn upstream(e: crate::errors::CoreError) -> ApiErr {
 }
 
 /// Moodle says "submitted": mark lliurat and move the folder. A failed move only warns (Moodle already has it).
-fn mark_lliurat(app: &App, id: &str) -> R<Option<String>> {
+pub fn mark_lliurat(app: &App, id: &str) -> R<Option<String>> {
     let mut l = app.db.local(id)?;
     l.status = "lliurat".into();
     let t = app.db.task(id)?.ok_or(bad("no existeix"))?;
@@ -546,7 +547,7 @@ async fn office_config(State(app): S, Json(q): Json<PathQ>) -> R<Json<Value>> {
 
 /// Tasks linking the teacher original must point at the `_amin` copy instead, or "Puja"
 /// would upload the unedited original. Keeps order, drops the duplicate if both were linked.
-fn repoint(app: &App, from: &str, to: &str) -> R<()> {
+pub fn repoint(app: &App, from: &str, to: &str) -> R<()> {
     if from == to {
         return Ok(());
     }

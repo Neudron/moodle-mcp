@@ -20,8 +20,13 @@ async fn main() -> Result<()> {
     let bg = Arc::clone(&app);
     tokio::spawn(async move {
         loop {
-            if let Err(e) = web::run_sync(&bg, true).await {
-                tracing::warn!(error = %e, "background sync failed");
+            match web::run_sync(&bg, true).await {
+                Ok(_) => {
+                    if let Err(e) = web::organize::delivered_sync(&bg).await {
+                        tracing::warn!(error = %e, "delivered sync failed");
+                    }
+                }
+                Err(e) => tracing::warn!(error = %e, "background sync failed"),
             }
             tokio::time::sleep(Duration::from_secs(30 * 60)).await;
         }
