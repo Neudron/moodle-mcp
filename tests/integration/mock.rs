@@ -588,3 +588,89 @@ async fn handle(stream: tokio::net::TcpStream, shared: &Shared) {
     let _ = stream.write_all(head.as_bytes()).await;
     let _ = stream.write_all(&payload).await;
 }
+
+// ---- OnlyOffice ConvertService mock (WP1) ----
+#[allow(dead_code)]
+pub const OO_SECRET: &str = "oo-secret";
+type Seen = Arc<std::sync::Mutex<HashMap<Vec<u8>, usize>>>;
+
+#[allow(dead_code)]
+pub struct MockOo {
+    pub url: String,
+    seen: Seen,
+}
+
+async fn oo_convert(
+    axum::extract::State(seen): axum::extract::State<Seen>,
+    headers: axum::http::HeaderMap,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> axum::Json<serde_json::Value> {
+    use serde_json::json;
+    let mut v = jsonwebtoken::Validation::default();
+    v.required_spec_claims.clear();
+    v.validate_exp = false;
+    let key = jsonwebtoken::DecodingKey::from_secret(OO_SECRET.as_bytes());
+    let ok = |t: &str| jsonwebtoken::decode::<serde_json::Value>(t, &key, &v).is_ok();
+    let bearer = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .unwrap_or("");
+    if !ok(body["token"].as_str().unwrap_or("")) || !ok(bearer) {
+        return axum::Json(json!({"error": -5}));
+    }
+    // Like the real DS: fetch the source from the signed url we sent.
+    let Ok(src) = reqwest::get(body["url"].as_str().unwrap_or(""))
+        .await
+        .and_then(|r| r.error_for_status())
+    else {
+        return axum::Json(json!({"error": -4}));
+    };
+    let bytes = src.bytes().await.unwrap_or_default().to_vec();
+    if bytes == b"corrupt" {
+        return axum::Json(json!({"error": -3}));
+    }
+    *seen.lock().unwrap().entry(bytes).or_default() += 1;
+    // fileUrl host is deliberately not ours: the server must re-anchor the path.
+    axum::Json(
+        json!({"endConvert": true, "percent": 100, "fileUrl": "http://localhost/cache/files/out.pdf"}),
+    )
+}
+
+#[allow(dead_code)]
+impl MockOo {
+    /// One per test binary: ONLYOFFICE_URL/JWT/OO_HOST are process-global env.
+    pub fn shared() -> &'static MockOo {
+        static OO: std::sync::OnceLock<MockOo> = std::sync::OnceLock::new();
+        OO.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                tokio::runtime::Runtime::new()
+                    .unwrap()
+                    .block_on(async move {
+                        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                        let seen: Seen = Arc::default();
+                        let app = axum::Router::new()
+                            .route("/ConvertService.ashx", axum::routing::post(oo_convert))
+                            .route(
+                                "/cache/files/out.pdf",
+                                axum::routing::get(|| async { "%PDF-mock" }),
+                            )
+                            .with_state(Arc::clone(&seen));
+                        tx.send((format!("http://{}", l.local_addr().unwrap()), seen))
+                            .unwrap();
+                        axum::serve(l, app).await.ok();
+                    });
+            });
+            let (url, seen) = rx.recv().unwrap();
+            std::env::set_var("ONLYOFFICE_JWT", OO_SECRET);
+            std::env::set_var("ONLYOFFICE_URL", &url);
+            std::env::set_var("OO_HOST", "127.0.0.1");
+            MockOo { url, seen }
+        })
+    }
+
+    pub fn converts_of(&self, src: &[u8]) -> usize {
+        self.seen.lock().unwrap().get(src).copied().unwrap_or(0)
+    }
+}

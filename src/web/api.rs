@@ -112,6 +112,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/status", get(status))
         .route("/api/sync", post(sync_now))
         .merge(crate::web::office::oo_router())
+        .merge(crate::web::preview::router())
         .route("/api/office/config", post(office_config))
         .route("/api/open", post(open_local))
 }
