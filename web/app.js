@@ -1,6 +1,13 @@
 'use strict';
 // moodle-web frontend. No build step. Remote HTML only via sandboxed iframes.
 const $ = (s, el = document) => el.querySelector(s);
+const SVGNS = 'http://www.w3.org/2000/svg';
+function ic(name, cls = '') {
+  const s = document.createElementNS(SVGNS, 'svg'), u = document.createElementNS(SVGNS, 'use');
+  s.setAttribute('class', `ic ${cls}`.trim()); s.setAttribute('aria-hidden', 'true');
+  u.setAttribute('href', `#i-${name}`); s.append(u);
+  return s;
+}
 
 function h(tag, attrs = {}, ...kids) {
   const el = document.createElement(tag);
@@ -24,36 +31,87 @@ async function api(path, opts = {}) {
 }
 
 const TZ = 'Europe/Madrid';
-const fmtLong = new Intl.DateTimeFormat('ca-ES', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-const when = (ts) => (ts ? fmtLong.format(new Date(ts * 1000)) : 'Sense data');
+const FMT = new Intl.DateTimeFormat('ca-ES', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+// '2 oct · 14:30', with weekday 'dj 2 oct · 14:30'. Built from parts so the locale's 'd’oct.' style never shows.
+const MON = ['gen', 'febr', 'març', 'abr', 'maig', 'juny', 'jul', 'ag', 'set', 'oct', 'nov', 'des'];
+function fmt(d, wk) { const o = {}; for (const p of FMT.formatToParts(d)) o[p.type] = p.value; return `${wk ? o.weekday.replace('.', '') + ' ' : ''}${o.day} ${MON[o.month - 1]} · ${o.hour}:${o.minute}`; }
+const fmtHM = new Intl.DateTimeFormat('ca-ES', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
+const syncAt = (ts) => { const d = new Date(ts * 1000); return d.toDateString() === new Date().toDateString() ? fmtHM.format(d) : fmt(d); };
+const when = (ts) => (ts ? fmt(new Date(ts * 1000), true) : 'Sense data');
+const dk = (d) => d.toLocaleDateString('en-CA', { timeZone: TZ });
 function left(ts) {
-  if (!ts) return { txt: '—', cls: '' };
+  if (!ts) return { t: 'Sense venciment', s: 'later' };
   const hrs = (ts * 1000 - Date.now()) / 36e5;
-  if (hrs < 0) return { txt: 'endarrerida', cls: 'late' };
-  if (hrs < 48) return { txt: `${Math.max(1, Math.round(hrs))} h`, cls: 'soon' };
-  return { txt: `${Math.round(hrs / 24)} dies`, cls: '' };
+  if (hrs < 0) return { t: 'Endarrerida', s: 'late' };
+  if (hrs < 24) return { t: `En ${Math.max(1, Math.round(hrs))} h`, s: 'soon' };
+  const d = Math.round((Date.parse(dk(new Date(ts * 1000))) - Date.parse(dk(new Date()))) / 864e5); // calendar days
+  if (d <= 1) return { t: 'Demà', s: 'soon' };
+  return { t: `En ${d} dies`, s: d < 7 ? 'week' : 'later' };
+}
+const GLYPH = { late: 'warn', soon: 'clock', done: 'check' };
+// Urgency chip: icon + text + colour, never colour alone.
+function dueChip(tv, big) {
+  const l = isDone(tv) ? { t: 'Lliurada', s: 'done' } : left(tv.task.due);
+  return h('span', { class: `due ${l.s}${big ? ' lg' : ''}`, title: tv.task.due ? when(tv.task.due) : null }, GLYPH[l.s] ? ic(GLYPH[l.s]) : null, l.t, tv.task.due ? h('span', { class: 'sr-only' }, ` (${when(tv.task.due)})`) : null);
 }
 function hue(s) { let x = 0; for (const c of s || '') x = (x * 31 + c.codePointAt(0)) % 360; return x; }
 const isDone = (tv) => tv.local.status === 'lliurat' || tv.task.moodle_status === 'submitted';
 const KIND = { assign: 'Tasca', quiz: 'Qüestionari', post: 'Avís', ai: 'IA' };
 const MSTATUS = { new: 'Sense enviar', draft: 'Esborrany', submitted: 'Enviada' };
+const LSTATUS = { 'per revisar': 'Per revisar', 'revisat OK': 'Revisada', lliurat: 'Lliurada' };
+const aiBadge = () => h('span', { class: 'badge ai' }, 'IA');
+let COURSES = {}; // shortname -> title
+const cname = (short) => COURSES[short] || short;
+const setText = (el, v) => { if (el.textContent !== v) el.textContent = v; }; // live regions re-announce on every write
 const enc = encodeURIComponent;
 
-function sandboxed(html) {
-  const css = '<style>body{font:16px/1.5 system-ui,sans-serif;margin:16px;color:#1b1722}img{max-width:100%}</style>';
+function sandboxed(html, label) {
   if (!html || !html.trim()) return h('p', { class: 'dim' }, 'Sense descripció a Moodle.');
-  return h('iframe', { class: 'body', sandbox: '', referrerpolicy: 'no-referrer', title: 'Contingut de Moodle', srcdoc: css + html });
+  const c = getComputedStyle(document.documentElement), v = (n) => c.getPropertyValue(n).trim();
+  const SERIF = v('--serif'), MONO = v('--mono'), INK = v('--text'), ACC = v('--accent'), RULE = v('--line'), DIM = v('--dim'), SUNK = v('--sunk');
+  const css = `<style>:root{color-scheme:${c.colorScheme}}html{background:transparent;color:${INK};font:18px/1.7 ${SERIF}}body{max-width:68ch;margin:0 auto;padding:24px 16px;overflow-wrap:anywhere}a{color:${ACC};text-underline-offset:.2em}img,video{max-width:100%;height:auto}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid ${RULE};padding:8px 16px;text-align:left}blockquote{border-left:3px solid ${ACC};margin:0;padding-left:16px;color:${DIM}}pre,code{font-family:${MONO};background:${SUNK}}h1,h2,h3,h4{font-family:${SERIF};line-height:1.3}*{max-width:100%}font,[style*=color]{color:inherit!important}[style*=background],[bgcolor]{background:transparent!important}a{color:${ACC}!important}</style>`;
+  return h('iframe', { class: 'sheet', sandbox: '', referrerpolicy: 'no-referrer', title: label || 'Contingut de Moodle', srcdoc: css + html });
 }
 
-function toast(msg) {
-  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
-  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove('on'), 3000);
+function toast(msg, bad) {
+  const t = $('#toast'), ok = $('#toast-s'), er = $('#toast-e'), x = $('#toast-x');
+  clearTimeout(toast.t); clearTimeout(toast.c); clearTimeout(toast.h);
+  ok.textContent = er.textContent = '';
+  // Clear first, set on the next tick: repeated messages get announced again.
+  toast.t = setTimeout(() => {
+    (bad ? er : ok).textContent = msg;
+    t.classList.add('on'); t.classList.toggle('bad', !!bad); x.hidden = !bad;
+    if (!bad) toast.h = setTimeout(hideToast, toast.ms = msg.length > 60 ? 6000 : 3000);
+  }, 50);
+}
+// Keep the live regions in the tree (sr-only when empty); clear the text once the fade is done.
+function hideToast() {
+  $('#toast').classList.remove('on'); $('#toast-x').hidden = true;
+  toast.c = setTimeout(() => { $('#toast-s').textContent = $('#toast-e').textContent = ''; }, 250);
+}
+$('#toast-x').addEventListener('click', hideToast);
+// Success toasts pause while hovered or focused.
+$('#toast').addEventListener('pointerenter', () => clearTimeout(toast.h));
+$('#toast').addEventListener('focusin', () => clearTimeout(toast.h));
+$('#toast').addEventListener('pointerleave', () => { if ($('#toast').classList.contains('on') && !$('#toast').classList.contains('bad')) toast.h = setTimeout(hideToast, toast.ms || 3000); });
+
+// Shared states. All text via h()/textContent.
+const empty = (title, text, btn) => h('div', { class: 'empty' }, h('h2', {}, title), text && h('p', {}, text), btn);
+const errorPanel = (msg) => h('div', { class: 'err-panel', role: 'alert' }, ic('warn'), h('p', {}, msg), h('button', { type: 'button', class: 'ghost', onclick: () => route() }, 'Torna-ho a provar'));
+const skeleton = () => h('div', {}, h('span', { class: 'sr-only' }, 'Carregant…'), [1, 2, 3].map(() => h('div', { class: 'skel' })));
+function bar(n, m, label, cls = '', text = `${n}/${m}`) {
+  return h('span', { class: 'barwrap' },
+    h('span', { class: `bar ${cls}`, role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': m, 'aria-valuenow': n, 'aria-label': label }, h('i', { style: { width: `${m ? Math.round((100 * n) / m) : 0}%` } })),
+    h('span', { class: 'num-t' }, text));
 }
 
-function confirmDialog(title, body, okLabel = "D'acord") {
+function confirmDialog(title, body, okLabel = "D'acord", info = false) {
   const d = $('#dlg');
+  $('#dlg menu button[value=no]').hidden = info;
   $('#dlg-t').textContent = title;
   $('#dlg-b').replaceChildren(body);
+  const p1 = body.querySelector?.('p'); // announce only the first paragraph, not long file lists
+  if (p1) { p1.id = 'dlg-d'; d.setAttribute('aria-describedby', 'dlg-d'); } else d.removeAttribute('aria-describedby');
   $('#dlg-ok').textContent = okLabel;
   d.returnValue = '';
   d.showModal();
@@ -64,18 +122,19 @@ const views = {};
 const taskExtras = [];
 const fileExtras = [];
 
-function card(tv) {
-  const t = tv.task, l = left(t.due);
+function card(tv, hideCourse) {
+  const t = tv.task, done = isDone(tv);
+  // Badges only when they differ from the default 'Sense enviar'.
   const badges = [
-    h('span', { class: 'badge' + (t.moodle_status === 'submitted' ? ' ok' : '') }, MSTATUS[t.moodle_status] || t.moodle_status),
-    tv.local.status && h('span', { class: 'badge ' + (tv.local.status === 'revisat OK' ? 'ok' : 'warn') }, tv.local.status),
-    t.source === 'ai' && h('span', { class: 'badge ai' }, 'extret per IA'),
+    t.moodle_status !== 'new' && h('span', { class: 'badge' + (t.moodle_status === 'submitted' ? ' ok' : '') }, MSTATUS[t.moodle_status] || t.moodle_status),
+    tv.local.status && h('span', { class: 'badge ' + (tv.local.status === 'revisat OK' ? 'ok' : 'warn') }, LSTATUS[tv.local.status] || tv.local.status),
+    t.source === 'ai' && aiBadge(),
   ];
-  return h('a', { class: 'card', href: `#/tasca/${enc(t.id)}` },
+  return h('a', { class: 'row' + (done ? ' done' : left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
     h('span', { class: 'dot', style: { '--h': hue(t.course) } }),
-    h('span', {}, h('span', { class: 't' }, t.title), badges, h('br'),
-      h('span', { class: 'm' }, t.course, ' · ', KIND[t.kind] || t.kind, ' · ', when(t.due))),
-    h('span', { class: `left ${isDone(tv) ? '' : l.cls}` }, isDone(tv) ? '✓' : l.txt));
+    h('span', { class: 't', title: t.title }, t.title),
+    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', style: { '--h': hue(t.course) } }, cname(t.course)), h('span', {}, KIND[t.kind] || t.kind), badges),
+    dueChip(tv));
 }
 
 views.tauler = async () => {
@@ -84,150 +143,356 @@ views.tauler = async () => {
   // Overdue by more than 60 days = last school year's leftovers: collapsed, not counted as pending.
   const stale = (tv) => !isDone(tv) && tv.task.due && tv.task.due < now - 60 * 86400;
   const groups = [
-    ['Endarrerides', (tv) => !isDone(tv) && !stale(tv) && tv.task.due && tv.task.due < now],
-    ['Aquesta setmana', (tv) => !isDone(tv) && tv.task.due >= now && tv.task.due <= week],
-    ['Més endavant', (tv) => !isDone(tv) && (!tv.task.due || tv.task.due > week)],
-    ['Lliurades', isDone],
+    ['late', 'Endarrerides', (tv) => !isDone(tv) && !stale(tv) && tv.task.due && tv.task.due < now],
+    ['week', 'Aquesta setmana', (tv) => !isDone(tv) && tv.task.due >= now && tv.task.due <= week],
+    ['later', 'Més endavant', (tv) => !isDone(tv) && (!tv.task.due || tv.task.due > week)],
+    ['done', 'Lliurades', isDone],
   ];
-  const pending = all.filter((tv) => !isDone(tv) && !stale(tv)).length;
+  const pendingList = all.filter((tv) => !isDone(tv) && !stale(tv));
+  if (!all.length) return h('section', { class: 'v-tauler' }, h('h1', {}, 'Tauler'), empty('Encara no hi ha tasques', 'Sincronitza per carregar-les.'));
+  const pending = pendingList.length;
   const old = all.filter(stale);
-  return h('section', {}, h('h1', {}, `Tens ${pending} ${pending === 1 ? 'tasca pendent' : 'tasques pendents'}`),
-    groups.map(([name, f]) => {
-      const items = all.filter(f);
-      if (name === 'Lliurades') items.reverse();
-      return items.length ? [h('h2', {}, `${name} · ${items.length}`), h('div', { class: 'cards' }, items.map(card))] : null;
-    }),
-    old.length ? h('details', {}, h('summary', {}, `Antigues sense enviar · ${old.length}`), h('div', { class: 'cards' }, old.map(card))) : null);
+  const doneN = all.filter(isDone).length, total = all.length - old.length;
+  const next = pendingList.filter((tv) => tv.task.due >= now).sort((a, b) => a.task.due - b.task.due)[0];
+
+  // Each block: { key, el, rows[] }. Filtering only toggles `hidden` on what is already rendered.
+  const blocks = [];
+  const block = (key, el, rows) => { blocks.push({ key, el, rows }); return el; };
+  const rowsOf = (items) => items.map((tv) => { const r = card(tv); return r; });
+  const grp = (key, name, items, late) => {
+    const rows = rowsOf(items);
+    return block(key, h('section', { class: `v-grp g-${key}` },
+      h('h2', { class: 'grp' }, name, h('span', { class: 'n' }, items.length)),
+      h('div', { class: 'cards' }, rows)), rows);
+  };
+  const fold = (key, name, items, open) => {
+    const rows = rowsOf(items);
+    return block(key, h('details', { class: `fold g-${key}`, open }, h('summary', { class: 'grp' }, h('h2', {}, name, h('span', { class: 'n' }, items.length))), h('div', { class: 'cards' }, rows)), rows);
+  };
+
+  const sections = groups.map(([key, name, f]) => {
+    const items = all.filter(f);
+    if (key === 'done') items.reverse();
+    if (!items.length) return null;
+    return key === 'done' ? fold(key, name, items, items.length <= 5) : grp(key, name, items, key === 'late');
+  });
+  const oldEl = old.length ? fold('old', 'Antigues sense enviar', old, false) : null;
+
+  const status = h('p', { class: 'sr-only', role: 'status' });
+  const none = h('div', { hidden: true }, empty('Cap tasca coincideix', 'Prova un altre filtre o esborra la cerca.'));
+  let mode = 'all';
+  const apply = () => {
+    const q = input.value.trim().toLowerCase();
+    let shown = 0;
+    for (const b of blocks) {
+      // 'Antigues' counts as overdue for the segmented filter.
+      const inMode = mode === 'all' || mode === b.key || (mode === 'late' && b.key === 'old');
+      let n = 0;
+      for (const r of b.rows) { const ok = inMode && (!q || r.textContent.toLowerCase().includes(q)); r.hidden = !ok; if (ok) n++; }
+      b.el.hidden = !n;
+      if (n && b.el.tagName === 'DETAILS' && (q || mode !== 'all')) b.el.open = true;
+      shown += n;
+    }
+    none.hidden = shown > 0;
+    status.textContent = `${shown} ${shown === 1 ? 'tasca' : 'tasques'}`;
+  };
+  const input = h('input', { id: 'filter', type: 'search', 'aria-label': 'Filtra tasques', placeholder: 'Filtra tasques  ( / )', title: 'Drecera: / enfoca, Esc esborra', value: views.tauler.q || '', oninput: () => { views.tauler.q = input.value; apply(); } });
+  const FILTERS = [['all', 'Totes'], ['late', 'Endarrerides'], ['week', 'Aquesta setmana'], ['later', 'Més endavant'], ['done', 'Lliurades']];
+  const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Filtre per estat' }, FILTERS.map(([k, label]) =>
+    h('button', { type: 'button', 'aria-pressed': String(k === mode), onclick: (e) => {
+      mode = k; seg.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', b === e.currentTarget)); apply();
+    } }, label)));
+
+  const out = h('section', { class: 'v-tauler' },
+    h('h1', {}, pending === 0 ? 'Tot al dia' : `Tens ${pending} ${pending === 1 ? 'tasca pendent' : 'tasques pendents'}`),
+    h('div', { class: 'sub' },
+      next ? h('span', {}, 'La propera: ', h('a', { href: `#/tasca/${enc(next.task.id)}` }, next.task.title)) : null,
+      total ? bar(doneN, total, 'Tasques lliurades', '', `${doneN} de ${total} lliurades`) : null),
+    all.length ? h('div', { class: 'v-tools' }, seg, h('label', { class: 'sr-only', for: 'filter' }, 'Filtra tasques'), input) : null,
+    status, sections, oldEl, none);
+  if (input.value) apply(); // filter survives soft refreshes
+  return out;
 };
+
+const fsize = (n) => (typeof n !== 'number' ? '' : n < 1024 ? `${n} B` : n < 1048576 ? `${Math.ceil(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`);
 
 views.tasca = async (id) => {
   const tv = await api(`/api/tasks/${enc(id)}`);
   const t = tv.task, l = tv.local;
   // Save only on an explicit click: arrow keys on a closed <select> fire `change` per step,
   // and 'lliurat' moves the submit folder, so it also needs a confirmation.
-  const select = h('select', { 'aria-label': 'Estat local' },
-    ['', 'per revisar', 'revisat OK', 'lliurat'].map((s) => h('option', { value: s, selected: s === l.status }, s || '— sense estat —')));
+  const select = h('select', { id: 'estat-sel', 'aria-label': 'Estat local' },
+    ['', 'per revisar', 'revisat OK', 'lliurat'].map((s) => h('option', { value: s, selected: s === l.status }, s ? LSTATUS[s] : '— sense estat —')));
+  const selErr = h('p', { class: 'err', id: 'estat-err', role: 'alert' });
+  select.setAttribute('aria-describedby', 'estat-err');
   const save = h('button', { type: 'button', id: 'estat-desa', onclick: async () => {
     const next = select.value;
-    if (next === l.status) return;
+    if (next === l.status) { selErr.textContent = 'Cap canvi per desar.'; select.setAttribute('aria-invalid', 'true'); return; }
     if (next === 'lliurat' && !(await confirmDialog('Marcar com a lliurada?',
       h('p', {}, `La carpeta de "${t.title}" es mourà a submit/_lliurat/.`), 'Marca lliurada'))) { select.value = l.status; save.focus(); return; }
-    try { await api(`/api/tasks/${enc(id)}/status`, { method: 'POST', body: { status: next } }); toast('Estat desat'); await route(); $('#estat-desa')?.focus(); }
-    catch (err) { toast(err.message); select.value = l.status; }
+    try { await api(`/api/tasks/${enc(id)}/status`, { method: 'POST', body: { status: next } }); selErr.textContent = ''; select.removeAttribute('aria-invalid'); toast('Estat desat'); await route({ soft: true }); $('#estat-desa')?.focus(); }
+    catch (err) { selErr.textContent = err.message; select.setAttribute('aria-invalid', 'true'); select.value = l.status; }
   } }, 'Desa estat');
-  const status = h('span', { class: 'actions', style: { margin: '0' } }, select, save);
-  const actions = h('div', { class: 'actions' },
-    h('a', { class: 'btn', href: t.url, target: '_blank', rel: 'noopener' }, 'Obre a Moodle'),
-    status,
-    t.source === 'ai' && t.ai_confirmed == null && [
-      h('button', { type: 'button', onclick: async () => { try { await api(`/api/tasks/${enc(id)}/ai`, { method: 'POST', body: { keep: true } }); route(); } catch (e) { toast(e.message); } } }, 'Mantén'),
-      h('button', { type: 'button', onclick: async () => { try { await api(`/api/tasks/${enc(id)}/ai`, { method: 'POST', body: { keep: false } }); location.hash = '#/tauler'; } catch (e) { toast(e.message); } } }, 'Descarta')],
-    taskExtras.map((f) => f(tv)));
-  const atts = t.attachments.map((a) => h('li', {}, h('a', { href: `/api/moodle-file?url=${enc(a.fileurl)}`, target: '_blank' }, a.filename)));
-  const files = l.files.map((f) => h('li', {}, h('a', { href: `#/fitxers/${enc(f)}` }, f)));
-  return h('article', {},
-    h('p', {}, h('a', { href: '#/tauler' }, '← Tauler')),
+  const aiBtn = (bid, label, keep, after) => h('button', { type: 'button', id: bid, onclick: async () => {
+    try { await api(`/api/tasks/${enc(id)}/ai`, { method: 'POST', body: { keep } }); after(); } catch (e) { toast(e.message, true); } } }, label);
+  const extras = taskExtras.map((f) => f(tv)).reverse(); // Edita first, then Puja / Envia
+  const NEWTAB = h('span', { class: 'sr-only' }, ' (obre en una pestanya nova)');
+
+  const rail = h('section', { class: 'rail', 'aria-labelledby': 'rail-t' },
+    h('h2', { class: 'eyebrow', id: 'rail-t' }, 'Detalls'),
+    h('dl', { class: 'kv' },
+      h('div', {}, h('dt', {}, 'Venciment'), h('dd', {}, when(t.due))),
+      t.cutoff ? h('div', {}, h('dt', {}, 'Tancament'), h('dd', {}, when(t.cutoff))) : null,
+      h('div', {}, h('dt', {}, 'Moodle'), h('dd', {}, MSTATUS[t.moodle_status] || t.moodle_status)),
+      t.grade ? h('div', {}, h('dt', {}, 'Nota'), h('dd', {}, t.grade)) : null),
+    t.source === 'ai' && t.ai_confirmed == null && h('div', { class: 'notice', role: 'group', 'aria-label': 'Tasca extreta per IA' },
+      h('p', {}, 'Extreta per IA. Revisa-la i decideix si la mantens.'),
+      h('div', { class: 'field-row' }, aiBtn('ai-keep', 'Mantén', true, () => route({ soft: true })), aiBtn('ai-drop', 'Descarta', false, () => { location.hash = '#/tauler'; }))),
+    h('a', { class: 'ext', href: t.url, target: '_blank', rel: 'noopener' }, 'Obre a Moodle', ic('ext'), NEWTAB),
+    h('div', { class: 'fld' }, h('label', { for: 'estat-sel' }, 'Estat local'), h('div', { class: 'field-row' }, select, save), selErr),
+    extras.flat(Infinity).some(Boolean) ? h('div', { class: 'v-deliver' }, h('h2', { class: 'sr-only' }, 'Entrega'), extras) : null);
+
+  const badges = [
+    l.status && h('span', { class: 'badge ' + (l.status === 'revisat OK' ? 'ok' : 'warn') }, LSTATUS[l.status] || l.status),
+    t.source === 'ai' && aiBadge()];
+
+  const body = sandboxed(t.body_html, `Enunciat: ${t.title}`);
+  const fb = t.feedback_html ? sandboxed(t.feedback_html, 'Retroacció') : null;
+  if (fb && fb.tagName === 'IFRAME') fb.classList.add('fb');
+
+  const attRows = t.attachments.map((a) => h('a', { class: 'row v-file', href: `/api/moodle-file?url=${enc(a.fileurl)}`, target: '_blank' },
+    ic('file'), h('span', { class: 't' }, a.filename), a.filesize != null && h('span', { class: 'mono dim' }, fsize(a.filesize)), NEWTAB.cloneNode(true)));
+  const fileRows = l.files.map((f) => h('a', { class: 'row v-file', href: `#/fitxers/${enc(f)}` },
+    ic('file'), h('span', { class: 't mono' }, f)));
+
+  const main = h('div', { class: 'v-main' },
+    h('h2', { class: 'eyebrow' }, 'Enunciat'), body,
+    attRows.length ? [h('h2', { class: 'eyebrow' }, 'Adjunts del professor'), h('div', { class: 'list' }, attRows)] : null,
+    fb ? [h('h2', { class: 'eyebrow' }, 'Retroacció'), fb] : null,
+    h('h2', { class: 'eyebrow' }, 'Els meus fitxers'),
+    fileRows.length ? h('div', { class: 'list' }, fileRows) : h('p', { class: 'dim' }, `Cap fitxer vinculat. Carpeta suggerida: ${tv.submit_dir}`),
+    linkFiles(id, l.files));
+
+  return h('article', { class: 'v-tasca' },
+    h('a', { class: 'btn ghost', href: '#/tauler' }, ic('arrow-l'), 'Tauler'),
     h('h1', {}, t.title),
     h('div', { class: 'meta' },
-      h('span', {}, h('span', { class: 'dot', style: { '--h': hue(t.course), display: 'inline-block' } }), ' ', t.course),
-      h('span', {}, 'Venciment: ', when(t.due)),
-      t.cutoff ? h('span', {}, 'Tancament: ', when(t.cutoff)) : null,
-      h('span', {}, 'Moodle: ', MSTATUS[t.moodle_status] || t.moodle_status),
-      t.grade && h('span', {}, 'Nota: ', t.grade)),
-    actions,
-    sandboxed(t.body_html),
-    atts.length ? [h('h2', {}, 'Adjunts del professor'), h('ul', { class: 'list' }, atts)] : null,
-    t.feedback_html ? [h('h2', {}, 'Retroacció'), sandboxed(t.feedback_html)] : null,
-    h('h2', {}, 'Els meus fitxers'),
-    files.length ? h('ul', { class: 'list' }, files) : h('p', { class: 'dim' }, `Cap fitxer vinculat. Carpeta suggerida: ${tv.submit_dir}`),
-    linkFiles(id, l.files));
+      h('span', { class: 'chip' }, h('span', { class: 'dot', style: { '--h': hue(t.course) } }), cname(t.course)),
+      dueChip(tv, true), badges),
+    h('div', { class: 'split' }, h('div', { class: 'grid' }, main, rail)));
 };
 
 function linkFiles(id, current) {
-  const input = h('input', { list: 'submit-files', placeholder: 'submit/…/fitxer_amin.docx', 'aria-label': 'Fitxer a vincular', style: { minWidth: '320px' } });
+  const err = h('p', { class: 'err', id: 'vincula-err', role: 'alert' });
+  const input = h('input', { id: 'vincula-in', list: 'submit-files', placeholder: 'submit/…/fitxer_amin.docx', 'aria-describedby': 'vincula-err' });
   const dl = h('datalist', { id: 'submit-files' });
-  api('/api/submit-files').then((fs) => dl.replaceChildren(...fs.map((f) => h('option', { value: f })))).catch((e) => toast(e.message));
-  return h('div', { class: 'actions' }, input, dl, h('button', { type: 'button', id: 'vincula', onclick: async () => {
-    if (!input.value) return;
-    try { await api(`/api/tasks/${enc(id)}/files`, { method: 'POST', body: { files: [...current, input.value] } }); await route(); $('#vincula')?.focus(); }
-    catch (e) { toast(e.message); }
-  } }, 'Vincula fitxer'));
+  api('/api/submit-files').then((fs) => dl.replaceChildren(...fs.map((f) => h('option', { value: f })))).catch((e) => toast(e.message, true));
+  return h('div', { class: 'fld v-link' }, h('label', { for: 'vincula-in' }, 'Vincula un fitxer'),
+    h('div', { class: 'field-row' }, input, dl, h('button', { type: 'button', id: 'vincula', onclick: async () => {
+      if (!input.value) { err.textContent = 'Escriu o tria un fitxer.'; input.setAttribute('aria-invalid', 'true'); input.focus(); return; }
+      err.textContent = ''; input.removeAttribute('aria-invalid');
+      try { await api(`/api/tasks/${enc(id)}/files`, { method: 'POST', body: { files: [...current, input.value] } }); await route({ soft: true }); $('#vincula')?.focus(); }
+      catch (e) { err.textContent = e.message; input.setAttribute('aria-invalid', 'true'); }
+    } }, 'Vincula')), err);
 }
 
-async function route() {
+function markNav() {
+  const [name, arg] = (location.hash.slice(2) || 'tauler').split('/'), nm = views[name] ? name : 'tauler';
+  document.querySelectorAll('.tabs a').forEach((a) => (a.getAttribute('href') === `#/${nm}` ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
+  document.querySelectorAll('#courses a').forEach((a) => (nm === 'curs' && a.getAttribute('href') === `#/curs/${arg}` ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
+}
+// route({soft:true}): refresh after an action. Keeps the old view until the new one is ready,
+// restores scroll and never shows the skeleton. Plain route(): real navigation.
+// Scrollable table wrappers get keyboard focus only while they overflow.
+const wrapFocus = () => document.querySelectorAll('#main .tablewrap').forEach((w) => { if (w.scrollHeight > w.clientHeight || w.scrollWidth > w.clientWidth) w.tabIndex = 0; else w.removeAttribute('tabindex'); });
+addEventListener('resize', wrapFocus);
+async function route(o) {
+  const soft = o?.soft === true;
+  if (!soft) delete views.tauler.q;
+  const my = (route.n = (route.n || 0) + 1);
   const [name, ...rest] = (location.hash.slice(2) || 'tauler').split('/');
+  const nm = views[name] ? name : 'tauler';
   const main = $('#main');
-  document.querySelectorAll('nav a').forEach((a) => (a.getAttribute('href') === `#/${name}` ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
-  main.replaceChildren(h('p', { class: 'dim' }, 'Carregant…'));
-  try { main.replaceChildren(await (views[name] || views.tauler)(...rest.map(decodeURIComponent))); }
-  catch (e) { main.replaceChildren(h('p', { class: 'err' }, e.message)); }
-  main.focus({ preventScroll: true });
+  const y = scrollY, first = !route.cur, same = route.cur === nm;
+  const had = main.contains(document.activeElement), aid = had ? document.activeElement.id : '';
+  markNav();
+  main.setAttribute('aria-busy', 'true');
+  if (!soft) { main.dataset.view = nm; main.classList.toggle('edit', nm === 'edita'); main.replaceChildren(skeleton()); }
+  let node;
+  try { node = await views[nm](...rest.map(decodeURIComponent)); } catch (e) { node = errorPanel(e.message); }
+  if (my !== route.n) return; // a newer navigation won
+  route.cur = nm;
+  const paint = () => {
+    main.dataset.view = nm; main.classList.toggle('edit', nm === 'edita');
+    main.replaceChildren(node); main.removeAttribute('aria-busy');
+    const h1 = main.querySelector('h1');
+    document.title = `${h1 ? h1.textContent.trim() + ' · ' : ''}Institut`;
+    if (!soft && h1 && (first || same)) setText($('#live'), h1.textContent.trim()); // announced only when the h1 is not focused
+    wrapFocus();
+    if (soft) scrollTo(0, y); else if (!first) scrollTo(0, 0);
+    const back = aid && document.getElementById(aid);
+    if (back && !back.disabled) back.focus({ preventScroll: true });
+    else if (h1 && (soft ? had : !first && !same)) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); }
+  };
+  document.startViewTransition && !soft ? document.startViewTransition(paint) : paint();
+  forumPill();
+}
+
+// Unread forum posts -> nav pill (hidden at 0).
+async function forumPill() {
+  try {
+    const n = (await api('/api/tasks')).filter((tv) => tv.task.kind === 'post' && tv.local.status !== 'llegit').length;
+    const p = $('#forum-pill'); p.hidden = !n; p.replaceChildren(String(n), h('span', { class: 'sr-only' }, ' sense llegir')); p.title = `${n} sense llegir`;
+  } catch (e) { /* ignore */ }
 }
 
 async function refreshStatus() {
   try {
     const s = await api('/api/status');
-    $('#lastsync').textContent = s.syncing ? 'Sincronitzant…' : s.last_sync ? `Última: ${when(s.last_sync)}` : 'Mai sincronitzat';
-    const b = $('#banner'); b.hidden = !s.error; b.textContent = s.error;
+    setText($('#lastsync'), s.syncing ? 'Sincronitzant…' : s.last_sync ? `Sincronitzat ${syncAt(s.last_sync)}` : 'Mai sincronitzat');
+    const b = $('#banner'); b.hidden = !s.error; setText(b, s.error || '');
   } catch (e) { /* server restarting */ }
 }
 
 async function loadCourses() {
   const cs = await api('/api/courses');
-  $('#courses').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}` }, h('span', { class: 'dot', style: { '--h': hue(c.shortname) } }), c.title)));
+  COURSES = Object.fromEntries(cs.map((c) => [c.shortname, c.title]));
+  $('#courses').hidden = $('.side .sec').hidden = !cs.length;
+  $('#courses').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, title: c.title }, h('span', { class: 'dot', style: { '--h': hue(c.shortname) } }), h('span', { class: 'nm' }, c.title))));
+  markNav();
 }
 
 $('#sync').addEventListener('click', async (e) => {
-  const b = e.currentTarget; b.disabled = true;
-  try { const r = await api('/api/sync', { method: 'POST' }); toast(`Sincronitzat (${r.events} canvis)`); await route(); }
-  catch (err) { toast(err.message); }
-  b.disabled = false; b.focus(); refreshStatus();
+  const b = e.currentTarget;
+  if (b.getAttribute('aria-busy') === 'true') return;
+  b.setAttribute('aria-disabled', 'true'); b.setAttribute('aria-busy', 'true');
+  $('#lastsync').textContent = 'Sincronitzant…';
+  try { const r = await api('/api/sync', { method: 'POST' }); toast(`Sincronitzat (${r.events} canvis)`); await route({ soft: true }); }
+  catch (err) { toast(err.message, true); }
+  b.removeAttribute('aria-disabled'); b.removeAttribute('aria-busy'); refreshStatus();
 });
+const curTheme = () => document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+// Sandboxed iframes bake the theme colours into srcdoc, so a theme change re-renders the view.
+function themeChanged() { $('#theme-use').setAttribute('href', curTheme() === 'light' ? '#i-sun' : '#i-moon'); $('#theme').setAttribute('aria-pressed', String(curTheme() === 'dark')); if (route.cur && route.cur !== 'edita') route({ soft: true }); } // never tear down an open editor
 $('#theme').addEventListener('click', () => {
-  const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-  const next = cur === 'light' ? 'dark' : 'light';
+  const next = curTheme() === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = next;
   try { localStorage.setItem('theme', next); } catch (e) { /* private mode */ }
+  themeChanged();
 });
+matchMedia('(prefers-color-scheme: light)').addEventListener('change', themeChanged);
 try { const t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) { /* ignore */ }
+$('#theme-use').setAttribute('href', curTheme() === 'light' ? '#i-sun' : '#i-moon');
+$('#theme').setAttribute('aria-pressed', String(curTheme() === 'dark'));
 $('.skip').addEventListener('click', (e) => { e.preventDefault(); $('#main').focus(); });
-addEventListener('hashchange', route);
-addEventListener('DOMContentLoaded', () => { route(); refreshStatus(); loadCourses(); setInterval(refreshStatus, 60000); });
+addEventListener('hashchange', () => route());
+// Sticky offsets from the real header/banner heights (scroll-padding + sticky group headings).
+{
+  const root = document.documentElement, side = $('.side'), banner = $('#banner');
+  const measure = () => {
+    root.style.setProperty('--side-h', getComputedStyle(side).position === 'sticky' && matchMedia('(max-width:899px)').matches ? `${side.offsetHeight}px` : '0px');
+    root.style.setProperty('--banner-h', `${banner.offsetHeight}px`);
+  };
+  const ro = new ResizeObserver(measure); ro.observe(side); ro.observe(banner); addEventListener('resize', measure);
+}
+// Keyboard nav (single-key shortcuts, WCAG 2.1.4: can be turned off in the ? dialog).
+// Never bound to an action button (Puja/Envia/Desa/Sincronitza).
+const GO = { t: 'tauler', c: 'calendari', f: 'fitxers', n: 'notes', o: 'forums' };
+const keysOn = () => { try { return localStorage.getItem('keys') !== 'off'; } catch (e) { return true; } };
+const KEYS = [['j / k', 'fila següent / anterior'], ['g t', 'Tauler'], ['g c', 'Calendari'], ['g f', 'Fitxers'], ['g n', 'Notes'], ['g o', 'Fòrums'], ['/', 'filtra el tauler'], ['Esc', 'esborra el filtre']];
+function showKeys() {
+  const on = h('input', { type: 'checkbox', checked: keysOn(), onchange: (e) => { try { localStorage.setItem('keys', e.target.checked ? 'on' : 'off'); } catch (x) { /* ignore */ } } });
+  confirmDialog('Dreceres de teclat', h('div', {},
+    h('dl', { class: 'keys' }, KEYS.flatMap(([k, d]) => [h('dt', {}, h('kbd', {}, k)), h('dd', {}, d)])),
+    h('label', {}, on, 'Activa les dreceres d\'una tecla')), 'Tanca', true);
+}
+document.addEventListener('keydown', (e) => {
+  const tg = e.target;
+  if (e.key === 'Escape' && $('#toast').classList.contains('on') && !tg.closest('dialog')) hideToast();
+  if (tg.id === 'filter' && e.key === 'Escape') { tg.value = ''; tg.dispatchEvent(new Event('input')); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey || tg.closest('input,textarea,select,[contenteditable],dialog')) return;
+  const k = e.key;
+  if (k === '?') { showKeys(); return; }
+  if (!keysOn()) return;
+  if (keyNav.g && GO[k]) { location.hash = `#/${GO[k]}`; keyNav.g = 0; return; }
+  keyNav.g = 0;
+  if (k === 'g') { keyNav.g = 1; setTimeout(() => (keyNav.g = 0), 1000); }
+  else if (k === '/') { const f = $('#filter'); if (f) { e.preventDefault(); f.focus(); } }
+  else if (k === 'j' || k === 'k') {
+    const rows = [...document.querySelectorAll('#main .row')].filter((r) => r.offsetParent);
+    if (!rows.length) return;
+    const i = rows.indexOf(document.activeElement);
+    rows[Math.min(rows.length - 1, Math.max(0, i + (k === 'j' ? 1 : -1)))].focus();
+  }
+});
+const keyNav = { g: 0 };
+$('#keys').addEventListener('click', showKeys);
+addEventListener('DOMContentLoaded', () => { loadCourses().catch(() => {}).finally(() => route()); refreshStatus(); setInterval(refreshStatus, 60000); });
 
+const NOISE = new Set(['meta.json', 'index.md', 'last-sync.json']);
 views.curs = async (short) => {
   const c = await api(`/api/courses/${enc(short)}`);
   const tasks = (await api('/api/tasks')).filter((tv) => tv.task.course === short && tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
-  return h('section', {},
-    h('h1', {}, h('span', { class: 'dot', style: { '--h': hue(short), display: 'inline-block' } }), ' ', c.title),
-    tasks.length ? [h('h2', {}, 'Tasques'), h('div', { class: 'cards' }, tasks.map(card))] : null,
-    h('h2', {}, 'Continguts'),
-    c.sections.map((s, i) => h('details', { open: i < 2 },
+  const nDone = tasks.filter(isDone).length;
+  const tasksCol = tasks.length
+    ? h('div', {}, h('h2', {}, 'Tasques'), h('div', { class: 'cards' }, tasks.map((tv) => card(tv, true))))
+    : h('div', {}, h('h2', {}, 'Tasques'), h('p', { class: 'dim' }, 'Cap tasca en aquest curs.'));
+  // Sections with no visible files are dropped (no empty accordions).
+  const secs = c.sections.map((s) => ({ name: s.name, mods: s.modules.map((m) => [m, m.files.filter((f) => !f.is_dir && !NOISE.has(f.name))]).filter(([, fs]) => fs.length) })).filter((s) => s.mods.length);
+  const contents = h('div', {}, h('h2', {}, 'Continguts'),
+    secs.length ? secs.map((s, i) => h('details', { open: i < 2 },
       h('summary', {}, s.name),
-      s.modules.map((m) => [h('h3', {}, m.name), h('ul', { class: 'list' },
-        m.files.filter((f) => !f.is_dir).map((f) => h('li', {}, h('a', { href: `#/fitxers/${enc(f.rel)}` }, f.name))))]))));
+      s.mods.map(([m, fs]) => {
+        return fs.length ? [m.name === 'Fitxers' ? null : h('h3', {}, m.name), h('ul', { class: 'list' },
+          fs.map((f) => h('li', {}, h('a', { href: `#/fitxers/${enc(f.rel)}` },
+            ic('file'), h('span', { class: 'fn' }, f.name), h('span', { class: 'mono dim' }, fsize(f.size))))))] : null;
+      }))) : empty('Sense continguts', 'Sincronitza per carregar-los.'));
+  return h('section', { class: 'v-curs' },
+    h('h1', {}, h('span', { class: 'dot lg', style: { '--h': hue(short) } }), ' ', c.title),
+    tasks.length ? h('p', { class: 'sub' }, bar(nDone, tasks.length, `Tasques lliurades de ${c.title}`, '', `${nDone} de ${tasks.length} lliurades`)) : null,
+    h('div', { class: 'two' }, tasksCol, contents));
 };
 
 views.fitxers = async (...parts) => {
   const rel = parts.join('/');
   const info = await api(`/api/files?path=${enc(rel)}`);
-  const crumbs = [h('a', { href: '#/fitxers' }, '~/smx')];
-  rel.split('/').filter(Boolean).reduce((acc, p) => { const r = acc ? `${acc}/${p}` : p; crumbs.push(' / ', h('a', { href: `#/fitxers/${enc(r)}` }, p)); return r; }, '');
-  const head = h('p', { class: 'dim' }, crumbs);
+  const segs = rel.split('/').filter(Boolean);
+  const crumbs = h('nav', { class: 'crumbs', 'aria-label': 'Ruta' });
+  crumbs.append(segs.length ? h('a', { href: '#/fitxers' }, '~/smx') : h('span', { 'aria-current': 'page' }, '~/smx'));
+  segs.reduce((acc, p, i) => {
+    const r = acc ? `${acc}/${p}` : p;
+    crumbs.append(h('span', { class: 'sep', 'aria-hidden': 'true' }, '/'),
+      i === segs.length - 1 ? h('span', { 'aria-current': 'page' }, p) : h('a', { href: `#/fitxers/${enc(r)}` }, p));
+    return r;
+  }, '');
   if (info.kind === 'dir') {
-    return h('section', {}, h('h1', {}, 'Fitxers'), head, h('ul', { class: 'list' },
-      info.entries.map((e) => h('li', {}, h('a', { href: `#/fitxers/${enc(e.rel)}` }, e.is_dir ? '📁 ' : '', e.name, e.is_dir ? '' : h('span', { class: 'dim' }, `  ${Math.ceil(e.size / 1024)} KB`))))));
+    const es = [...info.entries].sort((a, b) => (b.is_dir - a.is_dir) || a.name.localeCompare(b.name, 'ca'));
+    return h('section', { class: 'v-fitxers' }, h('h1', {}, 'Fitxers'), crumbs,
+      es.length
+        ? h('div', { class: 'tablewrap', role: 'region', 'aria-label': 'Llista de fitxers' },
+            h('table', {}, h('caption', { class: 'sr-only' }, `Contingut de ${rel || '~/smx'}`),
+              h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Nom'), h('th', { scope: 'col', class: 'num' }, 'Mida'))),
+              h('tbody', {}, es.map((e) => h('tr', {},
+                h('td', {}, h('a', { class: 'v-fname', href: `#/fitxers/${enc(e.rel)}` },
+                  h('span', { class: e.is_dir ? 'v-glyph dir' : 'v-glyph' }, e.is_dir ? ic('folder') : ic('file')),
+                  h('span', {}, e.name), e.is_dir ? h('span', { class: 'sr-only' }, ' (carpeta)') : null)),
+                h('td', { class: 'num' }, e.is_dir ? '' : fsize(e.size)))))))
+        : empty('Carpeta buida', 'No hi ha cap fitxer aquí.'));
   }
   const raw = `/api/raw?path=${enc(rel)}`;
   const name = rel.split('/').pop();
   let body;
-  if (info.mime.startsWith('image/')) body = h('img', { src: raw, alt: name, style: { maxWidth: '100%', borderRadius: '16px' } });
-  else if (info.mime === 'application/pdf') body = h('iframe', { class: 'body', src: raw, title: 'PDF' });
-  else if (info.mime.startsWith('text/html')) body = h('iframe', { class: 'body', src: raw, sandbox: '', title: 'HTML' });
-  else if (info.mime.startsWith('text/')) body = h('pre', {}, info.size > 2e6 ? 'Fitxer massa gran per previsualitzar.' : await api(raw));
-  else body = h('p', { class: 'dim' }, 'Sense previsualització per a aquest tipus.');
-  return h('section', {}, h('h1', {}, name), head,
-    h('div', { class: 'actions' }, h('a', { href: raw, download: name }, h('button', { type: 'button' }, 'Descarrega')), fileExtras.map((f) => f(info))),
-    body);
+  if (info.mime.startsWith('image/')) body = h('img', { class: 'v-img', src: raw, alt: name });
+  else if (info.mime === 'application/pdf') body = h('iframe', { class: 'sheet v-frame', src: raw, title: `PDF: ${name}` });
+  else if (info.mime.startsWith('text/html')) body = h('iframe', { class: 'sheet v-frame', src: raw, sandbox: '', title: `HTML: ${name}` });
+  else if (info.mime.startsWith('text/')) body = h('pre', { tabindex: 0, role: 'region', 'aria-label': `Contingut de ${name}` }, info.size > 2e6 ? 'Fitxer massa gran per previsualitzar.' : await api(raw));
+  else body = empty('Sense previsualització', "Aquest tipus de fitxer no es pot mostrar. Descarrega'l per obrir-lo.");
+  return h('section', { class: 'v-fitxers' }, h('h1', {}, name), crumbs,
+    h('div', { class: 'actions' },
+      h('a', { class: 'btn', href: raw, download: name }, 'Descarrega'),
+      fileExtras.map((f) => f(info)),
+      h('span', { class: 'mono dim' }, fsize(info.size))),
+    h('div', { class: 'v-preview' }, body));
 };
 
 views.calendari = async (ym) => {
@@ -239,71 +504,133 @@ views.calendari = async (ym) => {
   const key = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
   const byDay = {};
   for (const tv of all) { const d = new Date(tv.task.due * 1000); (byDay[key(d)] ||= []).push(tv); }
+  const wd = new Intl.DateTimeFormat('ca-ES', { weekday: 'long' });
+  const long = new Intl.DateTimeFormat('ca-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+  const ev = (tv, extra) => h('a', {
+    href: `#/tasca/${enc(tv.task.id)}`, title: tv.task.title,
+    class: (isDone(tv) ? 'done ' : left(tv.task.due).s === 'late' ? 'late ' : '') + (extra ? 'x' : ''),
+  }, isDone(tv) ? ic('check') : left(tv.task.due).s === 'late' ? ic('warn') : h('span', { class: 'dot', style: { '--h': hue(tv.task.course) } }),
+    h('span', { class: 'et' }, isDone(tv) ? h('span', { class: 'sr-only' }, 'Lliurada: ') : left(tv.task.due).s === 'late' ? h('span', { class: 'sr-only' }, 'Endarrerida: ') : null, tv.task.title));
   const cells = [];
   for (let i = 0; i < 42; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);
-    const cls = 'd' + (d.getMonth() !== m - 1 ? ' out' : '') + (key(d) === key(now) ? ' today' : '');
-    cells.push(h('div', { class: cls }, h('strong', {}, d.getDate()),
-      (byDay[key(d)] || []).map((tv) => h('a', { href: `#/tasca/${enc(tv.task.id)}`, title: tv.task.title },
-        h('span', { class: 'dot', style: { '--h': hue(tv.task.course), display: 'inline-block' } }), ' ', isDone(tv) ? '✓ ' : '', tv.task.title))));
+    const evs = byDay[key(d)] || [];
+    const today = key(d) === key(now);
+    const cls = 'd' + (d.getMonth() !== m - 1 ? ' out' : '') + (today ? ' today' : '');
+    const cell = h('div', { class: cls, ...(evs.length ? { role: 'group', 'aria-label': long.format(d) } : {}) },
+      h('strong', today ? { 'aria-current': 'date' } : {}, d.getDate()),
+      h('span', { class: 'wd' }, wd.format(d)),
+      evs.slice(0, 3).map((tv) => ev(tv)),
+      evs.slice(3).map((tv) => ev(tv, true)));
+    if (evs.length > 3) {
+      const n = evs.length - 3;
+      const more = h('button', { type: 'button', class: 'ghost more', 'aria-expanded': 'false', 'aria-label': `+${n} tasques més`,
+        onclick: () => more.setAttribute('aria-expanded', cell.classList.toggle('open')) }, `+${n}`);
+      cell.append(more);
+    }
+    cells.push(cell);
   }
   const nav = (dm) => { const d = new Date(y, m - 1 + dm, 1); return `#/calendari/${d.getFullYear()}-${d.getMonth() + 1}`; };
-  const title = new Intl.DateTimeFormat('ca-ES', { month: 'long', year: 'numeric' }).format(first);
-  return h('section', {}, h('h1', {}, title),
-    h('div', { class: 'actions' }, h('a', { href: nav(-1) }, h('button', { type: 'button' }, '← Anterior')), h('a', { href: '#/calendari' }, h('button', { type: 'button' }, 'Avui')), h('a', { href: nav(1) }, h('button', { type: 'button' }, 'Següent →'))),
-    h('div', { class: 'cal' }, ['dl', 'dt', 'dc', 'dj', 'dv', 'ds', 'dg'].map((d) => h('div', { class: 'dim' }, d)), cells));
+  const isNow = y === now.getFullYear() && m === now.getMonth() + 1;
+  const title0 = new Intl.DateTimeFormat('ca-ES', { month: 'long', year: 'numeric' }).format(first);
+  const title = title0.charAt(0).toUpperCase() + title0.slice(1);
+  return h('section', { class: 'v-cal' },
+    h('div', { class: 'cal-head' },
+      h('h1', {}, title),
+      h('div', { class: 'seg', role: 'group', 'aria-label': 'Navegació del calendari' },
+        h('a', { class: 'btn', id: 'cal-prev', href: nav(-1), 'aria-label': 'Mes anterior' }, ic('arrow-l')),
+        h('a', { class: 'btn', id: 'cal-today', href: '#/calendari', ...(isNow ? { 'aria-current': 'true' } : {}) }, 'Avui'),
+        h('a', { class: 'btn', id: 'cal-next', href: nav(1), 'aria-label': 'Mes següent' }, ic('arrow-r')))),
+    h('div', { class: 'cal' },
+      ['dl', 'dt', 'dc', 'dj', 'dv', 'ds', 'dg'].map((d) => h('div', { class: 'dim', 'aria-hidden': 'true' }, d)),
+      cells));
 };
 
 views.notes = async () => {
   const gs = await api('/api/grades');
-  if (!gs.length) return h('section', {}, h('h1', {}, 'Notes'), h('p', { class: 'dim' }, 'Encara no hi ha notes.'));
-  return h('section', {}, h('h1', {}, 'Notes'), gs.map((g) => [
-    h('h2', {}, g.course || `Curs ${g.course_id}`),
-    h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Element'), h('th', {}, 'Nota'), h('th', {}, '%'))),
-      h('tbody', {}, (g.items || []).filter((i) => i.itemname).map((i) => h('tr', {}, h('td', {}, i.itemname), h('td', {}, i.gradeformatted || '—'), h('td', {}, i.percentageformatted || '—')))))]));
+  if (!gs.length) return h('section', { class: 'v-notes' }, h('h1', {}, 'Notes'), empty('Encara no hi ha notes', 'Sincronitza per carregar-les.'));
+  const pct = (s) => { const n = parseFloat(String(s ?? '').replace(',', '.')); return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : null; };
+  const nm = (g) => cname(g.course) || `Curs ${g.course_id}`;
+  const shown = (g) => (g.items || []).filter((i) => i.itemname);
+  const dash = (v) => (!v || /^\s*[-–—]\s*$/.test(String(v)) ? '–' : v);
+  const marked = (g) => shown(g).some((i) => dash(i.gradeformatted) !== '–' || dash(i.percentageformatted) !== '–');
+  const blank = gs.filter((g) => !marked(g));
+  return h('section', { class: 'v-notes' }, h('h1', {}, 'Notes'), gs.filter(marked).map((g) => {
+    const name = nm(g), items = shown(g);
+    const ps = items.map((i) => pct(i.percentageformatted)).filter((n) => n != null);
+    const avg = ps.length ? Math.round(ps.reduce((a, b) => a + b, 0) / ps.length) : null;
+    return h('div', { class: 'course-notes' },
+      h('h2', {}, h('span', { class: 'dot', style: { '--h': hue(g.course || String(g.course_id)) } }), name,
+        avg != null ? h('span', { class: 'badge', title: 'Mitjana dels percentatges' }, `Mitjana ${avg}%`) : null),
+      h('div', { class: 'tablewrap', role: 'region', 'aria-label': `Notes de ${name}` },
+        h('table', {}, h('caption', { class: 'sr-only' }, `Notes de ${name}`),
+          h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Element'), h('th', { scope: 'col', class: 'num' }, 'Nota'), h('th', { scope: 'col', class: 'num' }, '%'))),
+          h('tbody', {}, items.map((i) => {
+            const p = pct(i.percentageformatted);
+            return h('tr', {}, h('td', {}, i.itemname), h('td', { class: 'num' }, dash(i.gradeformatted)),
+              h('td', { class: 'num pc' }, p != null ? h('span', { class: 'bar acc', 'aria-hidden': 'true' }, h('i', { style: { width: `${p}%` } })) : null, dash(i.percentageformatted)));
+          })))));
+  }), blank.length ? h('p', { class: 'dim' }, `Sense notes: ${blank.map(nm).join(', ')}`) : null);
 };
 
 views.forums = async () => {
   const posts = (await api('/api/tasks')).filter((tv) => tv.task.kind === 'post').sort((a, b) => b.task.opens - a.task.opens);
-  const item = (tv) => h('details', { ontoggle: async (e) => {
-    const d = e.target;
-    if (!d.open || d.dataset.loaded) return;
-    d.dataset.loaded = '1';
-    const full = await api(`/api/tasks/${enc(tv.task.id)}`);
-    d.append(sandboxed(full.task.body_html));
-    if (tv.local.status !== 'llegit') {
-      await api(`/api/tasks/${enc(tv.task.id)}/status`, { method: 'POST', body: { status: 'llegit' } });
-      tv.local.status = 'llegit';
-    }
-  } }, h('summary', {}, tv.local.status === 'llegit' ? '' : '● ', tv.task.title, h('span', { class: 'dim' }, ` · ${tv.task.course} · ${when(tv.task.opens)}`)));
+  const item = (tv) => {
+    const isRead = tv.local.status === 'llegit';
+    return h('details', { class: 'fpost' + (isRead ? ' read' : ''), ontoggle: async (e) => {
+      const d = e.target;
+      if (!d.open || d.dataset.loaded) return;
+      d.dataset.loaded = '1';
+      try {
+        const full = await api(`/api/tasks/${enc(tv.task.id)}`);
+        d.append(sandboxed(full.task.body_html, `Avís: ${tv.task.title}`));
+        if (tv.local.status !== 'llegit') {
+          await api(`/api/tasks/${enc(tv.task.id)}/status`, { method: 'POST', body: { status: 'llegit' } });
+          tv.local.status = 'llegit';
+          d.classList.add('read');
+          d.querySelector('.ud')?.remove();
+          forumPill();
+        }
+      } catch (err) { delete d.dataset.loaded; toast(err.message, true); }
+    } }, h('summary', {},
+      isRead ? null : h('span', { class: 'ud' }, h('span', { class: 'sr-only' }, 'Sense llegir')),
+      h('span', { class: 'ft' }, tv.task.title),
+      h('span', { class: 'dim mono fm' }, `${cname(tv.task.course)} · ${when(tv.task.opens)}`)));
+  };
   const unread = posts.filter((p) => p.local.status !== 'llegit');
   const read = posts.filter((p) => p.local.status === 'llegit');
-  return h('section', {}, h('h1', {}, 'Fòrums i avisos'),
-    unread.length ? [h('h2', {}, `Sense llegir · ${unread.length}`), unread.map(item)] : h('p', { class: 'dim' }, 'Tot llegit.'),
-    read.length ? [h('h2', {}, 'Llegits'), read.map(item)] : null);
+  const grp = (name, n) => h('h2', { class: 'grp' }, name, h('span', { class: 'n' }, n));
+  return h('section', { class: 'v-forums' }, h('h1', {}, 'Fòrums'),
+    unread.length ? [grp('Sense llegir', unread.length), h('div', { class: 'cards' }, unread.map(item))] : empty('Tot llegit', posts.length ? 'No tens cap avís nou.' : 'No hi ha avisos.'),
+    read.length ? [grp('Llegits', read.length), h('div', { class: 'cards' }, read.map(item))] : null);
 };
 
 const kb = (n) => `${Math.max(1, Math.ceil(n / 1024))} KB`;
 taskExtras.push((tv) => {
   if (tv.task.kind !== 'assign') return null;
   const id = enc(tv.task.id), files = tv.local.files, submitted = tv.task.moodle_status === 'submitted';
-  const after = async (r, btn) => { toast(r.warning || `Moodle: ${MSTATUS[r.status] || r.status}`); await route(); $(btn)?.focus(); };
-  const up = h('button', { type: 'button', id: 'puja', disabled: submitted || !files.length, title: submitted ? 'Ja enviada' : files.length ? '' : 'Vincula primer un fitxer', onclick: async () => {
+  const after = async (r, btn) => { toast(r.warning || `Moodle: ${MSTATUS[r.status] || r.status}`); await route({ soft: true }); $(btn)?.focus(); };
+  const noUp = submitted || !files.length, noSend = tv.task.moodle_status !== 'draft';
+  const whyUp = submitted ? 'Ja enviada.' : 'Vincula primer un fitxer per poder pujar-lo.';
+  const whySend = submitted ? 'Ja enviada.' : 'Envia es desbloqueja quan hi ha un esborrany a Moodle.';
+  const up = h('button', { type: 'button', id: 'puja', 'aria-disabled': String(noUp), 'aria-describedby': 'puja-hint', onclick: async () => {
+    if (noUp) { toast(whyUp); return; }
     const sizes = await Promise.all(files.map((f) => api(`/api/files?path=${enc(f)}`).then((i) => kb(i.size), () => 'no trobat')));
     const body = h('div', {}, h('p', {}, `Tasca: ${tv.task.title} (${tv.task.course})`),
       h('p', {}, 'Es pujaran aquests fitxers com a esborrany. Substitueixen els que ja hi hagi a Moodle. Si la tasca no admet esborranys, quedarà enviada directament.'),
       h('ul', {}, files.map((f, i) => h('li', {}, `${f} (${sizes[i]})`))));
     if (!(await confirmDialog('Puja com a esborrany?', body, 'Puja'))) { up.focus(); return; }
     try { await after(await api(`/api/tasks/${id}/upload`, { method: 'POST', body: { files } }), '#puja'); }
-    catch (e) { toast(e.message); }
+    catch (e) { toast(e.message, true); }
   } }, 'Puja (esborrany)');
-  const send = h('button', { type: 'button', id: 'envia', disabled: tv.task.moodle_status !== 'draft', onclick: async () => {
+  const send = h('button', { type: 'button', id: 'envia', 'aria-disabled': String(noSend), 'aria-describedby': 'envia-hint', onclick: async () => {
+    if (noSend) { toast(whySend); return; }
     const body = h('p', {}, `Enviaràs "${tv.task.title}" per qualificar. Després ja no la podràs modificar.`);
     if (!(await confirmDialog('Envia per qualificar?', body, 'Envia'))) { send.focus(); return; }
     try { await after(await api(`/api/tasks/${id}/submit`, { method: 'POST' }), '#envia'); }
-    catch (e) { toast(e.message); }
+    catch (e) { toast(e.message, true); }
   } }, 'Envia per qualificar');
-  return [up, send];
+  return [up, h('p', { class: 'dim hint', id: 'puja-hint' }, noUp ? whyUp : ''), send, h('p', { class: 'dim hint', id: 'envia-hint' }, noSend ? whySend : '')];
 });
 
 const OFFICE = /\.(docx?|odt|rtf|xlsx?|ods|csv|pptx?|odp)$/i;
@@ -313,14 +640,19 @@ taskExtras.push((tv) => { const f = tv.local.files.find((x) => OFFICE.test(x)); 
 
 views.edita = async (...parts) => {
   const rel = parts.join('/');
-  const fallback = (msg) => h('div', {}, h('p', { class: 'err' }, msg),
-    h('button', { type: 'button', onclick: async () => { try { await api('/api/open', { method: 'POST', body: { path: rel } }); } catch (e) { toast(e.message); } } }, "Obre amb l'aplicació de l'ordinador"));
+  const openLocal = h('button', { type: 'button', onclick: async () => { try { await api('/api/open', { method: 'POST', body: { path: rel } }); } catch (e) { toast(e.message, true); } } }, "Obre amb l'aplicació de l'ordinador");
+  const fallback = (msg) => h('div', { class: 'v-edita-fb' }, h('h1', { class: 'sr-only' }, 'Edita'), errorPanel(msg), h('div', { class: 'actions' }, openLocal));
   let cfg;
   try { cfg = await api('/api/office/config', { method: 'POST', body: { path: rel } }); }
   catch (e) { return fallback(e.status === 503 ? 'OnlyOffice no disponible.' : e.message); }
   // DocsAPI replaces #oo with an iframe sized 100% of its parent, so the parent carries the height.
-  const holder = h('div', { style: { height: '80vh' } }, h('div', { id: 'oo' }));
-  const wrap = h('section', {}, h('p', {}, h('a', { href: `#/fitxers/${enc(cfg.rel)}` }, '← ', cfg.rel)), holder);
+  const holder = h('div', { class: 'v-oo' }, h('div', { id: 'oo' }));
+  const bar = h('div', { class: 'v-editbar' },
+    h('a', { class: 'btn ghost', href: `#/fitxers/${enc(cfg.rel)}` }, ic('arrow-l'), 'Torna al fitxer'),
+    h('span', { class: 'v-editname', title: cfg.rel }, cfg.rel.split('/').pop()));
+  const wrap = h('section', { class: 'v-edita' }, h('h1', { class: 'sr-only' }, `Edita ${cfg.rel}`), bar, holder);
+  // DocsAPI injects an untitled iframe: name it once it appears.
+  new MutationObserver((_, o) => { const f = holder.querySelector('iframe'); if (f) { f.title = 'Editor de documents'; o.disconnect(); } }).observe(holder, { childList: true, subtree: true });
   const open = () => new window.DocsAPI.DocEditor('oo', cfg.config);
   if (window.DocsAPI) setTimeout(open, 0); // holder is attached once route() swaps the view in
   else {
