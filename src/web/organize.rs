@@ -99,7 +99,7 @@ fn moodle_copy_name(name: &str) -> String {
 
 /// For every task Moodle reports as submitted: status `lliurat`, folder under `submit/_lliurat/`,
 /// the delivered files downloaded next to the student's own copies.
-pub async fn delivered_sync(app: &App) -> Result<Delivered> {
+pub async fn delivered_sync(app: &Arc<App>) -> Result<Delivered> {
     let _g = BUSY.lock().await;
     let mut out = Delivered::default();
     for t in app
@@ -117,15 +117,18 @@ pub async fn delivered_sync(app: &App) -> Result<Delivered> {
         }
     }
     if out.tasks > 0 {
-        readme::write(&app.db, &app.root)?;
+        let a = Arc::clone(app);
+        tokio::task::spawn_blocking(move || readme::write(&a.db, &a.root)).await??;
     }
     Ok(out)
 }
 
-async fn deliver(app: &App, t: &Task, out: &mut Delivered) -> Result<bool> {
+async fn deliver(app: &Arc<App>, t: &Task, out: &mut Delivered) -> Result<bool> {
     let mut changed = false;
     if app.db.local(&t.id)?.status != "lliurat" {
-        api::mark_lliurat(app, &t.id).map_err(ae)?; // moves an existing task folder into _lliurat
+        let (a, id) = (Arc::clone(app), t.id.clone());
+        // moves an existing task folder into _lliurat
+        tokio::task::spawn_blocking(move || api::mark_lliurat(&a, &id).map_err(ae)).await??;
         changed = true;
     }
     let mut l = app.db.local(&t.id)?;
@@ -177,12 +180,25 @@ async fn deliver(app: &App, t: &Task, out: &mut Delivered) -> Result<bool> {
         changed = true;
     }
     // Loose copies of the same file elsewhere (e.g. a course folder) now point at the delivered one.
-    for name in &delivered {
-        let r = format!("{rel}/{name}");
-        for f in before.iter().filter(|f| base(f) == name && **f != r) {
-            api::repoint(app, f, &r).map_err(ae)?;
+    let moves: Vec<(String, String)> = delivered
+        .iter()
+        .flat_map(|name| {
+            let r = format!("{rel}/{name}");
+            before
+                .iter()
+                .filter(|f| base(f) == name && **f != r)
+                .map(|f| (f.clone(), r.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let a = Arc::clone(app);
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        for (f, r) in moves {
+            api::repoint(&a, &f, &r).map_err(ae)?;
         }
-    }
+        Ok(())
+    })
+    .await??;
     Ok(changed)
 }
 

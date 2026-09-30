@@ -404,8 +404,10 @@ views.tasca = async (id) => {
   const shotUrl = () => `/api/shot/${enc(id)}?t=${Date.now()}`;
   const enunciat = () => {
     const slot = h('div', { class: 'v-shotbox' });
-    const showText = () => slot.replaceChildren(h('p', { class: 'dim' }, 'Sense captura.'), intro);
-    const showShot = () => { const img = h('img', { class: 'v-shot', src: shotUrl(), alt: "Captura de l'enunciat" }); img.onerror = showText; slot.replaceChildren(img); };
+    const shot = h('div');
+    const showText = () => shot.replaceChildren(h('p', { class: 'dim' }, 'Sense captura.'));
+    const showShot = () => { const img = h('img', { class: 'v-shot', src: shotUrl(), alt: "Captura de l'enunciat (el text és a sota)" }); img.onerror = showText; shot.replaceChildren(img); };
+    slot.append(shot, intro);
     const snap = h('button', { type: 'button', onclick: async () => {
       snap.setAttribute('aria-busy', 'true'); snap.disabled = true;
       try { await api(`/api/shot/${enc(id)}`, { method: 'POST' }); showShot(); toast('Captura feta'); }

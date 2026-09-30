@@ -153,7 +153,7 @@ async fn delivered_sync_downloads_and_keeps_differing_copy() {
     );
 }
 
-async fn organize_delivered(app: &web::App) -> organize::Delivered {
+async fn organize_delivered(app: &Arc<web::App>) -> organize::Delivered {
     organize::delivered_sync(app).await.unwrap()
 }
 

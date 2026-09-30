@@ -400,6 +400,30 @@ pub async fn agent_text(url: &str) -> anyhow::Result<String> {
     Ok(strip_html(&shots::page_dom(&cmd, url).await?))
 }
 
+/// Formats `extract` can read; anything else is rejected before it is loaded into memory.
+fn extractable(p: &Path, ext: &str) -> bool {
+    matches!(
+        ext,
+        "pdf"
+            | "docx"
+            | "doc"
+            | "odt"
+            | "rtf"
+            | "pptx"
+            | "ppt"
+            | "odp"
+            | "xlsx"
+            | "xls"
+            | "ods"
+            | "html"
+            | "htm"
+    ) || files::mime(p).starts_with("text/plain")
+}
+
+fn skip(why: String) -> Out {
+    (String::new(), "needs_review", why)
+}
+
 /// Deterministic text from a local file. Unreadable formats become `Review` (needs_review).
 pub async fn extract(app: &App, p: &Path, rel: &str, sha: &str) -> anyhow::Result<Ex> {
     let ext = ext_of(rel);
@@ -556,7 +580,14 @@ async fn item_run(app: &App, it: &Item) -> anyhow::Result<Out> {
         "url" => url_item(app, it, &it.src).await,
         "intro" => {
             // DS fetches files through the jail, so the download is staged in a visible dir.
+            let ext = ext_of(&it.src);
+            if !extractable(Path::new(&it.src), &ext) {
+                return Ok(skip(format!("format .{ext} sense text extraïble")));
+            }
             let bytes = app.moodle.download(&it.src).await?;
+            if bytes.len() as u64 > super::preview::MAX_BYTES {
+                return Ok(skip("fitxer massa gran".into()));
+            }
             let sha = sha_hex(&bytes);
             let rel = format!(
                 "_scan/{}.{}",
@@ -582,6 +613,13 @@ async fn item_run(app: &App, it: &Item) -> anyhow::Result<Out> {
         }
         _ => {
             let p = files::jail(root, &it.src).map_err(|e| anyhow!(e))?;
+            let ext = ext_of(&it.src);
+            if !extractable(&p, &ext) {
+                return Ok(skip(format!("format .{ext} sense text extraïble")));
+            }
+            if tokio::fs::metadata(&p).await?.len() > super::preview::MAX_BYTES {
+                return Ok(skip("fitxer massa gran".into()));
+            }
             let sha = sha_hex(&tokio::fs::read(&p).await?);
             file_item(app, it, &p, &it.src, &sha).await
         }

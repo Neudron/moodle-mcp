@@ -59,7 +59,7 @@ fn reply(ct: &'static str, body: Vec<u8>) -> Response {
 }
 
 /// Cap for anything held in memory (previews, DS conversion sources).
-const MAX_BYTES: u64 = 64 << 20;
+pub(crate) const MAX_BYTES: u64 = 64 << 20;
 
 fn too_big() -> ApiErr {
     ApiErr(StatusCode::PAYLOAD_TOO_LARGE, "fitxer massa gran".into())
