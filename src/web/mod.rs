@@ -55,6 +55,14 @@ pub async fn run_sync(app: &App, files: bool) -> Result<Vec<tasks::Event>, CoreE
         Err(e) => format!("Error de sincronització: {e}"),
     };
     app.db.kv_set("last_error", &msg).ok();
+    if let Err(e) = &res {
+        let kind = if matches!(e, CoreError::Auth(_)) {
+            "moodle-auth"
+        } else {
+            "moodle"
+        };
+        app.db.log_error("moodle", kind, &msg).ok();
+    }
     if res.is_ok() {
         readme::import_once(&app.db, &app.root).map_err(CoreError::Other)?;
         readme::write(&app.db, &app.root).map_err(CoreError::Other)?;

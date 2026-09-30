@@ -472,3 +472,50 @@ async fn submit_move_failure_is_a_warning_not_a_500() {
     assert!(v["warning"].as_str().unwrap().contains("carpeta"));
     assert_eq!(app.db.local("assign:7").unwrap().status, "lliurat");
 }
+
+#[tokio::test]
+async fn apple_auth_failure_is_409_and_visible_in_status() {
+    use std::os::unix::fs::PermissionsExt;
+    let (base, app, _m, root) = start("apple409").await;
+    let sh = root.join("fake.sh");
+    std::fs::write(
+        &sh,
+        "#!/bin/sh\ncase $1 in todo-*) echo '{\"error\":\"caducada\",\"kind\":\"auth\"}'; exit 2;; esac\necho '{\"uid\":\"U\"}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::env::set_var("ICLOUD_GLASS_CMD", &sh);
+    std::env::set_var("ICLOUD_GLASS_STATE", root.join("state"));
+    app.db
+        .upsert_tasks(&[web::db::Task {
+            id: "assign:1".into(),
+            title: "T".into(),
+            due: web::now() + 86400,
+            ..Default::default()
+        }])
+        .unwrap();
+    let c = reqwest::Client::new();
+    let r = post(&c, &base, "/api/apple-sync").send().await.unwrap();
+    assert_eq!(r.status(), 409);
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(
+        (v["kind"].as_str(), v["error"].as_str()),
+        (Some("auth"), Some("caducada"))
+    );
+    assert_eq!(v["created"], 1, "old Summary fields kept");
+    let st: serde_json::Value = c
+        .get(format!("{base}/api/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(st["apple"]["state"], "auth");
+    assert_eq!(st["errors"][0]["kind"], "apple-auth");
+    // pruned to 200 rows
+    for i in 0..250 {
+        app.db.log_error("t", "k", &i.to_string()).unwrap();
+    }
+    assert_eq!(app.db.recent_errors(500).unwrap().len(), 200);
+}

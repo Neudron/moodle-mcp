@@ -505,11 +505,31 @@ async fn status(State(app): S) -> R<Json<Value>> {
         "last_sync": app.db.kv_get("last_sync")?.and_then(|v| v.parse::<i64>().ok()).unwrap_or(0),
         "syncing": app.syncing.try_lock().is_err(),
         "error": app.db.kv_get("last_error")?.unwrap_or_default(),
+        "errors": app.db.recent_errors(5)?.into_iter()
+            .map(|(at, source, kind, msg)| json!({"at": at, "source": source, "kind": kind, "msg": msg}))
+            .collect::<Vec<_>>(),
+        "apple": {
+            "state": app.db.kv_get("apple_state")?.unwrap_or_else(|| "ok".into()),
+            "since": app.db.kv_get("apple_since")?.and_then(|v| v.parse::<i64>().ok()).unwrap_or(0),
+        },
     })))
 }
 
-async fn apple_sync(State(app): S) -> Json<Value> {
-    Json(json!(crate::web::apple::sync(&app).await))
+async fn apple_sync(State(app): S) -> (StatusCode, Json<Value>) {
+    let r = crate::web::apple::sync(&app).await;
+    let mut v = json!(r);
+    let code = if r.auth() {
+        v["error"] = json!(r
+            .errs
+            .iter()
+            .find(|e| e.kind == crate::web::apple::Kind::Auth)
+            .map_or("", |e| &e.msg));
+        v["kind"] = json!("auth");
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::OK
+    };
+    (code, Json(v))
 }
 
 async fn sync_now(State(app): S) -> R<Json<Value>> {

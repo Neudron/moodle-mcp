@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS grades(course_id INT PRIMARY KEY, json TEXT NOT NULL)
 CREATE TABLE IF NOT EXISTS extract_cache(sha TEXT PRIMARY KEY, source_url TEXT, result_json TEXT, at INT);
 CREATE TABLE IF NOT EXISTS notify_log(key TEXT PRIMARY KEY, at INT);
 CREATE TABLE IF NOT EXISTS caldav_map(task_id TEXT PRIMARY KEY, hash TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS error_log(at INT NOT NULL, source TEXT NOT NULL, kind TEXT NOT NULL, msg TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS manual_rows(n INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS scan_job(id INTEGER PRIMARY KEY AUTOINCREMENT, started INT NOT NULL, finished INT, state TEXT NOT NULL);
@@ -301,6 +302,31 @@ impl Db {
         self.c()
             .execute("DELETE FROM caldav_map WHERE task_id=?1", [id])?;
         Ok(())
+    }
+
+    /// Append to error_log, keeping the newest 200 rows.
+    pub fn log_error(&self, source: &str, kind: &str, msg: &str) -> Result<()> {
+        let c = self.c();
+        c.execute(
+            "INSERT INTO error_log(at,source,kind,msg) VALUES(?1,?2,?3,?4)",
+            params![super::now(), source, kind, msg],
+        )?;
+        c.execute(
+            "DELETE FROM error_log WHERE rowid NOT IN (SELECT rowid FROM error_log ORDER BY rowid DESC LIMIT 200)",
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// Newest first: (at, source, kind, msg).
+    pub fn recent_errors(&self, n: usize) -> Result<Vec<(i64, String, String, String)>> {
+        let c = self.c();
+        let mut st =
+            c.prepare("SELECT at,source,kind,msg FROM error_log ORDER BY rowid DESC LIMIT ?1")?;
+        let rows = st.query_map([n as i64], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 
     pub fn kv_get(&self, k: &str) -> Result<Option<String>> {

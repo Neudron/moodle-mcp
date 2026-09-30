@@ -1,9 +1,149 @@
 use moodle_mcp::moodle::Moodle;
+use moodle_mcp::web::apple::{AppleErr, Kind};
 use moodle_mcp::web::{
     self, apple,
     db::{Db, Local, Task},
 };
 use std::os::unix::fs::PermissionsExt;
+
+// Tests share process env (ICLOUD_GLASS_*), so they run one at a time.
+static ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct Fake {
+    dir: std::path::PathBuf,
+}
+
+impl Fake {
+    /// Fake icloud-glass: logs args; todo-new fails when `todo_fail` holds "auth" or "other".
+    fn new(tag: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("mweb-apple-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = dir.display();
+        let sh = dir.join("fake.sh");
+        std::fs::write(
+            &sh,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> {d}/log\nif [ -f {d}/fail_$1 ]; then\n case \"$(cat {d}/fail_$1)\" in\n auth) echo '{{\"error\":\"x\",\"kind\":\"auth\"}}'; exit 2;;\n *) echo oops >&2; exit 1;;\n esac\nfi\necho '{{\"uid\":\"U-'$1'\"}}'\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("ICLOUD_GLASS_CMD", &sh);
+        std::env::set_var("ICLOUD_GLASS_STATE", dir.join("state"));
+        Fake { dir }
+    }
+    fn fail(&self, cmd: &str, kind: &str) {
+        std::fs::write(self.dir.join(format!("fail_{cmd}")), kind).unwrap();
+    }
+    fn heal(&self, cmd: &str) {
+        std::fs::remove_file(self.dir.join(format!("fail_{cmd}"))).unwrap();
+    }
+    fn calls(&self, cmd: &str) -> usize {
+        std::fs::read_to_string(self.dir.join("log"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.starts_with(cmd))
+            .count()
+    }
+    fn app(&self) -> web::App {
+        web::App::new(
+            Db::memory().unwrap(),
+            Moodle::new("http://x", "t"),
+            self.dir.to_str().unwrap(),
+            0,
+        )
+    }
+}
+
+fn task_n(n: u32, due: i64) -> Task {
+    Task {
+        id: format!("assign:{n}"),
+        title: format!("T{n}"),
+        ..task(due, "")
+    }
+}
+
+#[tokio::test]
+async fn cli_types_errors() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("cli");
+    f.fail("a", "auth");
+    assert_eq!(
+        apple::cli(&["a"]).await,
+        Err(AppleErr {
+            kind: Kind::Auth,
+            msg: "x".into()
+        })
+    );
+    f.fail("b", "other");
+    assert_eq!(apple::cli(&["b"]).await.unwrap_err().kind, Kind::Other);
+    assert_eq!(apple::cli(&["c"]).await.unwrap(), "U-c");
+    // exit code 2 alone means Auth, message capped at 200 chars and first line.
+    let sh = f.dir.join("two.sh");
+    std::fs::write(
+        &sh,
+        format!("#!/bin/sh\necho '{}' >&2\nexit 2\n", "y".repeat(300)),
+    )
+    .unwrap();
+    std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::env::set_var("ICLOUD_GLASS_CMD", &sh);
+    let e = apple::cli(&["z"]).await.unwrap_err();
+    assert_eq!((e.kind, e.msg.len()), (Kind::Auth, 200));
+}
+
+#[tokio::test]
+async fn auth_failure_stops_todos_but_not_events() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("abort");
+    f.fail("todo-new", "auth");
+    let app = f.app();
+    let due = web::now() + 86400 * 5;
+    app.db
+        .upsert_tasks(&[task_n(1, due), task_n(2, due), task_n(3, due)])
+        .unwrap();
+    let r = apple::sync(&app).await;
+    assert_eq!((f.calls("todo-new"), f.calls("event-new")), (1, 3));
+    assert!(r.auth());
+    assert_eq!(r.errors, vec!["x".to_string()]);
+    assert_eq!(app.db.kv_get("apple_state").unwrap().unwrap(), "auth");
+    let log = app.db.recent_errors(5).unwrap();
+    assert_eq!(
+        (log[0].1.as_str(), log[0].2.as_str()),
+        ("apple", "apple-auth")
+    );
+    // marker present: no todo spawn at all.
+    std::fs::create_dir_all(f.dir.join("state")).unwrap();
+    std::fs::write(f.dir.join("state/reminders-auth-required"), "").unwrap();
+    f.heal("todo-new");
+    let r = apple::sync(&app).await;
+    assert_eq!(f.calls("todo-new"), 1, "blocked by marker");
+    assert!(r.auth());
+}
+
+#[tokio::test]
+async fn todo_failure_keeps_event_hash_and_retries_only_todo() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("hash");
+    f.fail("todo-new", "other");
+    let app = f.app();
+    let due = web::now() + 86400 * 5;
+    app.db.upsert_tasks(&[task_n(1, due)]).unwrap();
+    let r = apple::sync(&app).await;
+    assert!(!r.auth() && r.errors.len() == 1);
+    let rows = app.db.caldav_rows().unwrap();
+    assert!(!rows[0].1.is_empty(), "real event hash stored");
+    assert_eq!(
+        (rows[0].2.as_str(), rows[0].3.as_str()),
+        ("U-event-new", "")
+    );
+    assert_eq!(app.db.kv_get("apple_state").unwrap().unwrap(), "err");
+    f.heal("todo-new");
+    apple::sync(&app).await;
+    assert_eq!((f.calls("event-new"), f.calls("todo-new")), (1, 2));
+    assert_eq!(app.db.caldav_rows().unwrap()[0].3, "U-todo-new");
+    assert_eq!(app.db.kv_get("apple_state").unwrap().unwrap(), "ok");
+}
 
 fn task(due: i64, status: &str) -> Task {
     Task {
@@ -20,6 +160,7 @@ fn task(due: i64, status: &str) -> Task {
 
 #[tokio::test]
 async fn mirrors_lifecycle() {
+    let _g = ENV.lock().await;
     let dir = std::env::temp_dir().join(format!("mweb-apple-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -35,6 +176,7 @@ async fn mirrors_lifecycle() {
     .unwrap();
     std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::env::set_var("ICLOUD_GLASS_CMD", &sh);
+    std::env::set_var("ICLOUD_GLASS_STATE", dir.join("state"));
     let app = web::App::new(
         Db::memory().unwrap(),
         Moodle::new("http://x", "t"),
