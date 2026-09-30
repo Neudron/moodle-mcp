@@ -205,7 +205,7 @@ pub fn validate(raw: &str, doc: &str) -> anyhow::Result<Vec<Cand>> {
         .filter_map(|t| {
             let s = |k: &str| t[k].as_str().map(str::trim).unwrap_or("");
             let (title, quote) = (s("title"), s("evidence_quote"));
-            if title.is_empty()
+            if junk(title)
                 || title.chars().count() > 200
                 || quote.chars().count() < 8
                 || t["confidence"].as_f64().unwrap_or(0.0) < 0.5
@@ -217,6 +217,12 @@ pub fn validate(raw: &str, doc: &str) -> anyhow::Result<Vec<Cand>> {
                 .ok()
                 .and_then(|d| d.and_hms_opt(23, 59, 0))
                 .map_or(0, |d| d.and_utc().timestamp());
+            // a due date over a year old comes from a stale copy or a misread year
+            let due = if due < chrono::Utc::now().timestamp() - 365 * 86400 {
+                0
+            } else {
+                due
+            };
             Some(Cand {
                 title: title.into(),
                 description: s("description").chars().take(2000).collect(),
@@ -237,12 +243,24 @@ fn key(s: &str) -> String {
         .collect()
 }
 
+/// Code lines, bullets and separators the model mistakes for task titles.
+fn junk(title: &str) -> bool {
+    !title.starts_with(char::is_alphanumeric)
+        || title.contains([';', '{', '}', '=', '(', ')', '<', '>'])
+        || title.chars().filter(|c| c.is_alphabetic()).count() < 4
+}
+
 /// Same course and same normalised title (or one contains the other, both 8+ chars) as a Moodle task.
-pub fn is_dup(existing: &[Task], course: &str, title: &str) -> bool {
+/// `own` is the id prefix of the item being scanned: its own earlier rows never count as dups.
+pub fn is_dup(existing: &[Task], course: &str, title: &str, own: &str) -> bool {
     let k = key(title);
     existing.iter().any(|t| {
-        if t.source == "ai" || t.course != course {
+        if t.course != course {
             return false;
+        }
+        if t.source == "ai" {
+            // same exercise in another copy of the document (old .pdf, dated re-upload)
+            return !t.id.starts_with(own) && key(&t.title) == k;
         }
         let e = key(&t.title);
         e == k || (e.len() >= 8 && k.len() >= 8 && (e.contains(&k) || k.contains(&e)))
@@ -266,7 +284,14 @@ pub fn to_tasks(sha: &str, item: &Item, cands: &[Cand], existing: &[Task]) -> Ve
     cands
         .iter()
         .enumerate()
-        .filter(|(_, c)| !is_dup(existing, &item.course, &c.title))
+        .filter(|(_, c)| {
+            !is_dup(
+                existing,
+                &item.course,
+                &c.title,
+                &format!("ai:{}:", &sha[..12]),
+            )
+        })
         .map(|(i, c)| {
             let mut body = format!("<p>{}</p>", esc(&c.description));
             if !c.deliverable.is_empty() {
@@ -810,6 +835,9 @@ mod tests {
               {{"title":"Baixa","evidence_quote":"Lliurar abans del 2026-10-15","confidence":0.1}},
               {{"title":"Curta","evidence_quote":"Cal fer","confidence":1}},
               {{"title":"","evidence_quote":"Lliurar abans del 2026-10-15","confidence":1}},
+              {{"title":"return true; }}","evidence_quote":"Lliurar abans del 2026-10-15","confidence":1}},
+              {{"title":"- javac -version","evidence_quote":"Lliurar abans del 2026-10-15","confidence":1}},
+              {{"title":"*****","evidence_quote":"Lliurar abans del 2026-10-15","confidence":1}},
               {{"title":"Bona","evidence_quote":"Lliurar abans del 2026-10-15","confidence":0.5}}]}}"#
         );
         let v = validate(&raw, DOC).unwrap();
@@ -829,7 +857,8 @@ mod tests {
 
     #[test]
     fn validate_caps_at_twenty() {
-        let one = r#"{"title":"T","evidence_quote":"Lliurar abans del 2026-10-15","confidence":1}"#;
+        let one =
+            r#"{"title":"Tasca","evidence_quote":"Lliurar abans del 2026-10-15","confidence":1}"#;
         let raw = format!(r#"{{"tasks":[{}]}}"#, vec![one; 30].join(","));
         assert_eq!(validate(&raw, DOC).unwrap().len(), 20);
     }
@@ -849,14 +878,19 @@ mod tests {
     #[test]
     fn dedupe_against_moodle_tasks() {
         let ex = [moodle("A", "Entrega 1: Memòria del projecte")];
-        assert!(is_dup(&ex, "A", "entrega 1 - memoria del projecte"));
-        assert!(is_dup(&ex, "A", "Entrega 1: Memòria del projecte (PDF)"));
-        assert!(!is_dup(&ex, "B", "Entrega 1: Memòria del projecte"));
-        assert!(!is_dup(&ex, "A", "Presentació oral"));
-        assert!(!is_dup(&[moodle("A", "Ex")], "A", "Ex 2")); // short titles: equality only
+        let d = |ex: &[Task], c: &str, t: &str| is_dup(ex, c, t, "ai:own:");
+        assert!(d(&ex, "A", "entrega 1 - memoria del projecte"));
+        assert!(d(&ex, "A", "Entrega 1: Memòria del projecte (PDF)"));
+        assert!(!d(&ex, "B", "Entrega 1: Memòria del projecte"));
+        assert!(!d(&ex, "A", "Presentació oral"));
+        assert!(!d(&[moodle("A", "Ex")], "A", "Ex 2")); // short titles: equality only
         let mut ai = moodle("A", "Presentació oral");
         ai.source = "ai".into();
-        assert!(!is_dup(&[ai], "A", "Presentació oral")); // only Moodle tasks dedupe
+        ai.id = "ai:other:0".into();
+        assert!(d(&[ai.clone()], "A", "Presentació oral")); // same exercise, other copy
+        assert!(!d(&[ai.clone()], "A", "Presentació oral (2)")); // AI rows: equality only
+        ai.id = "ai:own:3".into();
+        assert!(!d(&[ai], "A", "Presentació oral")); // own earlier rows never dedupe
     }
 
     #[test]
