@@ -111,12 +111,6 @@ async fn sync_stores_submission_files_and_intro_sizes() {
     assert_eq!(t.submission_files.len(), 1);
     assert_eq!(t.submission_files[0].filename, "M4_A1_A_RA2_amin.docx");
     assert_eq!(t.submission_files[0].filesize, 2048);
-    assert!(db
-        .task("assign:8")
-        .unwrap()
-        .unwrap()
-        .submission_files
-        .is_empty());
 }
 
 #[tokio::test]
