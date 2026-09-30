@@ -26,7 +26,11 @@ async function api(path, opts = {}) {
   if (o.body !== undefined && typeof o.body !== 'string') { o.body = JSON.stringify(o.body); o.headers['content-type'] = 'application/json'; }
   if (o.method && o.method !== 'GET') o.headers['x-neu'] = '1';
   const r = await fetch(path, o);
-  if (!r.ok) throw Object.assign(new Error((await r.text()) || r.statusText), { status: r.status });
+  if (!r.ok) {
+    const t = await r.text();
+    let body; try { body = JSON.parse(t); } catch (e) { body = t; } // 409 JSON bodies drive the IDE dialogs
+    throw Object.assign(new Error(t || r.statusText), { status: r.status, body });
+  }
   return (r.headers.get('content-type') || '').includes('json') ? r.json() : r.text();
 }
 
@@ -477,13 +481,13 @@ async function route(o) {
   const had = main.contains(document.activeElement), aid = had ? document.activeElement.id : '';
   markNav();
   main.setAttribute('aria-busy', 'true');
-  if (!soft) { main.dataset.view = nm; main.classList.toggle('edit', nm === 'edita'); main.replaceChildren(skeleton()); }
+  if (!soft) { main.dataset.view = nm; main.classList.toggle('edit', nm === 'edita' || nm === 'ide'); main.replaceChildren(skeleton()); }
   let node;
   try { node = await views[nm](...rest.map(decodeURIComponent)); } catch (e) { node = errorPanel(e.message); }
   if (my !== route.n) return; // a newer navigation won
   route.cur = nm;
   const paint = () => {
-    main.dataset.view = nm; main.classList.toggle('edit', nm === 'edita');
+    main.dataset.view = nm; main.classList.toggle('edit', nm === 'edita' || nm === 'ide');
     main.replaceChildren(node); main.removeAttribute('aria-busy');
     node.dispatchEvent?.(new Event('mounted'));
     const h1 = main.querySelector('h1');
@@ -535,7 +539,7 @@ $('#sync').addEventListener('click', async (e) => {
 });
 const curTheme = () => document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
 // Sandboxed iframes bake the theme colours into srcdoc, so a theme change re-renders the view.
-function themeChanged() { $('#theme-use').setAttribute('href', curTheme() === 'light' ? '#i-sun' : '#i-moon'); $('#theme').setAttribute('aria-pressed', String(curTheme() === 'dark')); if (route.cur && route.cur !== 'edita') route({ soft: true }); } // never tear down an open editor
+function themeChanged() { $('#theme-use').setAttribute('href', curTheme() === 'light' ? '#i-sun' : '#i-moon'); $('#theme').setAttribute('aria-pressed', String(curTheme() === 'dark')); window.monaco?.editor.setTheme(curTheme() === 'light' ? 'vs' : 'vs-dark'); if (route.cur && route.cur !== 'edita' && route.cur !== 'ide') route({ soft: true }); } // never tear down an open editor
 $('#theme').addEventListener('click', () => {
   const next = curTheme() === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = next;
@@ -819,6 +823,84 @@ views.edita = async (...parts) => {
     s.onload = open;
     s.onerror = () => wrap.replaceChildren(fallback('OnlyOffice no disponible.'));
     document.head.append(s);
+  }, { once: true });
+  return wrap;
+};
+
+// IDE: Monaco (cdnjs AMD loader, loaded on first visit) + sandboxed live preview for html/svg/md.
+const IDE_FILE = /\.(txt|md|html?|svg|css|js|json|xml|csv|java|py|sql|sh|php|ts|c|cpp|h|rs|go|ya?ml)$/i;
+fileExtras.push((info) => (IDE_FILE.test(info.rel) ? h('a', { class: 'btn', href: `#/ide/${enc(info.rel)}` }, "Obre a l'IDE") : null));
+// ide-helpers-start
+const LANG = { js: 'javascript', ts: 'typescript', py: 'python', md: 'markdown', htm: 'html', sh: 'shell', yml: 'yaml', rs: 'rust', txt: 'plaintext', csv: 'plaintext', cpp: 'cpp', h: 'c' };
+function langOf(rel) { const e = (rel.split('.').pop() || '').toLowerCase(); return LANG[e] || e; }
+function previewDoc(lang, text) {
+  if (lang === 'html') return text;
+  if (lang === 'svg' || lang === 'xml' && /<svg[\s>]/.test(text)) return `<body style="margin:0">${text}</body>`;
+  if (lang === 'markdown') return `<body style="font:16px/1.6 system-ui;max-width:70ch;margin:16px auto;padding:0 16px">${window.marked.parse(text)}</body>`;
+  return null;
+}
+// ide-helpers-end
+const MONACO = 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.2/min', MARKED = 'https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js';
+const loadJs = (src) => (loadJs[src] ??= new Promise((ok, ko) => { const s = h('script', { src }); s.onload = ok; s.onerror = () => { delete loadJs[src]; ko(new Error('No s\'ha pogut carregar ' + src)); }; document.head.append(s); }));
+async function loadMonaco() {
+  if (window.monaco) return;
+  window.MonacoEnvironment = { getWorkerUrl: () => 'data:text/javascript;charset=utf-8,' + enc(`self.MonacoEnvironment={baseUrl:'${MONACO}/'};importScripts('${MONACO}/vs/base/worker/workerMain.js');`) };
+  await loadJs(`${MONACO}/vs/loader.min.js`);
+  window.require.config({ paths: { vs: `${MONACO}/vs` } });
+  await new Promise((ok, ko) => window.require(['vs/editor/editor.main'], ok, ko));
+}
+
+views.ide = async (...parts) => {
+  const rel = parts.join('/');
+  let f;
+  try { f = await api(`/api/ide/file?path=${enc(rel)}`); }
+  catch (e) { return e.status === 415 ? empty('No és un fitxer de text', 'Aquest fitxer no es pot editar com a text.', h('a', { class: 'btn', href: `#/fitxers/${enc(rel)}` }, 'Torna al fitxer')) : errorPanel(e.message); }
+  let sha = f.sha, dirty = false, ed;
+  const lang = langOf(rel), live = ['html', 'svg', 'markdown'].includes(lang) || lang === 'xml';
+  const state = h('span', { class: 'v-dirty dim', role: 'status' });
+  const setDirty = (d) => { dirty = d; setText(state, d ? 'Canvis sense desar' : ''); };
+  const post = (url, body) => api(url, { method: 'POST', body });
+  const save = async () => {
+    const content = ed.getValue();
+    try { sha = (await post('/api/save', { path: rel, content, base_sha: sha })).sha; setDirty(false); toast('Desat'); return; }
+    catch (e) {
+      const k = e.body?.error;
+      if (k === 'teacher_original') {
+        if (!(await confirmDialog('Crea còpia _amin?', h('p', {}, "Aquest fitxer és l'original del professor i no es pot modificar. Es crearà una còpia _amin amb els teus canvis."), 'Crea còpia'))) return;
+        try {
+          const c = await post('/api/ide/copy', { path: rel });
+          await post('/api/save', { path: c.rel, content, base_sha: c.sha });
+          setDirty(false); location.hash = `#/ide/${enc(c.rel)}`;
+        } catch (e2) { toast(e2.message, true); }
+      } else if (k === 'conflict') {
+        if (!(await confirmDialog('El fitxer ha canviat al disc', h('p', {}, 'Algú ha modificat aquest fitxer des que el vas obrir. Vols sobreescriure\'l amb el teu text?'), 'Sobreescriu'))) return;
+        try { sha = (await post('/api/save', { path: rel, content, base_sha: e.body.sha })).sha; setDirty(false); toast('Desat'); } catch (e2) { toast(e2.message, true); }
+      } else toast(e.message, true);
+    }
+  };
+  const frame = live ? h('iframe', { class: 'v-idepv', sandbox: '', title: 'Previsualització en directe' }) : null;
+  let t;
+  const refresh = () => { clearTimeout(t); t = setTimeout(() => { frame.srcdoc = previewDoc(lang === 'xml' ? 'svg' : lang, ed.getValue()) ?? ''; }, 250); };
+  const box = h('div', { class: 'v-idebox', role: 'group', 'aria-label': 'Editor de codi' });
+  const bar = h('div', { class: 'v-editbar' },
+    h('a', { class: 'btn ghost', href: `#/fitxers/${enc(rel)}` }, ic('arrow-l'), 'Torna al fitxer'),
+    h('span', { class: 'v-editname', title: rel }, rel.split('/').pop()), state,
+    h('button', { type: 'button', class: 'primary', onclick: save }, 'Desa'));
+  const wrap = h('section', { class: 'v-ide' }, h('h1', { class: 'sr-only' }, `IDE ${rel}`), bar,
+    f.teacher && h('p', { class: 'v-idenote dim' }, 'Original del professor: en desar es crearà una còpia _amin.'),
+    h('div', { class: 'v-idesplit' + (live ? ' live' : '') }, box, frame));
+  wrap.addEventListener('mounted', async () => {
+    try {
+      await Promise.all([loadMonaco(), lang === 'markdown' && loadJs(MARKED)]);
+      if (!wrap.isConnected) return;
+      ed = window.monaco.editor.create(box, { value: f.content, language: lang, theme: curTheme() === 'light' ? 'vs' : 'vs-dark', automaticLayout: true, ariaLabel: 'Editor de codi' });
+      ed.addCommand(window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyS, save);
+      ed.onDidChangeModelContent(() => { setDirty(true); if (live) refresh(); });
+      if (live) refresh();
+      const stop = (ev) => { if (dirty) ev.preventDefault(); };
+      addEventListener('beforeunload', stop);
+      addEventListener('hashchange', () => { ed.dispose(); removeEventListener('beforeunload', stop); }, { once: true });
+    } catch (e) { wrap.replaceChildren(errorPanel(e.message)); }
   }, { once: true });
   return wrap;
 };
