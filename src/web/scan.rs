@@ -896,6 +896,7 @@ mod tests {
                 filename: "e.pdf".into(),
                 fileurl: "https://m/pluginfile.php/1/e.pdf".into(),
                 mimetype: String::new(),
+                ..Default::default()
             }],
             ..Default::default()
         };
