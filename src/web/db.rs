@@ -60,6 +60,17 @@ CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS manual_rows(n INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
 ";
 
+/// Idempotent: ADD COLUMN errors when the column already exists, which is fine.
+fn migrate(c: &Connection) {
+    for col in ["ev_uid", "todo_uid"] {
+        c.execute(
+            &format!("ALTER TABLE caldav_map ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"),
+            [],
+        )
+        .ok();
+    }
+}
+
 fn json_rows(c: &Connection, sql: &str) -> Result<Vec<String>> {
     let mut st = c.prepare(sql)?;
     let rows = st.query_map([], |r| r.get::<_, String>(0))?;
@@ -71,12 +82,14 @@ impl Db {
         let c = Connection::open(path)?;
         c.execute_batch("PRAGMA journal_mode=WAL;")?;
         c.execute_batch(SCHEMA)?;
+        migrate(&c);
         Ok(Db(Mutex::new(c)))
     }
 
     pub fn memory() -> Result<Db> {
         let c = Connection::open_in_memory()?;
         c.execute_batch(SCHEMA)?;
+        migrate(&c);
         Ok(Db(Mutex::new(c)))
     }
 
@@ -234,6 +247,28 @@ impl Db {
             "INSERT OR REPLACE INTO caldav_map(task_id,hash) VALUES(?1,?2)",
             params![id, hash],
         )?;
+        Ok(())
+    }
+
+    /// (task_id, hash, event uid, reminder uid) for every mirrored task.
+    pub fn caldav_rows(&self) -> Result<Vec<(String, String, String, String)>> {
+        let c = self.c();
+        let mut st = c.prepare("SELECT task_id,hash,ev_uid,todo_uid FROM caldav_map")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    pub fn set_caldav(&self, id: &str, hash: &str, ev: &str, todo: &str) -> Result<()> {
+        self.c().execute(
+            "INSERT OR REPLACE INTO caldav_map(task_id,hash,ev_uid,todo_uid) VALUES(?1,?2,?3,?4)",
+            params![id, hash, ev, todo],
+        )?;
+        Ok(())
+    }
+
+    pub fn del_caldav(&self, id: &str) -> Result<()> {
+        self.c()
+            .execute("DELETE FROM caldav_map WHERE task_id=?1", [id])?;
         Ok(())
     }
 

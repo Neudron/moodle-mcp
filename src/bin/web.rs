@@ -23,6 +23,10 @@ async fn main() -> Result<()> {
             if let Err(e) = web::run_sync(&bg, true).await {
                 tracing::warn!(error = %e, "background sync failed");
             }
+            let r = web::apple::sync(&bg).await;
+            if !r.errors.is_empty() {
+                tracing::warn!(errors = ?r.errors, "apple sync");
+            }
             tokio::time::sleep(Duration::from_secs(30 * 60)).await;
         }
     });
