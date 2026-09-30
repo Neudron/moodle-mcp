@@ -143,6 +143,7 @@ pub async fn convert(app: &App, bytes: &[u8], ext: &str, output: &str) -> Result
     let r: Value = http
         .post(format!("{}/ConvertService.ashx", oo_base()))
         .bearer_auth(auth)
+        .header("Accept", "application/json")
         .json(&body)
         .send()
         .await
@@ -263,10 +264,15 @@ async fn preview(State(app): S, Query(q): Query<Q>) -> R<Response> {
     Ok(reply(files::mime(Path::new(&name)), bytes))
 }
 
+/// Token-protected source fetch; also served on the docker-bound listener for OnlyOffice.
+pub fn psrc_router() -> Router<Arc<App>> {
+    Router::new().route("/oo/psrc", get(psrc))
+}
+
 pub fn router() -> Router<Arc<App>> {
     Router::new()
         .route("/api/preview", get(preview))
-        .route("/oo/psrc", get(psrc))
+        .merge(psrc_router())
 }
 
 #[cfg(test)]

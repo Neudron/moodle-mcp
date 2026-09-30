@@ -40,7 +40,9 @@ async fn main() -> Result<()> {
         // Degrade to "OnlyOffice no disponible" instead of refusing to start.
         match tokio::net::TcpListener::bind((bind.as_str(), port)).await {
             Ok(l) => {
-                let oo = web::office::oo_router().with_state(Arc::clone(&app));
+                let oo = web::office::oo_router()
+                    .merge(web::preview::psrc_router())
+                    .with_state(Arc::clone(&app));
                 tokio::spawn(async move { axum::serve(l, oo).await.ok() });
                 tracing::info!("onlyoffice callbacks on {bind}:{port}");
             }
