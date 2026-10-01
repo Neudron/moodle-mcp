@@ -113,7 +113,6 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/tasks/{id}/ai", post(set_ai))
         .route("/api/tasks/{id}/upload", post(upload_files))
         .route("/api/tasks/{id}/submit", post(submit))
-        .route("/api/submit-files", get(submit_files))
         .route("/api/browse", get(browse))
         .route("/api/tasks/{id}/pick", post(pick))
         .route("/api/courses", get(courses))
@@ -510,12 +509,6 @@ async fn pick(State(app): S, Path(id): Path<String>, Json(b): Json<PickIn>) -> R
     })?;
     readme::write(&app.db, &app.root)?;
     Ok(Json(l))
-}
-
-async fn submit_files(State(app): S) -> R<Json<Vec<String>>> {
-    let mut out = Vec::new();
-    files::walk(std::path::Path::new(&app.root), "submit", &mut out);
-    Ok(Json(out))
 }
 
 fn frontmatter(md: &str, key: &str) -> Option<String> {

@@ -514,7 +514,7 @@ views.tasca = async (id) => {
       return h('section', { class: 'v-item', 'aria-label': f },
         h('h3', { class: 'mono' }, f), h('div', { class: 'field-row' }, fileExtras.map((x) => x({ rel: f }))), box);
     }) : h('p', { class: 'dim' }, `Cap fitxer vinculat. Carpeta suggerida: ${tv.submit_dir}`),
-    linkFiles(id, l.files));
+    linkFiles(id));
   const lliurat = () => h('div', { class: 'v-pane' },
     (t.submission_files || []).length ? t.submission_files.map((f) => {
       const box = h('div', { class: 'v-preview' });
@@ -538,18 +538,62 @@ views.tasca = async (id) => {
     h('div', { class: 'split' }, h('div', { class: 'grid' }, main, rail)));
 };
 
-function linkFiles(id, current) {
-  const err = h('p', { class: 'err', id: 'vincula-err', role: 'alert' });
-  const input = h('input', { id: 'vincula-in', list: 'submit-files', placeholder: 'submit/…/fitxer_amin.docx', 'aria-describedby': 'vincula-err' });
-  const dl = h('datalist', { id: 'submit-files' });
-  api('/api/submit-files').then((fs) => dl.replaceChildren(...fs.map((f) => h('option', { value: f })))).catch((e) => toast(e.message, true));
-  return h('div', { class: 'fld v-link' }, h('label', { for: 'vincula-in' }, 'Vincula un fitxer'),
-    h('div', { class: 'field-row' }, input, dl, h('button', { type: 'button', id: 'vincula', onclick: async () => {
-      if (!input.value) { err.textContent = 'Escriu o tria un fitxer.'; input.setAttribute('aria-invalid', 'true'); input.focus(); return; }
-      err.textContent = ''; input.removeAttribute('aria-invalid');
-      try { await api(`/api/tasks/${enc(id)}/files`, { method: 'POST', body: { files: [...current, input.value] } }); await route({ soft: true }); $('#vincula')?.focus(); }
-      catch (e) { err.textContent = e.message; input.setAttribute('aria-invalid', 'true'); }
-    } }, 'Vincula')), err);
+// picker-helpers-start
+const crumbsOf = (rel) => [{ name: '~', rel: '' }, ...rel.split('/').filter(Boolean).map((name, i, a) => ({ name, rel: a.slice(0, i + 1).join('/') }))];
+const pickMove = (i, key, n) => {
+  const d = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: n - 1, PageDown: i + 10, PageUp: i - 10 }[key];
+  return d === undefined ? -1 : Math.max(0, Math.min(n - 1, d));
+};
+// picker-helpers-end
+const pk = { id: '', dir: '', all: [], shown: [], act: 0, opener: null };
+function pkRender() {
+  const q = $('#picker-q').value.toLowerCase(), ul = $('#picker-l'), inp = $('#picker-q');
+  pk.shown = pk.all.filter((e) => e.name.toLowerCase().includes(q));
+  pk.act = Math.min(pk.act, Math.max(0, pk.shown.length - 1));
+  ul.replaceChildren(...pk.shown.map((e, i) => h('li', { id: `picker-o${i}`, role: 'option', 'aria-selected': String(i === pk.act), onclick: () => { pk.act = i; pkGo(); }, onmousemove: () => { if (pk.act !== i) { pk.act = i; pkMark(); } } },
+    h('span', { class: 'fn' }, ic(e.is_dir ? 'folder' : 'file'), e.name), h('small', {}, e.is_dir ? '' : fsize(e.size)))));
+  inp.setAttribute('aria-expanded', String(pk.shown.length > 0));
+  pkMark();
+  setText($('#picker-n'), pk.shown.length ? `${pk.shown.length} elements` : 'Cap element');
+}
+function pkMark() {
+  const inp = $('#picker-q');
+  [...$('#picker-l').children].forEach((li, i) => { li.setAttribute('aria-selected', String(i === pk.act)); if (i === pk.act) li.scrollIntoView({ block: 'nearest' }); });
+  if (pk.shown.length) inp.setAttribute('aria-activedescendant', `picker-o${pk.act}`); else inp.removeAttribute('aria-activedescendant');
+}
+async function pkDir(rel) {
+  try {
+    const r = await api(`/api/browse?path=${enc(rel)}`);
+    pk.dir = rel; pk.all = r.entries; pk.act = 0; $('#picker-q').value = ''; $('#picker-e').textContent = '';
+    try { localStorage.setItem('pickerDir', rel); } catch (e) { /* storage blocked */ }
+  } catch (e) { $('#picker-e').textContent = e.message; return false; }
+  $('#picker-c').replaceChildren(...crumbsOf(rel).map((c) => h('button', { type: 'button', class: 'ghost', onclick: () => { pkDir(c.rel); $('#picker-q').focus(); } }, c.name)));
+  pkRender();
+  return true;
+}
+async function pkGo() {
+  const e = pk.shown[pk.act]; if (!e) return;
+  if (e.is_dir) { await pkDir(e.rel); return; }
+  try { await api(`/api/tasks/${enc(pk.id)}/pick`, { method: 'POST', body: { path: e.rel } }); } catch (x) { $('#picker-e').textContent = x.message; return; }
+  $('#picker').close(); await route({ soft: true });
+}
+async function openPicker(id) {
+  pk.id = id; pk.opener = document.activeElement;
+  let start = 'smx/submit'; try { start = localStorage.getItem('pickerDir') ?? start; } catch (e) { /* storage blocked */ }
+  $('#picker').showModal();
+  if (!(await pkDir(start)) && start !== 'smx/submit') await pkDir('');
+  $('#picker-q').focus();
+}
+$('#picker-q').addEventListener('input', () => { pk.act = 0; pkRender(); });
+$('#picker-q').addEventListener('keydown', (e) => {
+  const m = pickMove(pk.act, e.key, pk.shown.length);
+  if (m >= 0 && !e.altKey) { e.preventDefault(); pk.act = m; pkMark(); }
+  else if (e.key === 'Enter') { e.preventDefault(); pkGo(); }
+  else if ((e.key === 'Backspace' && !e.target.value) || (e.key === 'ArrowUp' && e.altKey)) { e.preventDefault(); if (pk.dir) pkDir(pk.dir.split('/').slice(0, -1).join('/')); }
+});
+$('#picker').addEventListener('close', () => { const o = pk.opener; pk.opener = null; if (o && o.isConnected) o.focus(); });
+function linkFiles(id) {
+  return h('div', { class: 'fld v-link' }, h('button', { type: 'button', id: 'vincula', onclick: () => openPicker(id) }, ic('folder'), 'Tria un fitxer…'));
 }
 
 function markNav() {

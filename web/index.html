@@ -72,6 +72,7 @@
 <dialog id="dlg" aria-labelledby="dlg-t" aria-describedby="dlg-b"><form method="dialog"><h2 id="dlg-t"></h2><div id="dlg-b"></div>
   <menu><button value="no" type="submit">Cancel·la</button><button value="ok" type="submit" class="primary" id="dlg-ok">D'acord</button></menu></form></dialog>
 <dialog id="pal" aria-label="Cerca i salta" class="pal"><input id="pal-q" type="text" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="pal-l" aria-label="Cerca" placeholder="Cerca tasques, cursos, fitxers…" autocomplete="off" spellcheck="false"><p id="pal-n" class="sr-only" role="status"></p><ul id="pal-l" role="listbox" aria-label="Resultats"></ul></dialog>
+<dialog id="picker" aria-labelledby="picker-t" class="picker"><h2 id="picker-t">Tria un fitxer</h2><nav id="picker-c" class="crumbs" aria-label="Ruta"></nav><input id="picker-q" type="text" role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="picker-l" aria-label="Filtra" placeholder="Filtra…" autocomplete="off" spellcheck="false"><p id="picker-n" class="sr-only" role="status"></p><p id="picker-e" class="err" role="alert"></p><ul id="picker-l" role="listbox" aria-label="Fitxers"></ul><menu><button type="button" onclick="this.closest('dialog').close()">Cancel·la</button></menu></dialog>
 <script src="/app.js"></script>
 </body>
 </html>

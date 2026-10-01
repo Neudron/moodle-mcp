@@ -566,3 +566,13 @@ dl.kv dt{font-weight:400}
 .v-shot{max-height:24rem;object-fit:contain;object-position:top}
 :root:not([data-theme=light]) .v-shot{filter:brightness(.88)}
 @media (max-width:899px){.v-idesplit.live{grid-template-rows:3fr 2fr}}
+
+dialog.picker{width:min(640px,calc(100vw - 32px));margin-top:8vh}
+.picker input{width:100%;min-height:44px}
+.crumbs{display:flex;flex-wrap:wrap;gap:var(--s1);margin-bottom:var(--s1)}
+.picker ul{list-style:none;padding:0;margin:var(--s1) 0 0;max-height:50vh;overflow:auto;font:inherit;background:none}
+.picker li{display:flex;justify-content:space-between;gap:var(--s2);align-items:center;min-height:44px;padding:0 var(--s2);border-radius:var(--r-md);cursor:pointer;border:2px solid transparent}
+.picker li .fn{display:flex;align-items:center;gap:var(--s1)}
+.picker li small{color:var(--dim);flex:none;font-size:14px}
+.picker li[aria-selected="true"]{background:var(--hover);border-color:var(--accent)}
+@media (forced-colors:active){.picker li[aria-selected="true"]{background:Highlight;color:HighlightText;forced-color-adjust:none}}
