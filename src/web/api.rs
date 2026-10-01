@@ -708,6 +708,12 @@ async fn auth_renew(State(app): S) -> (StatusCode, Json<Value>) {
 }
 
 async fn apple_sync(State(app): S) -> (StatusCode, Json<Value>) {
+    if crate::web::apple::LOCK.try_lock().is_err() {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "ja s'està sincronitzant"})),
+        );
+    }
     let r = crate::web::apple::sync(&app).await;
     let mut v = json!(r);
     let code = if r.auth() {
@@ -730,6 +736,12 @@ async fn apple_status(State(app): S) -> Json<Value> {
 
 async fn apple_reimport(State(app): S) -> (StatusCode, Json<Value>) {
     use crate::web::apple::Imp;
+    if crate::web::apple::LOCK.try_lock().is_err() {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "ja s'està sincronitzant"})),
+        );
+    }
     match crate::web::apple::import(&app, 60).await {
         Imp::Limited(n) => (
             StatusCode::TOO_MANY_REQUESTS,
@@ -753,9 +765,7 @@ async fn sync_now(State(app): S) -> R<Json<Value>> {
             "ja s'està sincronitzant".into(),
         ));
     }
-    let ev = crate::web::run_sync(&app, false)
-        .await
-        .map_err(|e| ApiErr(StatusCode::BAD_GATEWAY, e.to_string()))?;
+    let ev = crate::web::run_sync(&app, false).await.map_err(upstream)?;
     Ok(Json(json!({"events": ev.len()})))
 }
 
@@ -840,10 +850,13 @@ async fn open_local(State(app): S, Json(b): Json<PathQ>) -> R<Json<Value>> {
             .map_err(anyhow::Error::from)?
             .map_err(forbid)?;
     repoint(&app, &b.path, &rel)?;
-    std::process::Command::new("xdg-open")
+    let mut ch = tokio::process::Command::new("xdg-open")
         .arg(p)
         .spawn()
         .map_err(anyhow::Error::from)?;
+    tokio::spawn(async move {
+        let _ = ch.wait().await;
+    });
     Ok(Json(json!({})))
 }
 

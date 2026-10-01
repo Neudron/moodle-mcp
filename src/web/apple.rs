@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::process::Command;
 
 const NAME: &str = "Institut";
-static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+pub static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static IMPORT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Default, Serialize)]
