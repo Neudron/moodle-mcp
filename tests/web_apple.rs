@@ -24,7 +24,7 @@ impl Fake {
         std::fs::write(
             &sh,
             format!(
-                "#!/bin/sh\necho \"$@\" >> {d}/log\n[ \"$1\" = list-new ] && rm -f {d}/fail_todo-new\nif [ -f {d}/fail_$1 ]; then\n case \"$(cat {d}/fail_$1)\" in\n auth) echo '{{\"error\":\"x\",\"kind\":\"auth\"}}'; exit 2;;\n nolist) echo '{{\"error\":\"La lista no existe.\",\"kind\":\"config\"}}'; exit 1;;\n gone) echo '{{\"error\":\"icloud-glass: fallo inesperado (RemindersApiError).\",\"kind\":\"unknown\"}}'; exit 1;;\nempty) echo '{{}}'; exit 0;;\n config) echo '{{\"error\":\"falta\",\"kind\":\"config\"}}'; exit 1;;\n *) echo oops >&2; exit 1;;\n esac\nfi\necho '{{\"uid\":\"U-'$1'\"}}'\n"
+                "#!/bin/sh\necho \"$@\" >> {d}/log\n[ \"$1\" = list-new ] && rm -f {d}/fail_todo-new\nif [ -f {d}/fail_$1 ]; then\n case \"$(cat {d}/fail_$1)\" in\n auth) echo '{{\"error\":\"x\",\"kind\":\"auth\"}}'; exit 2;;\n nolist) echo '{{\"error\":\"La lista no existe.\",\"kind\":\"config\"}}'; exit 1;;\n gone) echo '{{\"error\":\"icloud-glass: fallo inesperado (RemindersApiError).\",\"kind\":\"unknown\"}}'; exit 1;;\nempty) echo '{{}}'; exit 0;;\n config) echo '{{\"error\":\"falta\",\"kind\":\"config\"}}'; exit 1;;\n net) echo '{{\"error\":\"down\",\"kind\":\"network\"}}'; exit 1;;\n *) echo oops >&2; exit 1;;\n esac\nfi\necho '{{\"uid\":\"U-'$1'\"}}'\n"
             ),
         )
         .unwrap();
@@ -547,4 +547,19 @@ async fn legacy_uid_is_kept_on_update() {
     let ev = l.lines().find(|x| x.starts_with("event-new")).unwrap();
     assert!(ev.contains("--uid U-legacy"), "{ev}");
     assert!(!ev.contains("--uid moodle-"), "{ev}");
+}
+
+#[tokio::test]
+async fn network_failure_stops_pass_calls() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("net");
+    f.fail("todo-new", "net");
+    f.fail("event-new", "net");
+    let app = f.app();
+    let due = web::now() + 86400 * 5;
+    app.db
+        .upsert_tasks(&[task_n(1, due), task_n(2, due), task_n(3, due)])
+        .unwrap();
+    apple::sync(&app).await;
+    assert_eq!((f.calls("todo-new"), f.calls("event-new")), (1, 1));
 }

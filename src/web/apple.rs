@@ -75,7 +75,7 @@ fn marker() -> bool {
     state_dir().join("reminders-auth-required").exists()
 }
 
-/// Run the CLI (60s cap, ICLOUD_GLASS_TIMEOUT_SECS overrides); returns the "uid" of its JSON stdout ("" when it prints none).
+/// Run the CLI (130s cap, ICLOUD_GLASS_TIMEOUT_SECS overrides); returns the "uid" of its JSON stdout ("" when it prints none).
 pub async fn cli(args: &[&str]) -> Result<String, AppleErr> {
     let bin = std::env::var("ICLOUD_GLASS_CMD").unwrap_or_else(|_| {
         format!(
@@ -90,7 +90,7 @@ pub async fn cli(args: &[&str]) -> Result<String, AppleErr> {
             std::env::var("ICLOUD_GLASS_TIMEOUT_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(60),
+                .unwrap_or(130),
         ),
         cmd.output(),
     )
@@ -161,7 +161,7 @@ async fn todo_cli(app: &App, args: &[&str], g: &mut Gate, s: &mut Summary) -> Re
         }
     }
     r.map_err(|e| {
-        g.blocked |= matches!(e.kind, Kind::Auth | Kind::Config);
+        g.blocked |= matches!(e.kind, Kind::Auth | Kind::Config | Kind::Network);
         s.fail(e);
     })
 }
@@ -172,7 +172,7 @@ async fn cal_cli(args: &[&str], g: &mut Gate, s: &mut Summary) -> Result<String,
         return Err(());
     }
     cli(args).await.map_err(|e| {
-        g.cal_down |= e.kind == Kind::Config;
+        g.cal_down |= matches!(e.kind, Kind::Config | Kind::Network);
         s.cal = true;
         s.fail(e);
     })
