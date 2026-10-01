@@ -440,7 +440,31 @@ impl State {
         let lock = open_lock(root)?;
         lock.lock_exclusive()
             .context("locking state for write (another sync running?)")?;
+        self.write_snapshot(root, &dir, &path)
+    }
 
+    /// Merge one course into the on-disk state under the exclusive lock, so
+    /// concurrent writers of other courses are not clobbered.
+    pub fn save_course(&self, root: &str, id: i64) -> Result<()> {
+        let dir = moodle_dir(root);
+        let path = state_path(root);
+        let lock = open_lock(root)?;
+        lock.lock_exclusive()
+            .context("locking state for write (another sync running?)")?;
+        let mut disk = match std::fs::read_to_string(&path) {
+            Ok(raw) => parse_state(&path, &raw, &dir)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::default(),
+            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+        };
+        let key = id.to_string();
+        if let Some(c) = self.courses.get(&key) {
+            disk.courses.insert(key, c.clone());
+        }
+        disk.user_id = self.user_id;
+        disk.write_snapshot(root, &dir, &path)
+    }
+
+    fn write_snapshot(&self, root: &str, dir: &Path, path: &Path) -> Result<()> {
         let snapshot = State {
             schema_version: SCHEMA_VERSION.max(self.schema_version),
             user_id: self.user_id,
@@ -463,9 +487,9 @@ impl State {
         file.sync_all()
             .with_context(|| format!("fsync {}", tmp.display()))?;
         drop(file);
-        std::fs::rename(&tmp, &path).with_context(|| format!("publishing {}", path.display()))?;
-        set_private(&path)?;
-        sync_dir(&dir);
+        std::fs::rename(&tmp, path).with_context(|| format!("publishing {}", path.display()))?;
+        set_private(path)?;
+        sync_dir(dir);
         Ok(())
     }
 

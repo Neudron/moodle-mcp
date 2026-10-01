@@ -304,7 +304,9 @@ pub async fn sync_all(
             if let Err(e) = crate::sync::sync_course(m, &mut state, c, root).await {
                 tracing::warn!(course = c.id, error = %e, "file sync failed");
             }
-            crate::state::State::save(&state, root).ok();
+            if let Err(e) = state.save_course(root, c.id) {
+                tracing::warn!(course = c.id, error = %e, "state save failed");
+            }
         }
     }
     db.kv_set("last_sync", &chrono::Utc::now().timestamp().to_string())

@@ -87,7 +87,7 @@ impl MoodleMcp {
         let report = sync_course(&m, &mut state, course, &root)
             .await
             .map_err(mcp)?;
-        State::save(&state, &root).map_err(mcp)?;
+        state.save_course(&root, course.id).map_err(mcp)?;
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&report).unwrap_or_default(),
         )]))
@@ -121,7 +121,9 @@ impl MoodleMcp {
                 }
                 Err(e) => out.push(json!({ "course_id": course.id, "error": e.to_string() })),
             }
-            State::save(&state, &root).ok();
+            if let Err(e) = state.save_course(&root, course.id) {
+                tracing::warn!(course = course.id, error = %e, "state save failed");
+            }
         }
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&out).unwrap_or_default(),

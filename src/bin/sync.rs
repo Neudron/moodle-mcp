@@ -53,7 +53,9 @@ async fn main() -> Result<()> {
             }
             Err(e) => eprintln!("  FAILED: {e:#}"),
         }
-        State::save(&state, &root).ok();
+        if let Err(e) = state.save_course(&root, course.id) {
+            eprintln!("  state save failed: {e:#}");
+        }
     }
     Ok(())
 }

@@ -257,3 +257,18 @@ fn state_large_state_roundtrip() {
         started.elapsed()
     );
 }
+
+#[test]
+fn save_course_merges_concurrent_courses() {
+    let root = test_root("savecourse");
+    sample_state().save(&root).unwrap();
+    let mut a = State::load(&root).unwrap();
+    let mut b = State::load(&root).unwrap();
+    let c = a.courses["101"].clone();
+    a.courses.insert("1".to_string(), c.clone());
+    b.courses.insert("2".to_string(), c);
+    a.save_course(&root, 1).unwrap();
+    b.save_course(&root, 2).unwrap();
+    let d = State::load(&root).unwrap();
+    assert!(d.courses.contains_key("1") && d.courses.contains_key("2"));
+}
