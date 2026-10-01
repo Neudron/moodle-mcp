@@ -86,7 +86,7 @@ async fn download_resumable_roundtrip_with_meta() {
         .find(|f| f.filename.ends_with(".pdf"))
         .expect("a pdf fileurl");
     let url = first.fileurl.clone().expect("fileurl");
-    let dir = std::env::temp_dir().join("moodle-mcp-t2");
+    let dir = std::env::temp_dir().join(format!("moodle-mcp-t2-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("tmpdir");
     let part = dir.join("roundtrip.pdf.part");
     let _ = std::fs::remove_file(&part);
@@ -120,7 +120,7 @@ async fn download_resumes_from_partial_part_file() {
         .expect("pluginfile path");
     let full = m.pluginfile(path).expect("fixture bytes").to_vec();
     assert!(full.len() > 4, "fixture must be resumable");
-    let dir = std::env::temp_dir().join("moodle-mcp-t2");
+    let dir = std::env::temp_dir().join(format!("moodle-mcp-t2-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("tmpdir");
     let part = dir.join("resume.pdf.part");
     // Seed a truncated prefix: the client must Range-resume, not restart.
@@ -136,7 +136,7 @@ async fn download_resumes_from_partial_part_file() {
 async fn refuses_non_http_and_non_pluginfile_urls() {
     let m = MockMoodle::healthy().await;
     let c = client(&m);
-    let part = std::env::temp_dir().join("moodle-mcp-t2-nope.part");
+    let part = std::env::temp_dir().join(format!("moodle-mcp-t2-nope-{}.part", std::process::id()));
     for bad in [
         "ftp://example.invalid/x.pdf".to_string(),
         "file:///etc/passwd".to_string(),
@@ -185,7 +185,8 @@ async fn redaction_token_absent_from_errors() {
     );
     // Refused URLs echo redacted, never raw.
     let c = Moodle::new(m.base(), fake);
-    let part = std::env::temp_dir().join("moodle-mcp-t2-redact.part");
+    let part =
+        std::env::temp_dir().join(format!("moodle-mcp-t2-redact-{}.part", std::process::id()));
     let err = c
         .download_resumable(&format!("ftp://example.invalid/x.pdf?token={fake}"), &part)
         .await

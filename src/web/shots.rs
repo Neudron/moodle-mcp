@@ -483,9 +483,16 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("old.pdf"), "no").unwrap(); // already there: not ours
         let (p, q) = (dir.join("doc.docx.part"), dir.join("doc.docx"));
-        let q2 = q.clone();
+        let (q2, log) = (q.clone(), d.join("log"));
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(700)).await;
+            // wait until download() really navigated (it may queue behind the shared SESSION lock)
+            for _ in 0..500 {
+                if std::fs::read_to_string(&log).is_ok_and(|l| l.contains("browser_navigate")) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            tokio::time::sleep(Duration::from_millis(300)).await;
             std::fs::write(&p, "PK").unwrap();
             std::fs::rename(&p, &q2).unwrap();
             let done = std::fs::read(&q2).unwrap();
