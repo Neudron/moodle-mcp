@@ -164,7 +164,7 @@ function card(tv, hideCourse, quick) {
       try { await api(`/api/tasks/${enc(t.id)}/status`, { method: 'POST', body: { status: 'lliurat' } }); } catch (e) { wrap.hidden = false; toast(e.message, true); }
       route({ soft: true });
     });
-  } }, ic('check'), 'Lliurada'));
+  } }, ic('check'), h('span', {}, 'Lliurada')));
   return wrap;
 }
 
