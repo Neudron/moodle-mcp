@@ -56,30 +56,54 @@ pub struct Local {
 
 pub struct Db(Mutex<Connection>);
 
-const SCHEMA: &str = "
+/// Applied in order; `PRAGMA user_version` = number applied. Append only.
+const MIGRATIONS: &[&str] = &[
+    "
 CREATE TABLE IF NOT EXISTS task(id TEXT PRIMARY KEY, due INT NOT NULL, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS local(task_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS grades(course_id INT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS extract_cache(sha TEXT PRIMARY KEY, source_url TEXT, result_json TEXT, at INT);
-CREATE TABLE IF NOT EXISTS notify_log(key TEXT PRIMARY KEY, at INT);
 CREATE TABLE IF NOT EXISTS caldav_map(task_id TEXT PRIMARY KEY, hash TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS error_log(at INT NOT NULL, source TEXT NOT NULL, kind TEXT NOT NULL, msg TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS manual_rows(n INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS scan_job(id INTEGER PRIMARY KEY AUTOINCREMENT, started INT NOT NULL, finished INT, state TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS scan_item(job INT NOT NULL, src TEXT NOT NULL, course TEXT NOT NULL, kind TEXT NOT NULL, sha TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'pending', error TEXT NOT NULL DEFAULT '', at INT, PRIMARY KEY(job, src));
-";
+",
+    "ALTER TABLE caldav_map ADD COLUMN ev_uid TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE caldav_map ADD COLUMN todo_uid TEXT NOT NULL DEFAULT ''",
+    "DROP TABLE IF EXISTS notify_log",
+];
 
-/// Idempotent: ADD COLUMN errors when the column already exists, which is fine.
-fn migrate(c: &Connection) {
-    for col in ["ev_uid", "todo_uid"] {
-        c.execute(
-            &format!("ALTER TABLE caldav_map ADD COLUMN {col} TEXT NOT NULL DEFAULT ''"),
-            [],
-        )
-        .ok();
-    }
+fn version(c: &Connection) -> Result<usize> {
+    Ok(c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))? as usize)
 }
+
+fn migrate(c: &Connection) -> Result<()> {
+    let mut v = version(c)?;
+    // Pre-versioning DBs (user_version 0) already have the ev_uid/todo_uid columns.
+    let legacy: bool = c
+        .query_row(
+            "SELECT 1 FROM pragma_table_info('caldav_map') WHERE name='todo_uid'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if v == 0 && legacy {
+        v = 3;
+    }
+    for (i, sql) in MIGRATIONS.iter().enumerate().skip(v) {
+        c.execute_batch(&format!(
+            "BEGIN;{sql};PRAGMA user_version={};COMMIT;",
+            i + 1
+        ))?;
+    }
+    Ok(())
+}
+
+const PRAGMAS: &str =
+    "PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;";
 
 fn json_rows(c: &Connection, sql: &str) -> Result<Vec<String>> {
     let mut st = c.prepare(sql)?;
@@ -89,23 +113,38 @@ fn json_rows(c: &Connection, sql: &str) -> Result<Vec<String>> {
 
 impl Db {
     pub fn open(path: &Path) -> Result<Db> {
+        let existed = path.exists();
         let c = Connection::open(path)?;
+        if existed && version(&c)? < MIGRATIONS.len() {
+            // VACUUM INTO captures WAL contents; versioned name keeps the oldest state.
+            let mut bak = path.as_os_str().to_owned();
+            bak.push(format!(".pre-migrate-v{}", version(&c)?));
+            let _ = std::fs::remove_file(&bak);
+            c.execute("VACUUM INTO ?1", [bak.to_string_lossy().as_ref()])?;
+        }
         c.execute_batch("PRAGMA journal_mode=WAL;")?;
-        c.execute_batch(SCHEMA)?;
-        migrate(&c);
+        c.execute_batch(PRAGMAS)?;
+        migrate(&c)?;
         Ok(Db(Mutex::new(c)))
     }
 
     pub fn memory() -> Result<Db> {
         let c = Connection::open_in_memory()?;
-        c.execute_batch(SCHEMA)?;
-        migrate(&c);
+        c.execute_batch(PRAGMAS)?;
+        migrate(&c)?;
         Ok(Db(Mutex::new(c)))
     }
 
     fn c(&self) -> std::sync::MutexGuard<'_, Connection> {
         // Poison only means another request panicked; SQLite stays consistent.
         self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Read back a numeric PRAGMA (tests).
+    pub fn pragma(&self, name: &str) -> Result<i64> {
+        Ok(self
+            .c()
+            .query_row(&format!("PRAGMA {name}"), [], |r| r.get(0))?)
     }
 
     pub fn upsert_tasks(&self, tasks: &[Task]) -> Result<()> {
@@ -228,22 +267,6 @@ impl Db {
             out.push((id, serde_json::from_str(&j)?));
         }
         Ok(out)
-    }
-
-    pub fn notified(&self, key: &str) -> Result<bool> {
-        Ok(self
-            .c()
-            .query_row("SELECT 1 FROM notify_log WHERE key=?1", [key], |_| Ok(()))
-            .optional()?
-            .is_some())
-    }
-
-    pub fn mark_notified(&self, key: &str, at: i64) -> Result<()> {
-        self.c().execute(
-            "INSERT OR IGNORE INTO notify_log(key,at) VALUES(?1,?2)",
-            params![key, at],
-        )?;
-        Ok(())
     }
 
     pub fn cache_get(&self, sha: &str) -> Result<Option<String>> {
@@ -511,12 +534,8 @@ mod tests {
     }
 
     #[test]
-    fn notify_cache_kv() {
+    fn cache_kv() {
         let db = Db::memory().unwrap();
-        assert!(!db.notified("k").unwrap());
-        db.mark_notified("k", 1).unwrap();
-        db.mark_notified("k", 2).unwrap();
-        assert!(db.notified("k").unwrap());
         db.cache_put("s", "u", "[]", 1).unwrap();
         assert_eq!(db.cache_get("s").unwrap().as_deref(), Some("[]"));
         db.kv_set("a", "1").unwrap();
