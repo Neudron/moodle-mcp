@@ -151,3 +151,29 @@ fn ai_confirm_survives_concurrent_upsert() {
     ta.join().unwrap();
     assert_eq!(db.task("ai:x").unwrap().unwrap().ai_confirmed, Some(true));
 }
+
+#[test]
+fn newer_db_version_refuses_to_open() {
+    let p = tmp("newer");
+    drop(Db::open(&p).unwrap());
+    Connection::open(&p)
+        .unwrap()
+        .execute_batch("PRAGMA user_version=999")
+        .unwrap();
+    let e = Db::open(&p).err().expect("must fail").to_string();
+    assert!(e.contains("newer"), "{e}");
+}
+
+#[test]
+fn db_files_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let p = tmp("mode");
+    let db = Db::open(&p).unwrap();
+    db.kv_set("k", "v").unwrap();
+    for suf in ["", "-wal", "-shm"] {
+        let mut f = p.as_os_str().to_owned();
+        f.push(suf);
+        let m = std::fs::metadata(&f).unwrap().permissions().mode() & 0o777;
+        assert_eq!(m, 0o600, "{f:?}");
+    }
+}

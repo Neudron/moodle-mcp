@@ -86,6 +86,12 @@ fn version(c: &Connection) -> Result<usize> {
 
 fn migrate(c: &Connection) -> Result<()> {
     let mut v = version(c)?;
+    if v > MIGRATIONS.len() {
+        anyhow::bail!(
+            "database schema v{v} is newer than this build (v{}); refusing to open",
+            MIGRATIONS.len()
+        );
+    }
     // Pre-versioning DBs (user_version 0) already have the ev_uid/todo_uid columns.
     let legacy: bool = c
         .query_row(
@@ -107,6 +113,12 @@ fn migrate(c: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Best effort 0600; the file may not exist (no -wal yet).
+fn private(p: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o600));
+}
+
 const PRAGMAS: &str =
     "PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;";
 
@@ -126,10 +138,16 @@ impl Db {
             bak.push(format!(".pre-migrate-v{}", version(&c)?));
             let _ = std::fs::remove_file(&bak);
             c.execute("VACUUM INTO ?1", [bak.to_string_lossy().as_ref()])?;
+            private(Path::new(&bak));
         }
         c.execute_batch("PRAGMA journal_mode=WAL;")?;
         c.execute_batch(PRAGMAS)?;
         migrate(&c)?;
+        for suf in ["", "-wal", "-shm"] {
+            let mut f = path.as_os_str().to_owned();
+            f.push(suf);
+            private(Path::new(&f));
+        }
         Ok(Db(Mutex::new(c), AtomicU64::new(Self::boot())))
     }
 
@@ -244,6 +262,7 @@ impl Db {
     pub fn backup(&self, to: &Path) -> Result<()> {
         self.c()
             .execute("VACUUM INTO ?1", [to.to_string_lossy().as_ref()])?;
+        private(to);
         Ok(())
     }
 
