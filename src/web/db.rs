@@ -180,19 +180,35 @@ impl Db {
         Ok(())
     }
 
+    /// One transaction: the read of the old row and the write can't interleave with other writers.
     pub fn upsert_ai_tasks(&self, tasks: &[Task]) -> Result<()> {
-        let mut merged = Vec::with_capacity(tasks.len());
+        let mut c = self.c();
+        let tx = c.transaction()?;
         for t in tasks {
             let mut t = t.clone();
-            if let Some(old) = self.task(&t.id)? {
+            if let Some(old) = get_task(&tx, &t.id)? {
                 t.ai_confirmed = old.ai_confirmed;
                 if t.ai_score.is_none() {
                     (t.ai_score, t.ai_v) = (old.ai_score, old.ai_v);
                 }
             }
-            merged.push(t);
+            put_task(&tx, &t)?;
         }
-        self.upsert_tasks(&merged)
+        tx.commit()?;
+        self.1.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Read-modify-write of one task under the mutex; None when the row doesn't exist.
+    pub fn update_task(&self, id: &str, f: impl FnOnce(&mut Task)) -> Result<Option<Task>> {
+        let c = self.c();
+        let Some(mut t) = get_task(&c, id)? else {
+            return Ok(None);
+        };
+        f(&mut t);
+        put_task(&c, &t)?;
+        self.1.fetch_add(1, Ordering::Relaxed);
+        Ok(Some(t))
     }
 
     pub fn all_tasks(&self) -> Result<Vec<Task>> {
@@ -232,35 +248,41 @@ impl Db {
     }
 
     pub fn set_ai_score(&self, id: &str, p: f64) -> Result<()> {
-        if let Some(mut t) = self.task(id)? {
-            (t.ai_score, t.ai_v) = (Some(p), crate::web::scan::JEV_V);
-            self.upsert_tasks(&[t])?;
-        }
+        self.update_task(id, |t| {
+            (t.ai_score, t.ai_v) = (Some(p), crate::web::scan::JEV_V)
+        })?;
         Ok(())
     }
 
     pub fn set_ai_confirmed(&self, id: &str, keep: bool) -> Result<()> {
-        if let Some(mut t) = self.task(id)? {
-            t.ai_confirmed = Some(keep);
-            self.upsert_tasks(&[t])?;
-        }
+        self.update_task(id, |t| t.ai_confirmed = Some(keep))?;
         Ok(())
     }
 
     pub fn local(&self, id: &str) -> Result<Local> {
-        let j: Option<String> = self
-            .c()
-            .query_row("SELECT json FROM local WHERE task_id=?1", [id], |r| {
-                r.get(0)
-            })
-            .optional()?;
-        Ok(match j {
-            Some(j) => serde_json::from_str(&j)?,
-            None => Local {
-                task_id: id.into(),
-                ..Default::default()
-            },
+        get_local(&self.c(), id)
+    }
+
+    /// Read-modify-write of one local row under the mutex.
+    pub fn update_local(&self, id: &str, f: impl FnOnce(&mut Local)) -> Result<Local> {
+        self.try_update_local(id, |l| {
+            f(l);
+            Ok::<_, anyhow::Error>(())
         })
+    }
+
+    /// Like `update_local`, but an `Err` from `f` aborts without writing.
+    pub fn try_update_local<E: From<anyhow::Error>>(
+        &self,
+        id: &str,
+        f: impl FnOnce(&mut Local) -> Result<(), E>,
+    ) -> Result<Local, E> {
+        let c = self.c();
+        let mut l = get_local(&c, id)?;
+        f(&mut l)?;
+        put_local(&c, &l)?;
+        self.1.fetch_add(1, Ordering::Relaxed);
+        Ok(l)
     }
 
     pub fn all_local(&self) -> Result<Vec<Local>> {
@@ -271,10 +293,7 @@ impl Db {
     }
 
     pub fn set_local(&self, l: &Local) -> Result<()> {
-        self.c().execute(
-            "INSERT INTO local(task_id,json) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET json=excluded.json",
-            params![l.task_id, serde_json::to_string(l)?],
-        )?;
+        put_local(&self.c(), l)?;
         self.1.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -494,6 +513,45 @@ impl Db {
         ))
     }
 }
+fn get_task(c: &Connection, id: &str) -> Result<Option<Task>> {
+    let j: Option<String> = c
+        .query_row("SELECT json FROM task WHERE id=?1", [id], |r| r.get(0))
+        .optional()?;
+    Ok(j.map(|j| serde_json::from_str(&j)).transpose()?)
+}
+
+fn put_task(c: &Connection, t: &Task) -> Result<()> {
+    c.execute(
+        "INSERT INTO task(id,due,json) VALUES(?1,?2,?3)
+         ON CONFLICT(id) DO UPDATE SET due=excluded.due, json=excluded.json",
+        params![t.id, t.due, serde_json::to_string(t)?],
+    )?;
+    Ok(())
+}
+
+fn get_local(c: &Connection, id: &str) -> Result<Local> {
+    let j: Option<String> = c
+        .query_row("SELECT json FROM local WHERE task_id=?1", [id], |r| {
+            r.get(0)
+        })
+        .optional()?;
+    Ok(match j {
+        Some(j) => serde_json::from_str(&j)?,
+        None => Local {
+            task_id: id.into(),
+            ..Default::default()
+        },
+    })
+}
+
+fn put_local(c: &Connection, l: &Local) -> Result<()> {
+    c.execute(
+        "INSERT INTO local(task_id,json) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET json=excluded.json",
+        params![l.task_id, serde_json::to_string(l)?],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

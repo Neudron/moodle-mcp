@@ -254,15 +254,16 @@ async fn set_status(
         return Err(bad("estat no vàlid"));
     }
     let t = app.db.task(&id)?.ok_or(bad("no existeix"))?;
-    let mut l = app.db.local(&id)?;
-    let was = l.status == "lliurat";
-    l.status = b.status;
-    if l.status == "lliurat" && !was {
-        move_lliurat(&app, &t, &mut l, "submit/", "submit/_lliurat/")?;
-    } else if was && l.status != "lliurat" {
-        move_lliurat(&app, &t, &mut l, "submit/_lliurat/", "submit/")?;
-    }
-    app.db.set_local(&l)?;
+    let l = app.db.try_update_local(&id, |l| {
+        let was = l.status == "lliurat";
+        l.status = b.status;
+        if l.status == "lliurat" && !was {
+            move_lliurat(&app, &t, l, "submit/", "submit/_lliurat/")?;
+        } else if was && l.status != "lliurat" {
+            move_lliurat(&app, &t, l, "submit/_lliurat/", "submit/")?;
+        }
+        Ok::<_, ApiErr>(())
+    })?;
     readme::write(&app.db, &app.root)?;
     Ok(Json(l))
 }
@@ -313,9 +314,7 @@ async fn set_files(
     for f in &b.files {
         files::jail(root, f).map_err(forbid)?;
     }
-    let mut l = app.db.local(&id)?;
-    l.files = b.files;
-    app.db.set_local(&l)?;
+    let l = app.db.update_local(&id, |l| l.files = b.files)?;
     readme::write(&app.db, &app.root)?;
     Ok(Json(l))
 }
@@ -341,10 +340,7 @@ fn store_status(app: &App, id: &str, st: &Value) -> R<String> {
         .as_str()
         .unwrap_or("")
         .to_string();
-    if let Some(mut t) = app.db.task(id)? {
-        t.moodle_status = s.clone();
-        app.db.upsert_tasks(&[t])?;
-    }
+    app.db.update_task(id, |t| t.moodle_status = s.clone())?;
     Ok(s)
 }
 
@@ -357,18 +353,19 @@ fn upstream(e: crate::errors::CoreError) -> ApiErr {
 
 /// Moodle says "submitted": mark lliurat and move the folder. A failed move only warns (Moodle already has it).
 pub fn mark_lliurat(app: &App, id: &str) -> R<Option<String>> {
-    let mut l = app.db.local(id)?;
-    l.status = "lliurat".into();
     let t = app.db.task(id)?.ok_or(bad("no existeix"))?;
-    let warning = move_lliurat(app, &t, &mut l, "submit/", "submit/_lliurat/")
-        .err()
-        .map(|e| {
-            format!(
-                "Enviada a Moodle, però no s'ha pogut moure la carpeta: {}",
-                e.1
-            )
-        });
-    app.db.set_local(&l)?;
+    let mut warning = None;
+    app.db.update_local(id, |l| {
+        l.status = "lliurat".into();
+        warning = move_lliurat(app, &t, l, "submit/", "submit/_lliurat/")
+            .err()
+            .map(|e| {
+                format!(
+                    "Enviada a Moodle, però no s'ha pogut moure la carpeta: {}",
+                    e.1
+                )
+            });
+    })?;
     readme::write(&app.db, &app.root)?;
     Ok(warning)
 }
@@ -748,18 +745,19 @@ pub fn repoint(app: &App, from: &str, to: &str) -> R<()> {
         return Ok(());
     }
     let mut changed = false;
-    for mut l in app.db.all_local()? {
+    for l in app.db.all_local()? {
         if !l.files.iter().any(|f| f == from) {
             continue;
         }
-        let mut seen = std::collections::HashSet::new();
-        l.files = l
-            .files
-            .iter()
-            .map(|f| if f == from { to.to_string() } else { f.clone() })
-            .filter(|f| seen.insert(f.clone()))
-            .collect();
-        app.db.set_local(&l)?;
+        app.db.update_local(&l.task_id, |l| {
+            let mut seen = std::collections::HashSet::new();
+            l.files = l
+                .files
+                .iter()
+                .map(|f| if f == from { to.to_string() } else { f.clone() })
+                .filter(|f| seen.insert(f.clone()))
+                .collect();
+        })?;
         changed = true;
     }
     if changed {

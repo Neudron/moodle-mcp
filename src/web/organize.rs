@@ -171,7 +171,7 @@ async fn deliver(app: &Arc<App>, t: &Task, out: &mut Delivered) -> Result<bool> 
         tokio::task::spawn_blocking(move || api::mark_lliurat(&a, &id).map_err(ae)).await??;
         changed = true;
     }
-    let mut l = app.db.local(&t.id)?;
+    let l = app.db.local(&t.id)?;
     let rel = readme::submit_dir(&api::module_of(&l, &t.course), &t.title).replacen(
         "submit/",
         "submit/_lliurat/",
@@ -212,14 +212,15 @@ async fn deliver(app: &Arc<App>, t: &Task, out: &mut Delivered) -> Result<bool> 
         }
         delivered.push(name);
     }
-    for name in &delivered {
-        let r = format!("{rel}/{name}");
-        if !l.files.contains(&r) {
-            l.files.push(r);
+    let l = app.db.update_local(&t.id, |l| {
+        for name in &delivered {
+            let r = format!("{rel}/{name}");
+            if !l.files.contains(&r) {
+                l.files.push(r);
+            }
         }
-    }
+    })?;
     if l.files != before {
-        app.db.set_local(&l)?;
         changed = true;
     }
     // Loose copies of the same file elsewhere (e.g. a course folder) now point at the delivered one.
@@ -589,9 +590,10 @@ impl Cx {
             // a label is only ever given to a task that has none when a linked file belongs to it
             let owns = |l: &Local| l.files.iter().any(|f| affinity(&t, base(f)) != (false, 0));
             if l.module != label && (!l.module.is_empty() || owns(&l)) {
-                let mut l2 = self.app.db.local(&l.task_id)?;
-                let from = std::mem::replace(&mut l2.module, label.clone());
-                self.app.db.set_local(&l2)?;
+                let mut from = String::new();
+                self.app.db.update_local(&l.task_id, |l2| {
+                    from = std::mem::replace(&mut l2.module, label.clone())
+                })?;
                 self.log("module", &from, &label, String::new(), &l.task_id)?;
             }
         }
@@ -702,11 +704,11 @@ pub fn last_log(root: &str) -> Result<Value> {
 fn undo_op(app: &App, root: &Path, op: &Op) -> Result<()> {
     match op.kind.as_str() {
         "module" => {
-            let mut l = app.db.local(&op.task)?;
-            if l.module == op.to {
-                l.module = op.from.clone();
-                app.db.set_local(&l)?;
-            }
+            app.db.update_local(&op.task, |l| {
+                if l.module == op.to {
+                    l.module = op.from.clone();
+                }
+            })?;
             Ok(())
         }
         "move" | "replace" => {

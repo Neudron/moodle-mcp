@@ -104,3 +104,50 @@ fn rotate_log_moves_big_file_only() {
         b"0123456789abc"
     );
 }
+
+#[test]
+fn concurrent_local_updates_both_persist() {
+    use moodle_mcp::web::db::Local;
+    let db = std::sync::Arc::new(Db::memory().unwrap());
+    let a = db.clone();
+    let b = db.clone();
+    let ta = std::thread::spawn(move || {
+        for _ in 0..100 {
+            a.update_local("t", |l| l.status = "lliurat".into())
+                .unwrap();
+        }
+    });
+    let tb = std::thread::spawn(move || {
+        for i in 0..100 {
+            b.update_local("t", |l| l.files.push(format!("f{i}")))
+                .unwrap();
+        }
+    });
+    ta.join().unwrap();
+    tb.join().unwrap();
+    let l: Local = db.local("t").unwrap();
+    assert_eq!(l.status, "lliurat");
+    assert_eq!(l.files.len(), 100);
+}
+
+#[test]
+fn ai_confirm_survives_concurrent_upsert() {
+    use moodle_mcp::web::db::Task;
+    let db = std::sync::Arc::new(Db::memory().unwrap());
+    let t = Task {
+        id: "ai:x".into(),
+        ..Default::default()
+    };
+    db.upsert_tasks(std::slice::from_ref(&t)).unwrap();
+    let a = db.clone();
+    let ta = std::thread::spawn(move || {
+        for _ in 0..100 {
+            a.upsert_ai_tasks(std::slice::from_ref(&t)).unwrap();
+        }
+    });
+    for _ in 0..100 {
+        db.set_ai_confirmed("ai:x", true).unwrap();
+    }
+    ta.join().unwrap();
+    assert_eq!(db.task("ai:x").unwrap().unwrap().ai_confirmed, Some(true));
+}
