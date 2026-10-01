@@ -111,6 +111,8 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/grades", get(grades))
         .route("/api/status", get(status))
         .route("/api/sync", post(sync_now))
+        .route("/api/auth/status", get(auth_status))
+        .route("/api/auth/renew", post(auth_renew))
         .merge(crate::web::office::oo_router())
         .merge(crate::web::preview::router())
         .merge(crate::web::shots::router())
@@ -515,6 +517,65 @@ async fn status(State(app): S) -> R<Json<Value>> {
             "since": app.db.kv_get("apple_since")?.and_then(|v| v.parse::<i64>().ok()).unwrap_or(0),
         },
     })))
+}
+
+async fn auth_status(State(app): S) -> R<Json<Value>> {
+    let n = crate::web::now();
+    let kv = |k: &str| app.db.kv_get(k).ok().flatten();
+    let probed = kv("auth_probe_at")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    if n - probed >= 60 {
+        app.db.kv_set("auth_probe_at", &n.to_string())?;
+        match app.moodle.probe().await {
+            Ok(_) => app.db.kv_set("auth_state", "ok")?,
+            Err(crate::errors::CoreError::Auth(_)) => {
+                if kv("auth_state").as_deref().unwrap_or("ok") == "ok" {
+                    app.db.kv_set("auth_state", "expired")?;
+                }
+            }
+            Err(_) => {} // network trouble says nothing about the token
+        }
+    }
+    Ok(Json(json!({
+        "moodle": kv("auth_state").unwrap_or_else(|| "ok".into()),
+        "apple": kv("apple_state").unwrap_or_else(|| "ok".into()),
+        "last_error": kv("last_error").unwrap_or_default(),
+        "at": n,
+    })))
+}
+
+async fn auth_renew(State(app): S) -> (StatusCode, Json<Value>) {
+    use crate::web::apple::{self, Imp};
+    let moodle = match crate::web::renew_now(&app, 60).await {
+        Ok(r) => crate::web::renew_state(&r),
+        Err(wait) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({"error": "massa aviat", "next_try": wait})),
+            )
+        }
+    };
+    app.db.kv_set("auth_probe_at", "0").ok();
+    let bad = app
+        .db
+        .kv_get("apple_state")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let apple = if bad == "auth" || bad == "err" {
+        match apple::import(&app, 60).await {
+            Imp::Ok => "imported",
+            Imp::Failed => "failed",
+            Imp::Limited(_) => "limited",
+        }
+    } else {
+        "ok"
+    };
+    (
+        StatusCode::OK,
+        Json(json!({"moodle": moodle, "apple": apple})),
+    )
 }
 
 async fn apple_sync(State(app): S) -> (StatusCode, Json<Value>) {

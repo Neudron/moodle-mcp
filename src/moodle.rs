@@ -472,6 +472,12 @@ impl Moodle {
         self.call("core_webservice_get_site_info", &[]).await
     }
 
+    /// `site_info` with retry and typed errors (`CoreError::Auth` on a dead token).
+    pub async fn probe(&self) -> Result<serde_json::Value, CoreError> {
+        self.call_with_retry("core_webservice_get_site_info", &[])
+            .await
+    }
+
     pub async fn courses(&self, user_id: i64) -> Result<Vec<Course>> {
         let v = self
             .call(
@@ -1047,6 +1053,43 @@ fn write_token_atomic(path: &Path, token: &str) -> std::io::Result<()> {
 }
 
 impl Moodle {
+    /// Adopt the token on disk if another process renewed it (differs from ours and works).
+    pub async fn reload_token(&self) -> bool {
+        let file = std::env::var("MOODLE_TOKEN_FILE")
+            .unwrap_or_else(|_| format!("{}/.moodle/token", Self::moodle_root()));
+        let Ok(t) = std::fs::read_to_string(file) else {
+            return false;
+        };
+        let t = t.trim();
+        if t.len() < MIN_TOKEN || t == self.token() {
+            return false;
+        }
+        if Moodle::new(&self.base, t).site_info().await.is_err() {
+            return false;
+        }
+        self.set_token(t);
+        true
+    }
+
+    /// After an Auth failure: reload the shared token file, else renew from Firefox.
+    pub async fn recover_auth(&self) -> Renew {
+        if self.reload_token().await {
+            Renew::Ok
+        } else {
+            self.refresh_token().await
+        }
+    }
+
+    /// `site_info`, recovering once from an expired token (for the bins).
+    pub async fn site_info_renewing(&self) -> Result<serde_json::Value> {
+        match self.probe().await {
+            Err(CoreError::Auth(_)) if self.recover_auth().await == Renew::Ok => {
+                Ok(self.probe().await?)
+            }
+            r => Ok(r?),
+        }
+    }
+
     /// Renew the WS token from the live Firefox Moodle session (paths from
     /// `MOODLE_FIREFOX_ROOT` / `MOODLE_TOKEN_FILE`, else the usual ones).
     pub async fn refresh_token(&self) -> Renew {

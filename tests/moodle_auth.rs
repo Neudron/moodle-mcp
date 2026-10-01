@@ -376,3 +376,91 @@ fn core_error_type_used() {
     };
     assert!(!m.contains("@@"));
 }
+
+// ---- P3 wiring ----
+
+/// Env vars are process-global: serialize the tests that set them.
+static ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tokio::test]
+async fn reload_token_adopts_valid_file_token_only() {
+    let _e = ENV.lock().await;
+    let (base, _m) = serve(Launch::Redirect, vec![NEW]).await;
+    let (_root, tf) = ready("reload", false);
+    let c = Moodle::new(&base, OLD);
+    std::env::set_var("MOODLE_TOKEN_FILE", &tf);
+    assert!(!c.reload_token().await, "same token in file: nothing to do");
+    std::fs::write(&tf, "junkjunkjunkjunkjunk").unwrap();
+    assert!(
+        !c.reload_token().await,
+        "rejected token must not be adopted"
+    );
+    std::fs::write(&tf, NEW).unwrap();
+    assert!(c.reload_token().await);
+    assert!(c.site_info().await.is_ok());
+}
+
+#[tokio::test]
+async fn site_info_renewing_uses_reload_before_launch() {
+    let _e = ENV.lock().await;
+    let (base, m) = serve(Launch::Redirect, vec![NEW]).await;
+    let (root, tf) = ready("bin", true);
+    std::fs::write(&tf, NEW).unwrap(); // another process already renewed
+    std::env::set_var("MOODLE_TOKEN_FILE", &tf);
+    std::env::set_var("MOODLE_FIREFOX_ROOT", &root);
+    let c = Moodle::new(&base, OLD);
+    assert!(c.site_info_renewing().await.is_ok());
+    assert!(m.launch_cookie.lock().unwrap().is_none(), "no launch call");
+}
+
+#[tokio::test]
+async fn run_sync_style_renewal_once_per_hour() {
+    let _e = ENV.lock().await;
+    use moodle_mcp::web::{db::Db, renewing, App};
+    use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+    let (base, m) = serve(Launch::Redirect, vec![NEW]).await;
+    let (root, tf) = ready("web", true);
+    std::env::set_var("MOODLE_TOKEN_FILE", &tf);
+    std::env::set_var("MOODLE_FIREFOX_ROOT", &root);
+    let app = App::new(Db::memory().unwrap(), Moodle::new(&base, OLD), "/tmp", 0);
+    let calls = AtomicUsize::new(0);
+    let op = || async {
+        calls.fetch_add(1, SeqCst);
+        app.moodle
+            .call_with_retry("core_webservice_get_site_info", &[])
+            .await
+    };
+    assert!(renewing(&app, op).await.is_ok());
+    assert_eq!(calls.load(SeqCst), 2, "failed once, retried once");
+    assert_eq!(std::fs::read_to_string(&tf).unwrap(), NEW);
+    assert_eq!(app.db.kv_get("auth_state").unwrap().as_deref(), Some("ok"));
+    // token dies again within the hour: no second renewal
+    app.moodle.set_token(OLD);
+    *m.launch_cookie.lock().unwrap() = None;
+    std::fs::write(&tf, OLD).unwrap();
+    let r = renewing(&app, op).await;
+    assert!(matches!(r, Err(CoreError::Auth(_))));
+    assert!(m.launch_cookie.lock().unwrap().is_none());
+    assert_eq!(
+        app.db.kv_get("auth_state").unwrap().as_deref(),
+        Some("expired")
+    );
+    let errs = app.db.recent_errors(5).unwrap();
+    assert!(errs.iter().any(|e| e.2 == "moodle-auth"));
+    assert!(errs
+        .iter()
+        .all(|e| !e.3.contains(NEW) && !e.3.contains(OLD)));
+    // a different outcome maps to its own state
+    let (base2, _m2) = serve(Launch::ConfirmNoLink, vec![]).await;
+    let app2 = App::new(Db::memory().unwrap(), Moodle::new(&base2, OLD), "/tmp", 0);
+    let op2 = || async {
+        app2.moodle
+            .call_with_retry("core_webservice_get_site_info", &[])
+            .await
+    };
+    assert!(renewing(&app2, op2).await.is_err());
+    assert_eq!(
+        app2.db.kv_get("auth_state").unwrap().as_deref(),
+        Some("needs-browser")
+    );
+}

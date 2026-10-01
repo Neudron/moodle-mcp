@@ -555,3 +555,59 @@ async fn apple_auth_failure_is_409_and_visible_in_status() {
     }
     assert_eq!(app.db.recent_errors(500).unwrap().len(), 200);
 }
+
+#[tokio::test]
+async fn auth_status_states_and_renew_rate_limit() {
+    let (base, app, m, root) = start("authst").await;
+    let c = reqwest::Client::new();
+    let get = |p: &'static str| {
+        let (c, base) = (c.clone(), base.clone());
+        async move {
+            c.get(format!("{base}{p}"))
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()
+        }
+    };
+    let v = get("/api/auth/status").await;
+    assert_eq!(v["moodle"], "ok");
+    assert_eq!(v["apple"], "ok");
+    // bad token -> expired (probe cached 60 s, so clear the stamp)
+    app.moodle.set_token("badbadbadbadbadbadbad");
+    app.db.kv_set("auth_probe_at", "0").unwrap();
+    assert_eq!(get("/api/auth/status").await["moodle"], "expired");
+    // renewal outcome recorded earlier is what the UI shows
+    app.db.kv_set("auth_state", "no-session").unwrap();
+    app.db.kv_set("auth_probe_at", "0").unwrap();
+    assert_eq!(get("/api/auth/status").await["moodle"], "no-session");
+    app.db.kv_set("apple_state", "auth").unwrap();
+    app.db.kv_set("last_error", "x").unwrap();
+    let v = get("/api/auth/status").await;
+    assert_eq!(
+        (v["apple"].as_str(), v["last_error"].as_str()),
+        (Some("auth"), Some("x"))
+    );
+    assert!(v["at"].as_i64().unwrap() > 0);
+    // manual renew: no Firefox session -> no-session; immediate repeat -> 429
+    let ff = root.join("ff");
+    std::fs::create_dir_all(&ff).unwrap();
+    std::env::set_var("MOODLE_FIREFOX_ROOT", &ff);
+    app.db.kv_set("apple_state", "ok").unwrap(); // no Apple reimport here
+    let r = post(&c, &base, "/api/auth/renew").send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let v: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(v["moodle"], "no-session");
+    assert_eq!(v["apple"], "ok");
+    let r = post(&c, &base, "/api/auth/renew").send().await.unwrap();
+    assert_eq!(r.status(), 429);
+    assert!(
+        r.json::<serde_json::Value>().await.unwrap()["next_try"]
+            .as_i64()
+            .unwrap()
+            > 0
+    );
+    drop(m);
+}

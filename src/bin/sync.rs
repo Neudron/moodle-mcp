@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
     }
     let root = Moodle::moodle_root();
     let m = Moodle::from_env()?;
-    let info = m.site_info().await.context("site info")?;
+    let info = m.site_info_renewing().await.context("site info")?;
     let uid = info["userid"].as_i64().context("no userid")?;
     let mut state = State::load(&root)?;
     state.user_id = uid;

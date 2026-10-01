@@ -40,7 +40,7 @@ impl MoodleMcp {
     )]
     async fn list_courses(&self) -> Result<CallToolResult, McpError> {
         let m = Self::client()?;
-        let info = m.site_info().await.map_err(mcp)?;
+        let info = m.site_info_renewing().await.map_err(mcp)?;
         let uid = info["userid"]
             .as_i64()
             .ok_or_else(|| McpError::internal_error("no userid".to_string(), None))?;
@@ -56,6 +56,7 @@ impl MoodleMcp {
         Parameters(CourseId { course_id }): Parameters<CourseId>,
     ) -> Result<CallToolResult, McpError> {
         let m = Self::client()?;
+        m.site_info_renewing().await.map_err(mcp)?;
         let sections = m.contents(course_id).await.map_err(mcp)?;
         Ok(CallToolResult::success(vec![Content::text(
             serde_json::to_string_pretty(&sections).unwrap_or_default(),
@@ -71,7 +72,7 @@ impl MoodleMcp {
     ) -> Result<CallToolResult, McpError> {
         let m = Self::client()?;
         let root = Self::root();
-        let info = m.site_info().await.map_err(mcp)?;
+        let info = m.site_info_renewing().await.map_err(mcp)?;
         let uid = info["userid"]
             .as_i64()
             .ok_or_else(|| McpError::internal_error("no userid".to_string(), None))?;
@@ -96,7 +97,7 @@ impl MoodleMcp {
     async fn sync_all(&self) -> Result<CallToolResult, McpError> {
         let m = Self::client()?;
         let root = Self::root();
-        let info = m.site_info().await.map_err(mcp)?;
+        let info = m.site_info_renewing().await.map_err(mcp)?;
         let uid = info["userid"]
             .as_i64()
             .ok_or_else(|| McpError::internal_error("no userid".to_string(), None))?;

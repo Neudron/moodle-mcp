@@ -45,10 +45,80 @@ pub fn now() -> i64 {
     chrono::Utc::now().timestamp()
 }
 
+pub fn renew_state(r: &crate::moodle::Renew) -> &'static str {
+    use crate::moodle::Renew::*;
+    match r {
+        Ok => "ok",
+        NeedsBrowser => "needs-browser",
+        NoSession => "no-session",
+        Failed(_) => "expired",
+    }
+}
+
+/// Renew the Moodle token unless one was tried less than `gap` seconds ago
+/// (Err = seconds to wait). Records kv `auth_state` and an error_log row.
+pub async fn renew_now(app: &App, gap: i64) -> Result<crate::moodle::Renew, i64> {
+    let n = now();
+    let last = app
+        .db
+        .kv_get("auth_renew_at")
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    if n - last < gap {
+        return Err(gap - (n - last));
+    }
+    app.db.kv_set("auth_renew_at", &n.to_string()).ok();
+    let r = app.moodle.recover_auth().await;
+    let state = renew_state(&r);
+    app.db.kv_set("auth_state", state).ok();
+    app.db
+        .log_error("moodle", "moodle-auth", &format!("renovació: {state}"))
+        .ok();
+    Ok(r)
+}
+
+/// Run `op`; on Auth, renew the token (at most hourly) and retry once.
+pub async fn renewing<T, F, Fut>(app: &App, op: F) -> Result<T, CoreError>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T, CoreError>>,
+{
+    let r = op().await;
+    if !matches!(r, Err(CoreError::Auth(_))) {
+        if r.is_ok() {
+            app.db.kv_set("auth_state", "ok").ok();
+        }
+        return r;
+    }
+    match renew_now(app, 3600).await {
+        Ok(crate::moodle::Renew::Ok) => op().await,
+        Ok(_) => r,
+        Err(_) => {
+            if app
+                .db
+                .kv_get("auth_state")
+                .ok()
+                .flatten()
+                .as_deref()
+                .unwrap_or("ok")
+                == "ok"
+            {
+                app.db.kv_set("auth_state", "expired").ok();
+            }
+            r
+        }
+    }
+}
+
 /// One sync pass: Moodle -> DB, README import/rewrite, error kept for the banner.
 pub async fn run_sync(app: &App, files: bool) -> Result<Vec<tasks::Event>, CoreError> {
     let _g = app.syncing.lock().await;
-    let res = tasks::sync_all(&app.moodle, &app.db, &app.root, files).await;
+    let res = renewing(app, || {
+        tasks::sync_all(&app.moodle, &app.db, &app.root, files)
+    })
+    .await;
     let msg = match &res {
         Ok(_) => String::new(),
         Err(CoreError::Auth(_)) => "Token caducat, renova'l".into(),
