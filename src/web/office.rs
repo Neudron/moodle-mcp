@@ -42,13 +42,15 @@ pub fn file_token(secret: &str, rel: &str, now: i64) -> String {
 }
 
 pub fn verify_file_token(secret: &str, t: &str) -> Result<String, String> {
-    decode::<FileClaims>(
-        t,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &Validation::default(),
-    )
-    .map(|d| d.claims.path)
-    .map_err(|e| e.to_string())
+    verify_token(secret, t, true)
+}
+
+fn verify_token(secret: &str, t: &str, check_exp: bool) -> Result<String, String> {
+    let mut v = Validation::default();
+    v.validate_exp = check_exp;
+    decode::<FileClaims>(t, &DecodingKey::from_secret(secret.as_bytes()), &v)
+        .map(|d| d.claims.path)
+        .map_err(|e| e.to_string())
 }
 
 pub fn amin_copy(root: &Path, rel: &str) -> Result<String, String> {
@@ -151,20 +153,29 @@ async fn save_edit(app: &App, rel: &str, url: &str) -> Result<(), E> {
         ));
     }
     let gw = |e: reqwest::Error| (StatusCode::BAD_GATEWAY, e.without_url().to_string());
-    let bytes = reqwest::get(url)
+    let mut r = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(gw)?
+        .get(url)
+        .send()
         .await
         .and_then(|r| r.error_for_status())
-        .map_err(gw)?
-        .bytes()
-        .await
         .map_err(gw)?;
+    let mut bytes = Vec::new();
+    while let Some(c) = r.chunk().await.map_err(gw)? {
+        if (bytes.len() + c.len()) as u64 > super::preview::MAX_BYTES {
+            return Err((StatusCode::PAYLOAD_TOO_LARGE, "download too large".into()));
+        }
+        bytes.extend_from_slice(&c);
+    }
     let p = locate(Path::new(&app.root), rel).map_err(|e| (StatusCode::FORBIDDEN, e))?;
     let ioe = |e: std::io::Error| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
-    let mut bak = p.clone().into_os_string();
-    bak.push(".bak");
+    let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
+    let name = name.unwrap_or_default();
+    let bak = p.with_file_name(format!(".{name}.bak"));
     std::fs::copy(&p, &bak).map_err(ioe)?;
-    let mut tmp = p.clone().into_os_string();
-    tmp.push(".tmp");
+    let tmp = p.with_file_name(format!(".{name}.tmp"));
     std::fs::write(&tmp, &bytes).map_err(ioe)?;
     std::fs::rename(&tmp, &p).map_err(ioe)?;
     Ok(())
@@ -177,7 +188,8 @@ async fn oo_callback(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, E> {
     let secret = secret()?;
-    let rel = verify_file_token(&secret, &q.t).map_err(|e| (StatusCode::FORBIDDEN, e))?;
+    // Editing sessions outlive the 24 h URL token; the body JWT is the real auth here.
+    let rel = verify_token(&secret, &q.t, false).map_err(|e| (StatusCode::FORBIDDEN, e))?;
     let mut val = Validation::default();
     val.required_spec_claims.clear();
     val.validate_exp = false;

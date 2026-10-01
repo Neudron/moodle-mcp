@@ -23,7 +23,12 @@ fn sign(v: &serde_json::Value) -> String {
 #[tokio::test]
 async fn callback_saves_with_bak_and_guards_url() {
     // Fake Document Server serving the edited file.
-    let fake = axum::Router::new().route("/cache/f", axum::routing::get(|| async { "edited" }));
+    let fake = axum::Router::new()
+        .route("/cache/f", axum::routing::get(|| async { "edited" }))
+        .route(
+            "/cache/big",
+            axum::routing::get(|| async { vec![0u8; (64 << 20) + 1] }),
+        );
     let fl = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let oo = format!("http://127.0.0.1:{}", fl.local_addr().unwrap().port());
     tokio::spawn(async move { axum::serve(fl, fake).await.ok() });
@@ -85,9 +90,39 @@ async fn callback_saves_with_bak_and_guards_url() {
         "edited"
     );
     assert_eq!(
-        std::fs::read_to_string(root.join("C/a_amin.docx.bak")).unwrap(),
+        std::fs::read_to_string(root.join("C/.a_amin.docx.bak")).unwrap(),
         "mine"
     );
+    // oversize download rejected, file untouched
+    let big = sign(&json!({"status": 2, "url": format!("{oo}/cache/big")}));
+    let r = cb(json!({"token": big})).send().await.unwrap();
+    assert!(!r.status().is_success());
+    assert_eq!(
+        std::fs::read_to_string(root.join("C/a_amin.docx")).unwrap(),
+        "edited"
+    );
+    // expired ?t= (24h passed) but valid body JWT: callback still saves
+    std::fs::write(root.join("C/a_amin.docx"), "late").unwrap();
+    let old = office::file_token(SECRET, "C/a_amin.docx", web::now() - 200_000);
+    let r = c
+        .post(format!("{base}/oo/callback?t={old}"))
+        .json(&json!({"token": ok}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        std::fs::read_to_string(root.join("C/a_amin.docx")).unwrap(),
+        "edited"
+    );
+    // ...but /oo/file with the expired token is 403
+    let r = c
+        .get(format!("{base}/oo/file?t={old}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
+    std::fs::write(root.join("C/a_amin.docx"), "again").unwrap();
     // header token with {"payload": ...} wrapper
     std::fs::write(root.join("C/a_amin.docx"), "again").unwrap();
     let hdr = sign(&json!({"payload": {"status": 6, "url": format!("{oo}/cache/f")}}));
