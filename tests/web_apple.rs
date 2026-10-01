@@ -236,7 +236,7 @@ async fn mirrors_lifecycle() {
     let r = apple::sync(&app).await;
     assert_eq!((r.created, r.updated), (0, 1));
     assert!(
-        lines().matches("--uid moodle-").count() == 2,
+        lines().matches("--uid moodle-").count() == 1 && lines().contains("--uid U-event-new"),
         "same uid reused"
     );
 

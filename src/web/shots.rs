@@ -218,11 +218,29 @@ pub async fn page_dom(cmd: &str, url: &str) -> Result<String> {
 }
 
 /// File download through the browser's own login: opening an export URL makes Firefox save the
-/// file into `dir`; the path of the new complete file is returned (the caller moves it away).
+/// file into `dir`; the path of the new complete file is returned (the caller copies it; the
+/// original is never deleted, since ownership is unprovable).
 /// The DOM cannot do this (Docs editors draw on a canvas, `get_dom` cuts HTML at 50k chars).
-/// ponytail: assumes Firefox saves without asking into `dir`; a file the user downloads
-/// meanwhile would be mistaken for ours. Upgrade path: a Firefox profile dedicated to the scanner.
-pub async fn download(cmd: &str, url: &str, dir: &Path) -> Result<PathBuf> {
+/// Only new files with extension `ext` count ("" = any); a new `.part` extends the wait to 120 s.
+/// ponytail: assumes Firefox saves without asking into `dir`; a same-extension file the user
+/// downloads meanwhile would be mistaken for ours; with ext "" (Drive, type unknown) any new file
+/// is taken. Upgrade path: a dedicated Firefox profile or download dir.
+pub async fn download(cmd: &str, url: &str, dir: &Path, ext: &str) -> Result<PathBuf> {
+    let (tick, base, cap) = (
+        Duration::from_millis(500),
+        Duration::from_secs(15),
+        Duration::from_secs(120),
+    );
+    download_with(cmd, url, dir, ext, (tick, base, cap)).await
+}
+
+async fn download_with(
+    cmd: &str,
+    url: &str,
+    dir: &Path,
+    ext: &str,
+    (tick, base, cap): (Duration, Duration, Duration),
+) -> Result<PathBuf> {
     let ls = || -> Result<Vec<std::ffi::OsString>> {
         std::fs::read_dir(dir)
             .with_context(|| format!("no downloads dir {}", dir.display()))?
@@ -241,16 +259,29 @@ pub async fn download(cmd: &str, url: &str, dir: &Path) -> Result<PathBuf> {
         *g = None;
         return Err(e);
     }
-    for _ in 0..30 {
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        // Firefox writes `name.part` and renames when complete, so any other match is a whole file.
-        let new = ls()?.into_iter().map(|n| dir.join(n)).find(|p| {
-            !before.contains(&p.file_name().unwrap_or_default().to_owned())
-                && p.extension().is_some_and(|e| e != "part")
+    let t0 = std::time::Instant::now();
+    loop {
+        tokio::time::sleep(tick).await;
+        let all: Vec<PathBuf> = ls()?
+            .into_iter()
+            .filter(|n| !before.contains(n))
+            .map(|n| dir.join(n))
+            .collect();
+        // Firefox writes `name.part` and renames when complete, so a match is a whole file.
+        let new = all.iter().find(|p| {
+            p.extension()
+                .is_some_and(|e| e != "part" && (ext.is_empty() || e.eq_ignore_ascii_case(ext)))
                 && p.metadata().is_ok_and(|m| m.len() > 0) // an empty placeholder is not done
         });
         if let Some(p) = new {
-            return Ok(p);
+            return Ok(p.clone());
+        }
+        let el = t0.elapsed();
+        let busy = all
+            .iter()
+            .any(|p| p.extension().is_some_and(|e| e == "part"));
+        if el >= cap || (el >= base && !busy) {
+            break;
         }
     }
     *g = None; // the tab may sit on an error page
@@ -516,16 +547,52 @@ mod tests {
             &cmd,
             "https://docs.google.com/document/d/x/export?format=docx",
             &dir,
+            "docx",
         )
         .await
         .unwrap();
         assert_eq!(got, q);
         assert_eq!(std::fs::read(&q).unwrap(), b"PK");
         assert!(dir.join("old.pdf").exists());
-        let e = download(&cmd, "https://x", &d.join("missing"))
+        let e = download(&cmd, "https://x", &d.join("missing"), "")
             .await
             .unwrap_err();
         assert!(e.to_string().contains("no downloads dir"), "{e}");
+    }
+
+    #[tokio::test]
+    async fn download_ignores_foreign_files_and_waits_for_part() {
+        let d = tmp("dl2");
+        let dir = d.join("dl");
+        std::fs::create_dir_all(&dir).unwrap();
+        let (dir2, log) = (dir.clone(), d.join("log"));
+        tokio::spawn(async move {
+            for _ in 0..500 {
+                if std::fs::read_to_string(&log).is_ok_and(|l| l.contains("browser_navigate")) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            std::fs::write(dir2.join("user.pdf"), "mine").unwrap();
+            std::fs::write(dir2.join("x.docx.part"), "PK").unwrap();
+            tokio::time::sleep(Duration::from_millis(900)).await; // past the base timeout
+            std::fs::rename(dir2.join("x.docx.part"), dir2.join("x.docx")).unwrap();
+        });
+        let cmd = format!(
+            "sh {FAKE} {} {}",
+            d.join("s.png").display(),
+            d.join("log").display()
+        );
+        let t = (
+            Duration::from_millis(50),
+            Duration::from_millis(400),
+            Duration::from_secs(10),
+        );
+        let got = download_with(&cmd, "https://x", &dir, "docx", t)
+            .await
+            .unwrap();
+        assert_eq!(got, dir.join("x.docx"));
+        assert!(dir.join("user.pdf").exists());
     }
 
     #[test]

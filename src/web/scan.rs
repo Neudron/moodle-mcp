@@ -741,7 +741,7 @@ fn downloads_dir() -> PathBuf {
 
 /// The logged-in browser saves `url` and the file is kept as `.moodle/gdocs/<id>.<ext>` for the
 /// student; a copy younger than a week is reused without the browser.
-async fn local_copy(app: &App, id: &str, url: &str) -> anyhow::Result<PathBuf> {
+async fn local_copy(app: &App, id: &str, url: &str, want: &str) -> anyhow::Result<PathBuf> {
     let dir = Path::new(&app.root).join(".moodle/gdocs");
     tokio::fs::create_dir_all(&dir).await?;
     let week = Duration::from_secs(7 * 86400);
@@ -758,14 +758,13 @@ async fn local_copy(app: &App, id: &str, url: &str) -> anyhow::Result<PathBuf> {
         return Ok(p);
     }
     let cmd = env::get("SHOT_CMD").unwrap_or_else(|| shots::DEFAULT_CMD.into());
-    let got = shots::download(&cmd, url, &downloads_dir()).await?;
+    let got = shots::download(&cmd, url, &downloads_dir(), want).await?;
     let ext = ext_of(&got.to_string_lossy());
     let dest = dir.join(format!(
         "{id}.{}",
         if ext.is_empty() { "bin" } else { &ext }
     ));
     tokio::fs::copy(&got, &dest).await?;
-    tokio::fs::remove_file(&got).await.ok();
     Ok(dest)
 }
 
@@ -780,12 +779,21 @@ async fn local_item(app: &App, it: &Item, p: &Path) -> anyhow::Result<Out> {
 
 /// Private Google file: downloaded as docx/pptx/xlsx through the browser, then the local pipeline.
 async fn browser_doc(app: &App, it: &Item, kind: &str, id: &str) -> anyhow::Result<Out> {
-    let url = match kind {
-        "document" => format!("https://docs.google.com/document/d/{id}/export?format=docx"),
-        "presentation" => format!("https://docs.google.com/presentation/d/{id}/export/pptx"),
-        _ => format!("https://docs.google.com/spreadsheets/d/{id}/export?format=xlsx"),
+    let (url, ext) = match kind {
+        "document" => (
+            format!("https://docs.google.com/document/d/{id}/export?format=docx"),
+            "docx",
+        ),
+        "presentation" => (
+            format!("https://docs.google.com/presentation/d/{id}/export/pptx"),
+            "pptx",
+        ),
+        _ => (
+            format!("https://docs.google.com/spreadsheets/d/{id}/export?format=xlsx"),
+            "xlsx",
+        ),
     };
-    local_item(app, it, &local_copy(app, id, &url).await?).await
+    local_item(app, it, &local_copy(app, id, &url, ext).await?).await
 }
 
 /// Google pages through the logged-in browser: fixed MCP tool sequence, then tag-stripped.
@@ -1087,7 +1095,7 @@ async fn link_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
         // authuser is required: without it Google picks another signed-in account (403)
         let au = env::get("SCAN_AUTHUSER").unwrap_or_else(|| "0".into());
         return Ok(
-            match local_copy(app, id, &format!("{get}&authuser={au}")).await {
+            match local_copy(app, id, &format!("{get}&authuser={au}"), "").await {
                 Ok(p) => local_item(app, it, &p).await?,
                 Err(_) => skip("fitxer de Drive privat".into()),
             },
