@@ -234,6 +234,7 @@ dl.keys{display:grid;grid-template-columns:max-content 1fr;gap:var(--s1) var(--s
 dl.keys dt{font-weight:400;font-size:16px;color:var(--text)}
 dialog label{display:flex;align-items:center;gap:var(--s1);margin-top:var(--s2);min-height:44px}
 dialog input[type=checkbox]{min-height:0;width:20px;height:20px;accent-color:var(--accent)}
+dialog input:not([type=checkbox]){width:100%}
 dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:0 var(--s1)}
 .toast{position:fixed;right:var(--s2);bottom:var(--s2);z-index:var(--z-toast);max-width:min(420px,calc(100vw - 32px));background:var(--raised);box-shadow:var(--shadow-pop);
   border-radius:var(--r-md);padding:4px 4px 4px var(--s2);display:flex;align-items:center;gap:var(--s1);pointer-events:none;

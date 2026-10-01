@@ -190,6 +190,9 @@ pub async fn sync_all(
     let uid = info["userid"]
         .as_i64()
         .ok_or_else(|| CoreError::Invalid("no userid".into()))?;
+    if let Some(n) = info["fullname"].as_str() {
+        db.kv_set("me_fullname", n).map_err(CoreError::Other)?;
+    }
     let courses: Vec<Course> = serde_json::from_value(
         m.call_with_retry(
             "core_enrol_get_users_courses",

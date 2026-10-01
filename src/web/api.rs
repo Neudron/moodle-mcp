@@ -110,6 +110,8 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/tasks/{id}", get(one_task))
         .route("/api/tasks/{id}/status", post(set_status))
         .route("/api/tasks/{id}/files", post(set_files))
+        .route("/api/tasks/{id}/file-meta", post(file_meta))
+        .route("/api/me", get(me))
         .route("/api/tasks/{id}/ai", post(set_ai))
         .route("/api/tasks/{id}/upload", post(upload_files))
         .route("/api/tasks/{id}/submit", post(submit))
@@ -328,6 +330,68 @@ async fn set_files(
     Ok(Json(l))
 }
 
+async fn me(State(app): S) -> R<Json<Value>> {
+    Ok(Json(
+        json!({"fullname": app.db.kv_get("me_fullname")?.unwrap_or_default()}),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct FileMetaIn {
+    path: String,
+    name: String,
+    owner: String,
+}
+/// Renames the submit/ entry itself (a link keeps its target), repoints every task and re-keys owners.
+async fn file_meta(
+    State(app): S,
+    Path(id): Path<String>,
+    Json(b): Json<FileMetaIn>,
+) -> R<Json<Local>> {
+    let n = b.name.trim();
+    if n.is_empty() || n.contains(['/', '\\', '\0']) || n.starts_with('.') || n.len() > 200 {
+        return Err(bad("nom no vàlid"));
+    }
+    if !b.path.starts_with("submit/") || !app.db.local(&id)?.files.contains(&b.path) {
+        return Err(bad("fitxer no vinculat a submit/"));
+    }
+    let root = std::path::Path::new(&app.root);
+    files::jail(root, &b.path).map_err(|e| bad(&e))?;
+    let new = match b.path.rsplit_once('/') {
+        Some((d, _)) => format!("{d}/{n}"),
+        None => n.to_string(),
+    };
+    if new != b.path {
+        if root.join(&new).symlink_metadata().is_ok() {
+            return Err(ApiErr(
+                StatusCode::CONFLICT,
+                "ja existeix un fitxer amb aquest nom".into(),
+            ));
+        }
+        std::fs::rename(root.join(&b.path), root.join(&new)).map_err(anyhow::Error::from)?;
+        repoint(&app, &b.path, &new)?;
+        for l in app.db.all_local()? {
+            if l.owners.contains_key(&b.path) {
+                app.db.update_local(&l.task_id, |l| {
+                    if let Some(o) = l.owners.remove(&b.path) {
+                        l.owners.insert(new.clone(), o);
+                    }
+                })?;
+            }
+        }
+    }
+    let o = b.owner.trim().to_string();
+    let l = app.db.update_local(&id, |l| {
+        if o.is_empty() {
+            l.owners.remove(&new);
+        } else {
+            l.owners.insert(new.clone(), o);
+        }
+    })?;
+    readme::write(&app.db, &app.root)?;
+    Ok(Json(l))
+}
+
 #[derive(Deserialize)]
 pub struct AiIn {
     keep: bool,
@@ -416,7 +480,12 @@ async fn upload_files(
             return Err(bad("només fitxers _amin o de submit/"));
         }
     }
-    let st = crate::web::upload::save_draft(&app.moodle, aid, &paths)
+    let named: Vec<_> = paths
+        .into_iter()
+        .zip(&b.files)
+        .map(|(p, f)| (p, f.rsplit('/').next().unwrap_or(f).to_string()))
+        .collect();
+    let st = crate::web::upload::save_draft(&app.moodle, aid, &named)
         .await
         .map_err(upstream)?;
     let s = store_status(&app, &id, &st)?;

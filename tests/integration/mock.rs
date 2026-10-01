@@ -236,6 +236,7 @@ fn fixtures(
     let site_info = serde_json::json!({
         "userid": USER_ID,
         "username": "mock-user",
+        "fullname": "Mock User",
         "sitename": "Mock Moodle",
         "version": "4.1.0",
     });

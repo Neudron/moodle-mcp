@@ -55,6 +55,8 @@ pub struct Local {
     pub files: Vec<String>,
     pub verified: i64,
     pub chat_session: String,
+    /// Local-only author per linked file rel (Moodle sets the real author itself).
+    pub owners: std::collections::BTreeMap<String, String>,
 }
 
 pub struct Db(Mutex<Connection>, AtomicU64);

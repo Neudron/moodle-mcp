@@ -43,3 +43,11 @@ test('enunciatMode', () => {
   assert.equal(enunciatMode('none', false), 'link');
   assert.equal(enunciatMode(undefined, false), 'link');
 });
+
+const { aminName } = new Function(`${block('amin')}; return { aminName };`)();
+test('aminName', () => {
+  assert.equal(aminName('Pràctica 1.docx'), 'Pràctica 1_amin.docx');
+  assert.equal(aminName('a_amin.docx'), 'a_amin.docx');
+  assert.equal(aminName('arxiu'), 'arxiu_amin');
+  assert.equal(aminName('x.tar.gz'), 'x.tar_amin.gz');
+});

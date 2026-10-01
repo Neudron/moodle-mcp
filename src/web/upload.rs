@@ -23,20 +23,21 @@ fn check(res: &Value) -> Result<(), CoreError> {
     }
 }
 
-pub async fn save_draft(m: &Moodle, assign_id: i64, paths: &[PathBuf]) -> Result<Value, CoreError> {
-    if paths.is_empty() {
+/// Each file goes up under its paired name (a renamed link must not upload under its target's name).
+pub async fn save_draft(
+    m: &Moodle,
+    assign_id: i64,
+    files: &[(PathBuf, String)],
+) -> Result<Value, CoreError> {
+    if files.is_empty() {
         return Err(CoreError::Invalid("cap fitxer".into()));
     }
     let mut itemid = 0;
-    for p in paths {
+    for (p, name) in files {
         let bytes = tokio::fs::read(p)
             .await
             .map_err(|e| CoreError::Invalid(e.to_string()))?;
-        let name = p
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        itemid = m.upload_draft(itemid, &name, bytes).await?;
+        itemid = m.upload_draft(itemid, name, bytes).await?;
     }
     let res = m
         .call_with_retry(

@@ -850,3 +850,67 @@ async fn raw_supports_range_and_caps_large_files() {
     assert_eq!(r.status(), 206);
     assert_eq!(r.bytes().await.unwrap().len(), 8 << 20);
 }
+
+#[tokio::test]
+async fn me_returns_fullname_after_sync() {
+    let (base, ..) = start("me").await;
+    let c = reqwest::Client::new();
+    post(&c, &base, "/api/sync").send().await.unwrap();
+    let j: serde_json::Value = c
+        .get(format!("{base}/api/me"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(j["fullname"], "Mock User");
+}
+
+#[tokio::test]
+async fn file_meta_renames_link_and_repoints() {
+    let (base, app, _m, root) = start("fmeta").await;
+    let c = reqwest::Client::new();
+    post(&c, &base, "/api/sync").send().await.unwrap();
+    std::fs::create_dir_all(root.join("submit/T")).unwrap();
+    let target = "Digitalització aplicada/RA01/Mapa IT·OT.txt";
+    std::os::unix::fs::symlink(root.join(target), root.join("submit/T/old.txt")).unwrap();
+    std::fs::write(root.join("submit/T/other.txt"), "o").unwrap();
+    app.db
+        .update_local("assign:7", |l| {
+            l.files = vec!["submit/T/old.txt".into(), "submit/T/other.txt".into()];
+            l.owners.insert("submit/T/old.txt".into(), "Ana".into());
+        })
+        .unwrap();
+    let go = |path: &str, name: &str| {
+        post(&c, &base, "/api/tasks/assign:7/file-meta")
+            .json(&serde_json::json!({"path": path, "name": name, "owner": "Pau"}))
+            .send()
+    };
+    for (path, name, code) in [
+        ("submit/T/old.txt", "", 400),
+        ("submit/T/old.txt", "a/b.txt", 400),
+        ("submit/T/old.txt", "..", 400),
+        ("submit/T/old.txt", ".hid", 400),
+        ("submit/T/old.txt", &"a".repeat(201), 400),
+        ("submit/T/old.txt", "other.txt", 409),
+        ("submit/T/nope.txt", "z.txt", 400),
+        (target, "z.txt", 400),
+    ] {
+        assert_eq!(
+            go(path, name).await.unwrap().status(),
+            code,
+            "{path} {name}"
+        );
+    }
+    let r = go("submit/T/old.txt", "new_amin.txt").await.unwrap();
+    assert!(r.status().is_success(), "{}", r.status());
+    let l = app.db.local("assign:7").unwrap();
+    assert_eq!(l.files, ["submit/T/new_amin.txt", "submit/T/other.txt"]);
+    assert_eq!(l.owners.len(), 1);
+    assert_eq!(l.owners["submit/T/new_amin.txt"], "Pau");
+    let lk = root.join("submit/T/new_amin.txt");
+    assert!(lk.symlink_metadata().unwrap().is_symlink());
+    assert!(root.join("submit/T/old.txt").symlink_metadata().is_err());
+    assert_eq!(std::fs::read_to_string(root.join(target)).unwrap(), "hola");
+}

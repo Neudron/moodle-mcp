@@ -18,7 +18,9 @@ async fn upload_then_save_draft() {
     std::fs::create_dir_all(dir.join("submit/LMSGI/T")).unwrap();
     let f = dir.join("submit/LMSGI/T/a_amin.docx");
     std::fs::write(&f, b"doc").unwrap();
-    let st = upload::save_draft(&c, 7, &[f]).await.unwrap();
+    let st = upload::save_draft(&c, 7, &[(f, "a_amin.docx".into())])
+        .await
+        .unwrap();
     assert_eq!(st["lastattempt"]["submission"]["status"], "draft");
     assert!(upload::resolve(&dir, "submit/LMSGI/T/a_amin.docx")
         .unwrap()

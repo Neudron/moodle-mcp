@@ -235,6 +235,7 @@ pub fn import_once(db: &Db, root: &str) -> Result<()> {
                         .collect(),
                     verified: parse_date(&r.verified),
                     chat_session: String::new(),
+                    ..Default::default()
                 })?,
                 None => db.add_manual_row(&serde_json::to_value(&r)?)?,
             }

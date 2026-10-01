@@ -510,7 +510,9 @@ views.tasca = async (id) => {
       const box = h('div', { class: 'v-preview' });
       lazyPreview(box, { path: f });
       return h('section', { class: 'v-item', 'aria-label': f },
-        h('h3', { class: 'mono' }, f), h('div', { class: 'field-row' }, fileExtras.map((x) => x({ rel: f }))), box);
+        h('h3', { class: 'mono' }, f), h('div', { class: 'field-row' }, fileExtras.map((x) => x({ rel: f })),
+          f.startsWith('submit/') && h('button', { type: 'button', class: 'btn ghost', onclick: () => metaDialog(id, f, l.owners || {}) }, 'Nom i autor…'),
+          l.owners?.[f] && h('span', { class: 'dim' }, `Propietari: ${l.owners[f]}`)), box);
     }) : h('p', { class: 'dim' }, `Cap fitxer vinculat. Carpeta suggerida: ${tv.submit_dir}`),
     linkFiles(id));
   const lliurat = () => h('div', { class: 'v-pane' },
@@ -590,6 +592,21 @@ $('#picker-q').addEventListener('keydown', (e) => {
   else if ((e.key === 'Backspace' && !e.target.value) || (e.key === 'ArrowUp' && e.altKey)) { e.preventDefault(); if (pk.dir) pkDir(pk.dir.split('/').slice(0, -1).join('/')); }
 });
 $('#picker').addEventListener('close', () => { const o = pk.opener; pk.opener = null; if (o && o.isConnected) o.focus(); });
+// amin-helpers-start
+const aminName = (n) => { const i = n.lastIndexOf('.'), st = i > 0 ? n.slice(0, i) : n; return st.endsWith('_amin') ? n : i > 0 ? `${st}_amin${n.slice(i)}` : `${n}_amin`; };
+// amin-helpers-end
+async function metaDialog(id, f, owners) {
+  const base = f.split('/').pop();
+  let me = ''; try { me = (await api('/api/me')).fullname || ''; } catch (e) { /* optional */ }
+  const name = h('input', { id: 'meta-name', value: aminName(base), autocomplete: 'off', spellcheck: 'false' });
+  const owner = h('input', { id: 'meta-owner', value: owners[f] || me, autocomplete: 'off' });
+  const body = h('div', {}, h('p', {}, `Fitxer: ${base}. Només es canvia el nom de l'enllaç a submit/, mai el fitxer original.`),
+    h('label', { for: 'meta-name' }, 'Nom'), name, h('label', { for: 'meta-owner' }, 'Propietari'), owner,
+    h('p', { class: 'dim hint' }, "Moodle posa l'autor ell mateix: aquest nom només es guarda aquí."));
+  if (!(await confirmDialog('Nom i autor', body, 'Desa'))) return;
+  try { await api(`/api/tasks/${id}/file-meta`, { method: 'POST', body: { path: f, name: name.value, owner: owner.value } }); await route({ soft: true }); }
+  catch (e) { toast(e.message, true); }
+}
 function linkFiles(id) {
   return h('div', { class: 'fld v-link' }, h('button', { type: 'button', id: 'vincula', onclick: () => openPicker(id) }, ic('folder'), 'Tria un fitxer…'));
 }
