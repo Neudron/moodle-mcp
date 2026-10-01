@@ -348,9 +348,15 @@ pub fn to_tasks(sha: &str, item: &Item, cands: &[Cand], existing: &[Task]) -> Ve
 
 /// Window of `doc` around `quote` (first 3000 chars when the quote is not verbatim).
 fn excerpt(doc: &str, quote: &str) -> String {
-    let at = doc
-        .find(quote)
-        .map_or(0, |i| doc[..i].chars().count().saturating_sub(1500));
+    let pat = quote
+        .split_whitespace()
+        .map(regex::escape)
+        .collect::<Vec<_>>()
+        .join(r"\s+");
+    let at = regex::Regex::new(&format!("(?i){pat}"))
+        .ok()
+        .and_then(|re| re.find(doc))
+        .map_or(0, |m| doc[..m.start()].chars().count().saturating_sub(1500));
     doc.chars().skip(at).take(3000).collect()
 }
 
@@ -1384,6 +1390,15 @@ pub fn router() -> Router<Arc<App>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn excerpt_finds_collapsed_ci_quote() {
+        let doc = format!(
+            "{}Exercici   1:\n  Fes{}",
+            "a".repeat(5000),
+            "b".repeat(5000)
+        );
+        assert!(super::excerpt(&doc, "exercici 1: fes").contains("Exercici   1:"));
+    }
     use super::*;
     use crate::web::db::Attachment;
 
