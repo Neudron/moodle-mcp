@@ -900,6 +900,19 @@ fn uniq() -> u64 {
     N.fetch_add(1, SeqCst)
 }
 static RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// Holds RUNNING; released on drop, so a panic cannot leave scans locked out.
+struct Running;
+impl Running {
+    fn claim() -> Option<Self> {
+        (!RUNNING.swap(true, SeqCst)).then(|| Self)
+    }
+}
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.store(false, SeqCst);
+    }
+}
 static CANCEL: AtomicBool = AtomicBool::new(false);
 
 type Out = (String, &'static str, String); // (sha, status, note)
@@ -1199,6 +1212,22 @@ fn backup_once(app: &App, backed: &mut bool) -> bool {
             return false;
         }
         *backed = true;
+        let mut old: Vec<_> = std::fs::read_dir(&d)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let n = e.file_name().to_string_lossy().into_owned();
+                Some((
+                    n.strip_prefix("web.db.pre-jev-")?.parse::<u64>().ok()?,
+                    e.path(),
+                ))
+            })
+            .collect();
+        old.sort();
+        for (_, p) in old.iter().rev().skip(5) {
+            std::fs::remove_file(p).ok();
+        }
     }
     true
 }
@@ -1218,7 +1247,7 @@ fn drop_unconfirmed(app: &App, id: &str) {
 
 /// Background pass: skipped while a scan runs.
 pub async fn rescore_idle(app: &App) {
-    if !RUNNING.load(SeqCst) {
+    if let Some(_g) = Running::claim() {
         CANCEL.store(false, SeqCst);
         rescore(app).await;
     }
@@ -1277,7 +1306,7 @@ async fn rescore(app: &App) {
     }
 }
 
-async fn run_job(app: Arc<App>, job: i64) {
+async fn run_job(app: Arc<App>, job: i64, _g: Running) {
     let (a, tasks) = (Arc::clone(&app), app.db.all_tasks().unwrap_or_default());
     let items = tokio::task::spawn_blocking(move || inventory(Path::new(&a.root), &tasks))
         .await
@@ -1334,7 +1363,6 @@ async fn run_job(app: Arc<App>, job: i64) {
         "done"
     };
     app.db.scan_finish(job, state, crate::web::now()).ok();
-    RUNNING.store(false, SeqCst);
 }
 
 fn prepare(app: &App) -> anyhow::Result<i64> {
@@ -1348,15 +1376,15 @@ fn prepare(app: &App) -> anyhow::Result<i64> {
 }
 
 async fn start(State(app): State<Arc<App>>) -> R<Json<Value>> {
-    if RUNNING.swap(true, SeqCst) {
+    let Some(g) = Running::claim() else {
         return Err(ApiErr(
             StatusCode::CONFLICT,
             "ja hi ha un escaneig en marxa".into(),
         ));
-    }
+    };
     CANCEL.store(false, SeqCst);
-    let job = prepare(&app).inspect_err(|_| RUNNING.store(false, SeqCst))?;
-    tokio::spawn(run_job(app, job));
+    let job = prepare(&app)?;
+    tokio::spawn(run_job(app, job, g));
     Ok(Json(json!({ "job": job })))
 }
 
@@ -1917,6 +1945,68 @@ mod tests {
         rescore(&app).await;
         assert_eq!(app.db.task("ai:v:0").unwrap().unwrap().ai_v, JEV_V);
         std::env::remove_var("JEV_URL");
+    }
+
+    #[tokio::test]
+    async fn running_guard_excludes_rescore_and_releases_on_panic() {
+        let _g = jev::mock::ENV.lock().await;
+        let app = App::new(
+            crate::web::db::Db::memory().unwrap(),
+            crate::moodle::Moodle::new("http://127.0.0.1:1", "t"),
+            std::env::temp_dir()
+                .join(format!("scang-{}", uniq()))
+                .to_str()
+                .unwrap(),
+            0,
+        );
+        app.db
+            .upsert_tasks(&[Task {
+                id: "ai:g:0".into(),
+                course: "A".into(),
+                source: "ai".into(),
+                title: "T".into(),
+                ai_score: Some(0.7),
+                ai_v: 0,
+                ..Default::default()
+            }])
+            .unwrap();
+        std::env::set_var("JEV_URL", jev::mock::serve().await);
+        let g = Running::claim().unwrap();
+        assert!(Running::claim().is_none());
+        rescore_idle(&app).await; // no-op while held
+        assert_eq!(app.db.task("ai:g:0").unwrap().unwrap().ai_v, 0);
+        drop(g);
+        let r = std::panic::catch_unwind(|| {
+            let _g = Running::claim().unwrap();
+            panic!("boom");
+        });
+        assert!(r.is_err());
+        let g = Running::claim().expect("released by Drop on panic");
+        drop(g);
+        rescore_idle(&app).await;
+        assert_eq!(app.db.task("ai:g:0").unwrap().unwrap().ai_v, JEV_V);
+        std::env::remove_var("JEV_URL");
+    }
+
+    #[test]
+    fn backup_once_keeps_newest_five() {
+        let root = std::env::temp_dir().join(format!("scanb-{}", uniq()));
+        let d = root.join(".moodle/trash");
+        std::fs::create_dir_all(&d).unwrap();
+        for i in 1..=6 {
+            std::fs::write(d.join(format!("web.db.pre-jev-{i}")), b"x").unwrap();
+        }
+        let app = App::new(
+            crate::web::db::Db::memory().unwrap(),
+            crate::moodle::Moodle::new("http://127.0.0.1:1", "t"),
+            root.to_str().unwrap(),
+            0,
+        );
+        assert!(backup_once(&app, &mut false));
+        let n = std::fs::read_dir(&d).unwrap().count();
+        assert_eq!(n, 5);
+        assert!(!d.join("web.db.pre-jev-1").exists());
+        assert!(!d.join("web.db.pre-jev-2").exists());
     }
 
     #[tokio::test]
