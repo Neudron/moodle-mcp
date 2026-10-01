@@ -530,6 +530,17 @@ pub async fn run(
     for (url, entry) in collected.lock().await.iter() {
         new_files.insert(url.clone(), entry.clone());
     }
+    // Failed downloads keep their old entry so the URL stays tracked.
+    for file in plan
+        .fetch
+        .iter()
+        .chain(plan.reuse.iter())
+        .chain(plan.moves.iter().map(|m| &m.file))
+    {
+        if let (false, Some(prev)) = (new_files.contains_key(&file.url), old_files.get(&file.url)) {
+            new_files.insert(file.url.clone(), prev.clone());
+        }
+    }
     report.duration_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     report.next_cursor = None;
     (report, new_files)

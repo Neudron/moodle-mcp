@@ -347,3 +347,61 @@ async fn e2e_filters_and_dry_run() {
     let entries = std::fs::read_dir(&course_dir).expect("course dir").count();
     assert_eq!(entries, 0, "dry run must not write files");
 }
+
+#[tokio::test]
+async fn e2e_error_keeps_course_state() {
+    let (_m, c, courses, root) = setup().await;
+    let course = course_of(&courses);
+    let mut state = State::default();
+    sync_course(&c, &mut state, course, &root)
+        .await
+        .expect("seed");
+    let before = state.courses.get("101").expect("cs").files.clone();
+    assert_eq!(before.len(), 50);
+
+    // A regular file where a section dir must go makes ensure_layout fail.
+    let sec = std::path::Path::new(&root).join("MOCK101/RA05");
+    std::fs::remove_dir_all(&sec).expect("rm section");
+    std::fs::write(&sec, b"x").expect("blocker");
+
+    assert!(sync_course(&c, &mut state, course, &root).await.is_err());
+    let after = &state.courses.get("101").expect("entry kept").files;
+    assert_eq!(after.len(), before.len());
+    assert_eq!(
+        after.keys().collect::<Vec<_>>(),
+        before.keys().collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
+async fn e2e_failed_download_keeps_tracked_url() {
+    let (m, c, courses, root) = setup().await;
+    let course = course_of(&courses);
+    let mut state = State::default();
+    sync_course(&c, &mut state, course, &root)
+        .await
+        .expect("seed");
+    let (url, entry) = {
+        let f = &state.courses.get("101").expect("cs").files;
+        let (u, e) = f.iter().next().expect("entry");
+        (u.clone(), e.clone())
+    };
+    let dest = std::path::Path::new(&root).join(&entry.path);
+    std::fs::remove_file(&dest).expect("rm file");
+
+    m.set_files_down(true);
+    let r = sync_course(&c, &mut state, course, &root)
+        .await
+        .expect("sync");
+    assert!(!r.errors.is_empty(), "download must fail");
+    let cs = state.courses.get("101").expect("cs");
+    assert!(cs.files.contains_key(&url), "url dropped from state");
+    assert_eq!(cs.files.len(), 50);
+
+    m.set_files_down(false);
+    let r = sync_course(&c, &mut state, course, &root)
+        .await
+        .expect("retry");
+    assert_eq!(r.files_new, 1, "errors: {:?}", r.errors);
+    assert!(dest.is_file(), "restored at original path, no -2 suffix");
+}

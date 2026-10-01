@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
 };
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
@@ -58,6 +58,7 @@ struct Shared {
     fail_fn: Option<&'static str>,
     warn_fn: Option<&'static str>,
     status: Option<&'static str>,
+    files_down: Arc<AtomicBool>,
 }
 
 pub struct MockMoodle {
@@ -80,6 +81,7 @@ pub struct MockMoodle {
     /// this to assert skipped files cause zero file-download hits.
     #[allow(dead_code)]
     hits: Arc<AtomicUsize>,
+    files_down: Arc<AtomicBool>,
 }
 
 impl MockMoodle {
@@ -89,6 +91,7 @@ impl MockMoodle {
             .expect("mock bind");
         let base = format!("http://{}", listener.local_addr().expect("mock addr"));
         let (site_info, courses, contents, files) = fixtures(&base);
+        let files_down = Arc::new(AtomicBool::new(false));
         let shared = Arc::new(Shared {
             site_info: site_info.clone(),
             courses: courses.clone(),
@@ -100,6 +103,7 @@ impl MockMoodle {
             fail_fn: config.fail_fn,
             warn_fn: config.warn_fn,
             status: config.status,
+            files_down: Arc::clone(&files_down),
         });
         let hits = Arc::new(AtomicUsize::new(0));
         let hits_accept = Arc::clone(&hits);
@@ -124,7 +128,14 @@ impl MockMoodle {
             ratelimit: config.ratelimit,
             files,
             hits,
+            files_down,
         }
+    }
+
+    /// While true, every pluginfile download answers HTTP 500.
+    #[allow(dead_code)]
+    pub fn set_files_down(&self, down: bool) {
+        self.files_down.store(down, Ordering::SeqCst);
     }
 
     #[allow(dead_code)]
@@ -495,6 +506,9 @@ fn route(
                 String::new(),
                 exc_body("invalidtoken", "Invalid token"),
             );
+        }
+        if shared.files_down.load(Ordering::SeqCst) {
+            return (500, JSON.to_string(), String::new(), Vec::new());
         }
         let rest = path
             .strip_prefix("/webservice/pluginfile.php")

@@ -274,7 +274,8 @@ pub async fn sync_course_with_options(
 
     let mut cs = state
         .courses
-        .remove(&course.id.to_string())
+        .get(&course.id.to_string())
+        .cloned()
         .unwrap_or_default();
     cs.upsert(course);
     let prev_synced_at = cs.synced_at.clone();
@@ -307,6 +308,9 @@ pub async fn sync_course_with_options(
         root: root_path.clone(),
     };
     let (mut report, new_files) = run(moodle, &plan, &ctx, opts, &old_files).await;
+    // Commit state before fallible writes so downloaded files stay tracked.
+    cs.files = new_files.clone();
+    state.courses.insert(course.id.to_string(), cs);
 
     write_index_and_meta(course, &contents, &layout, &plan, &new_files).await?;
     write_course_summary(&course_dir, course).await?;
@@ -325,8 +329,6 @@ pub async fn sync_course_with_options(
     write_receipt(&course_dir, &receipt).await?;
     let _ = actor;
 
-    cs.files = new_files;
-    state.courses.insert(course.id.to_string(), cs);
     Ok(report)
 }
 
