@@ -48,7 +48,9 @@
     <a href="#/notes"><svg class="ic" aria-hidden="true"><use href="#i-notes"/></svg><span>Notes</span></a>
     <a href="#/organitza"><svg class="ic" aria-hidden="true"><use href="#i-sync"/></svg><span>Organitza</span></a>
     <a href="#/forums"><svg class="ic" aria-hidden="true"><use href="#i-forums"/></svg><span>Fòrums</span><span class="pill" id="forum-pill" hidden></span></a>
+    <button id="cursos-btn" type="button" class="cur" hidden><svg class="ic" aria-hidden="true"><use href="#i-brand"/></svg><span>Cursos</span></button>
   </nav>
+  <dialog id="cursos-sheet" aria-label="Cursos"><h2>Cursos</h2><nav id="cursos-list" aria-label="Cursos"></nav><menu><button type="button" onclick="this.closest('dialog').close()">Tanca</button></menu></dialog>
   <div class="sec" aria-hidden="true" hidden>Cursos</div>
   <nav class="courses" id="courses" aria-label="Cursos" hidden></nav>
   <div id="scan-slot"></div>

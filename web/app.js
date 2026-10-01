@@ -232,6 +232,24 @@ function proposal(tv) {
   return art;
 }
 
+const agendaView = (list, now) => {
+  const g = agenda(list, now);
+  if (!g.length) return empty('Res als propers 14 dies', 'No tens cap data de lliurament pròxima.');
+  const fmt = new Intl.DateTimeFormat('ca-ES', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Madrid' });
+  return h('div', {}, g.map(({ day, items }) => h('section', { class: 'v-grp' },
+    h('h2', { class: 'grp' }, day === 'late' ? 'Vençudes' : fmt.format(new Date(`${day}T12:00:00Z`)), h('span', { class: 'n' }, items.length)),
+    h('div', { class: 'cards' }, items.map((tv) => card(tv, false, true))))));
+};
+const perCurs = (list) => {
+  const by = {};
+  for (const tv of list) (by[tv.task.course] ||= []).push(tv);
+  const ks = Object.keys(by).sort();
+  if (!ks.length) return empty('Res pendent', 'No hi ha tasques pendents.');
+  return h('div', {}, ks.map((c) => h('section', { class: 'v-grp' },
+    h('h2', { class: 'grp' }, cname(c), h('span', { class: 'n' }, by[c].length)),
+    h('div', { class: 'cards' }, by[c].map((tv) => card(tv, true, true))))));
+};
+
 views.tauler = async () => {
   const tasks = (await tasksOnce()).filter((tv) => tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
   const props = tasks.filter((tv) => tv.task.source === 'ai' && tv.task.ai_confirmed == null), all = tasks.filter((tv) => !props.includes(tv));
@@ -309,15 +327,21 @@ views.tauler = async () => {
       mode = k; seg.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', b === e.currentTarget)); apply();
     } }, label)));
 
+  tabs.sel ??= {};
+  tabs.sel.tauler ??= (() => { try { return localStorage.getItem('tab-tauler'); } catch (e) { return null; } })() || (innerWidth < 600 ? 'agenda' : 'llista');
   const out = h('section', { class: 'v-tauler' },
     h('h1', {}, pending === 0 ? 'Tot al dia' : `Tens ${pending} ${pending === 1 ? 'tasca pendent' : 'tasques pendents'}`),
     next ? h('a', { class: 'next', href: `#/tasca/${enc(next.task.id)}` },
       h('span', { class: 'lbl' }, 'La propera'), h('span', { class: 'nt' }, next.task.title),
       h('span', { class: 'nm' }, cname(next.task.course), ' · ', when(next.task.due))) : null,
     total ? h('div', { class: 'sub' }, bar(doneN, total, 'Tasques lliurades', '', `${doneN} de ${total} lliurades`)) : null,
-    all.length ? h('div', { class: 'v-tools' }, seg, h('label', { class: 'sr-only', for: 'filter' }, 'Filtra tasques'), input) : null,
     scanControl(), status,
-    sections, propEl, oldEl, none);
+    all.length ? tabs('tauler', [
+      { id: 'llista', label: 'Llista', render: () => h('div', {}, h('div', { class: 'v-tools' }, seg, h('label', { class: 'sr-only', for: 'filter' }, 'Filtra tasques'), input), sections, oldEl, none) },
+      { id: 'agenda', label: 'Agenda', render: () => agendaView(pendingList, now) },
+      { id: 'curs', label: 'Per curs', render: () => perCurs(pendingList) },
+    ], 'Vista del tauler', true) : [sections, oldEl, none],
+    propEl);
   if (input.value) apply(); // filter survives soft refreshes
   return out;
 };
@@ -371,12 +395,20 @@ async function preview(el, o) {
   el.replaceChildren(node);
 }
 
+// Build a preview only once its box scrolls near the viewport.
+function lazyPreview(box, o) {
+  if (!('IntersectionObserver' in window)) return preview(box, o);
+  const io = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { io.disconnect(); preview(box, o); } }, { rootMargin: '200px' });
+  io.observe(box);
+}
+
 // WAI-ARIA tabs; panels render once on first select; active id survives soft refreshes in tabs.sel[key].
-function tabs(key, items) {
+function tabs(key, items, label = 'Seccions de la tasca', persist) {
   tabs.sel ??= {};
   const btns = [], panels = [];
   const pick = (i, focus) => {
     tabs.sel[key] = items[i].id;
+    if (persist) try { localStorage.setItem(`tab-${key}`, items[i].id); } catch (e) { /* private mode */ }
     items.forEach((it, j) => {
       btns[j].setAttribute('aria-selected', String(j === i)); btns[j].tabIndex = j === i ? 0 : -1; panels[j].hidden = j !== i;
     });
@@ -392,7 +424,7 @@ function tabs(key, items) {
     panels.push(h('div', { role: 'tabpanel', id: `pn-${key}-${it.id}`, 'aria-labelledby': `tab-${key}-${it.id}`, tabindex: 0, hidden: true }));
   });
   pick(Math.max(0, items.findIndex((it) => it.id === tabs.sel[key])));
-  return h('div', { class: 'tabs2' }, h('div', { role: 'tablist', 'aria-label': 'Seccions de la tasca' }, btns), panels);
+  return h('div', { class: 'tabs2' }, h('div', { role: 'tablist', 'aria-label': label }, btns), panels);
 }
 
 views.tasca = async (id) => {
@@ -466,7 +498,7 @@ views.tasca = async (id) => {
   const feina = () => h('div', { class: 'v-pane' },
     l.files.length ? l.files.map((f) => {
       const box = h('div', { class: 'v-preview' });
-      preview(box, { path: f });
+      lazyPreview(box, { path: f });
       return h('section', { class: 'v-item', 'aria-label': f },
         h('h3', { class: 'mono' }, f), h('div', { class: 'field-row' }, fileExtras.map((x) => x({ rel: f }))), box);
     }) : h('p', { class: 'dim' }, `Cap fitxer vinculat. Carpeta suggerida: ${tv.submit_dir}`),
@@ -474,7 +506,7 @@ views.tasca = async (id) => {
   const lliurat = () => h('div', { class: 'v-pane' },
     (t.submission_files || []).length ? t.submission_files.map((f) => {
       const box = h('div', { class: 'v-preview' });
-      preview(box, { moodleUrl: f.fileurl, name: f.filename, size: f.filesize });
+      lazyPreview(box, { moodleUrl: f.fileurl, name: f.filename, size: f.filesize });
       return h('section', { class: 'v-item', 'aria-label': f.filename },
         h('h3', {}, f.filename, ' ', h('span', { class: 'mono dim' }, fsize(f.filesize))),
         h('div', { class: 'field-row' }, h('a', { class: 'btn ghost', href: `/api/moodle-file?url=${enc(f.fileurl)}`, download: f.filename }, 'Descarrega')), box);
@@ -582,6 +614,23 @@ function groupByDue(tasks, now) {
 // Refresh the view when a sync finished, unless the user is typing or editing.
 const shouldSoftRoute = (prev, cur, tag, view) => !!prev && !!cur && prev !== cur && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && view !== 'edita' && view !== 'ide';
 // triage-helpers-end
+// agenda-helpers-start
+// Pending tasks -> [{day:'late'|'YYYY-MM-DD', items}]: overdue first, then each due day inside the window. Undated skipped.
+function agenda(tasks, now, days = 14) {
+  const today = dayKey(now), end = dayKey(now + days * 86400), late = [], by = {};
+  for (const tv of [...tasks].sort((a, b) => a.task.due - b.task.due)) {
+    const d = tv.task.due && dayKey(tv.task.due);
+    if (!d) continue;
+    if (d < today) late.push(tv); else if (d < end) (by[d] ||= []).push(tv);
+  }
+  return [...(late.length ? [{ day: 'late', items: late }] : []), ...Object.keys(by).sort().map((day) => ({ day, items: by[day] }))];
+}
+// Calendar grid (6 rows x 7): next focus index for a key, -1 when the key is not a move.
+function gridMove(i, key, n = 42) {
+  const j = { ArrowLeft: i - 1, ArrowRight: i + 1, ArrowUp: i - 7, ArrowDown: i + 7, Home: i - (i % 7), End: i - (i % 7) + 6 }[key];
+  return j === undefined ? -1 : j < 0 || j >= n ? i : j;
+}
+// agenda-helpers-end
 // palette-helpers-start
 // Lowercase includes, prefix matches first (stable), max 50.
 function filterPalette(items, q) {
@@ -626,8 +675,11 @@ async function loadCourses() {
   COURSES = Object.fromEntries(cs.map((c) => [c.shortname, c.title]));
   $('#courses').hidden = $('.side .sec').hidden = !cs.length;
   $('#courses').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, title: c.title }, h('span', { class: 'dot', style: { '--h': hue(c.shortname) } }), h('span', { class: 'nm' }, c.title))));
+  $('#cursos-list').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, onclick: () => $('#cursos-sheet').close() }, h('span', { class: 'dot', style: { '--h': hue(c.shortname) } }), h('span', { class: 'nm' }, c.title))));
+  $('#cursos-btn').hidden = !cs.length;
   markNav();
 }
+$('#cursos-btn').addEventListener('click', () => $('#cursos-sheet').showModal());
 
 $('#scan-slot').append(scanControl());
 $('#sync').addEventListener('click', async (e) => {
@@ -811,6 +863,22 @@ views.fitxers = async (...parts) => {
     h('div', { class: 'v-preview' }, body));
 };
 
+// role=grid with roving tabindex: arrows move days, PageUp/PageDown change month.
+function calGrid(cells, nav, first, now) {
+  const WD = ['Dl', 'Dt', 'Dc', 'Dj', 'Dv', 'Ds', 'Dg'];
+  const rows = [h('div', { role: 'row', class: 'r' }, WD.map((d) => h('div', { role: 'columnheader', class: 'dim' }, d)))];
+  for (let r = 0; r < 6; r++) rows.push(h('div', { role: 'row', class: 'r' }, cells.slice(r * 7, r * 7 + 7)));
+  const cur = cells.findIndex((c) => c.classList.contains('today'));
+  cells[cur >= 0 ? cur : cells.findIndex((c) => !c.classList.contains('out'))].tabIndex = 0;
+  return h('div', { class: 'cal', role: 'grid', 'aria-label': 'Calendari de tasques', onkeydown: (e) => {
+    if (e.target.getAttribute('role') !== 'gridcell') return;
+    if (e.key === 'PageUp' || e.key === 'PageDown') { e.preventDefault(); location.hash = nav(e.key === 'PageUp' ? -1 : 1); return; }
+    const i = cells.indexOf(e.target), j = gridMove(i, e.key);
+    if (j < 0) return;
+    e.preventDefault(); cells[i].tabIndex = -1; cells[j].tabIndex = 0; cells[j].focus();
+  } }, rows);
+}
+
 views.calendari = async (ym) => {
   const all = (await tasksOnce()).filter((tv) => tv.task.due && tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
   const now = new Date();
@@ -833,8 +901,8 @@ views.calendari = async (ym) => {
     const evs = byDay[key(d)] || [];
     const today = key(d) === key(now);
     const cls = 'd' + (d.getMonth() !== m - 1 ? ' out' : '') + (today ? ' today' : '');
-    const cell = h('div', { class: cls, ...(evs.length ? { role: 'group', 'aria-label': long.format(d) } : {}) },
-      h('strong', today ? { 'aria-current': 'date' } : {}, d.getDate()),
+    const cell = h('div', { class: cls, role: 'gridcell', tabindex: -1, 'aria-label': long.format(d), ...(today ? { 'aria-current': 'date' } : {}) },
+      h('strong', {}, d.getDate()),
       h('span', { class: 'wd' }, wd.format(d)),
       evs.slice(0, 3).map((tv) => ev(tv)),
       evs.slice(3).map((tv) => ev(tv, true)));
@@ -857,9 +925,7 @@ views.calendari = async (ym) => {
         h('a', { class: 'btn', id: 'cal-prev', href: nav(-1), 'aria-label': 'Mes anterior' }, ic('arrow-l')),
         h('a', { class: 'btn', id: 'cal-today', href: '#/calendari', ...(isNow ? { 'aria-current': 'true' } : {}) }, 'Avui'),
         h('a', { class: 'btn', id: 'cal-next', href: nav(1), 'aria-label': 'Mes següent' }, ic('arrow-r')))),
-    h('div', { class: 'cal' },
-      ['dl', 'dt', 'dc', 'dj', 'dv', 'ds', 'dg'].map((d) => h('div', { class: 'dim', 'aria-hidden': 'true' }, d)),
-      cells));
+    calGrid(cells, nav, first, now));
 };
 
 views.notes = async () => {

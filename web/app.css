@@ -242,10 +242,12 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 
 /* calendar */
 .cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden}
-.cal>.dim{background:var(--sunk);padding:var(--s1);min-width:0;font-size:14px;font-weight:600;text-transform:capitalize}
+.cal .r{display:contents}
+.cal .dim{background:var(--sunk);padding:var(--s1);min-width:0;font-size:14px;font-weight:600;text-transform:capitalize}
 .cal .d{min-height:120px;background:var(--raised);padding:var(--s1);min-width:0;overflow:hidden}
-.cal>.d.out{background:var(--sunk)}
-.cal>.d:nth-child(7n+6):not(.out),.cal>.d:nth-child(7n):not(.out){background:color-mix(in oklab,var(--raised) 92%,var(--dim))}
+.cal .d.out{background:var(--sunk)}
+.cal .d:focus-visible{outline-offset:-2px}
+.cal .d:nth-child(n+6):not(.out){background:color-mix(in oklab,var(--raised) 92%,var(--dim))}
 .cal .d.out{color:var(--dim)}
 .cal .d strong{font:600 14px var(--sans);font-variant-numeric:tabular-nums;display:inline-grid;place-items:center;min-width:28px;height:28px}
 .cal .d.today strong{background:var(--accent);color:var(--accent-ink);border-radius:50%}
@@ -268,11 +270,14 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
   .courses{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);order:3;flex:0 0 100%;flex-direction:row;overflow-x:auto;scroll-snap-type:x proximity;scroll-padding-inline:16px 32px;gap:var(--s1);padding:var(--s1) var(--s2) 0;margin:0 calc(-1*var(--s2))}
   body:not(:has(main[data-view=curs])) .courses{display:none}
   a.chip{min-height:44px}
+  .tabs button.cur{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:64px;padding:0 4px;border:0;border-radius:0;background:transparent;color:var(--text);font-size:14px;line-height:1.2;white-space:nowrap;overflow:hidden}
+  .tabs button.cur[hidden]{display:none}
+  #cursos-sheet{margin:auto auto 0;border-radius:var(--r-lg) var(--r-lg) 0 0;max-height:80vh;overflow:auto}
   .courses a .nm{-webkit-line-clamp:1}
   .courses a{scroll-snap-align:start;flex:none;max-width:240px;border:1px solid var(--line);background:var(--raised)}
   html{scroll-padding-bottom:96px}
   .tabs{position:fixed;inset:auto 0 0 0;z-index:var(--z-tabs);flex-direction:row;background:var(--sunk);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);gap:0}
-  .tabs a{flex:1;min-width:0;flex-direction:column;justify-content:center;gap:4px;min-height:64px;border-radius:0;padding:0 4px;font-size:12px;line-height:1.2;white-space:nowrap;overflow:hidden;position:relative}
+  .tabs a{flex:1;min-width:0;flex-direction:column;justify-content:center;gap:4px;min-height:64px;border-radius:0;padding:0 4px;font-size:14px;line-height:1.2;white-space:nowrap;overflow:hidden;position:relative}
   .tabs a:focus-visible{outline-offset:-4px}
   .tabs a[aria-current=page]{background:transparent}
   .tabs a[aria-current=page]::before{content:"";position:absolute;left:16px;right:16px;top:0;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
@@ -284,9 +289,10 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
   dialog menu{flex-direction:column-reverse}dialog menu button{width:100%}
   .field-row{flex-direction:column;align-items:stretch}
   .cal{display:block;background:none;border:0}
-  .cal>.dim{display:none}
+  .cal .dim{display:none}
   .cal .d{display:block;border:1px solid var(--line);border-radius:var(--r-md);margin-bottom:var(--s1);min-height:0}
   .cal .d:not(:has(a)){display:none}
+  .cal .d:not(:has(a)):focus-within{display:block}
   .cal .d.today{display:block}
 }
 @media (max-width:599px){
@@ -412,6 +418,8 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 .row .cn{display:inline-block;vertical-align:bottom;max-width:24ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 
+small{font-size:16px}
+
 /* AI scan */
 .v-scan{display:flex;flex-direction:column;gap:var(--s1);margin:var(--s1) 0}
 .v-scan-p:empty,.v-scan-l:empty{display:none}
@@ -446,3 +454,10 @@ dialog.pal{padding:var(--s2);max-width:min(560px,calc(100vw - 32px));margin-top:
 .pal li small{color:var(--dim);flex:none;font-size:14px}
 .pal li[aria-selected="true"]{background:var(--hover);border-color:var(--accent)}
 @media (forced-colors:active){.pal li[aria-selected="true"]{background:Highlight;color:HighlightText;forced-color-adjust:none}}
+
+.tabs button.cur{display:none}
+@media (max-width:899px){.tabs button.cur{display:flex}.tabs button.cur[hidden]{display:none}}
+@media (max-width:599px){.tabs a>span:not(.pill),.tabs button.cur>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
+#cursos-list{display:flex;flex-direction:column;gap:var(--s1)}
+#cursos-list a{display:flex;align-items:center;gap:var(--s2);min-height:44px;padding:0 var(--s2);border-radius:var(--r-md);color:var(--text);text-decoration:none}
+#cursos-list a:hover{background:var(--hover)}
