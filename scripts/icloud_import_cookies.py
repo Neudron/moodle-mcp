@@ -12,7 +12,7 @@ Env (tests): FIREFOX_DIR, ICLOUD_GLASS_STATE, ICLOUD_IMPORT_JAR_DIR, ICLOUD_IMPO
 """
 from __future__ import annotations
 
-import configparser, json, os, shutil, sqlite3, sys, tempfile, time
+import configparser, contextlib, fcntl, json, os, shutil, sqlite3, sys, tempfile, time
 from http.cookiejar import Cookie
 from pathlib import Path
 
@@ -31,9 +31,10 @@ def firefox_roots() -> list[Path]:
     return [h / ".config/mozilla/firefox", h / ".mozilla/firefox"]
 
 
-def find_profile() -> Path:
+def find_profiles() -> list[Path]:
+    out: list[Path] = []
     for root in firefox_roots():
-        for name, sect in (("installs.ini", None), ("profiles.ini", None)):
+        for name in ("installs.ini", "profiles.ini"):
             ini = root / name
             if not ini.exists():
                 continue
@@ -49,19 +50,29 @@ def find_profile() -> Path:
                     is_rel = cp[s].get("IsRelative", "1") == "1"
                 if rel:
                     p = (root / rel) if is_rel else Path(rel)
-                    if (p / "cookies.sqlite").exists():
-                        return p
-    raise NoData("no firefox profile with cookies.sqlite")
+                    if (p / "cookies.sqlite").exists() and p not in out:
+                        out.append(p)
+    return out
+
+
+def load_cookies() -> list[dict]:
+    """First profile that has icloud.com cookies."""
+    for p in find_profiles():
+        try:
+            return read_cookies(p)
+        except (NoData, sqlite3.Error):
+            continue
+    raise NoData("no firefox profile with icloud.com cookies")
 
 
 def read_cookies(profile: Path) -> list[dict]:
-    """Copy DB+WAL+SHM to a 0700 temp dir and read icloud.com rows read-only."""
+    """Copy db+wal+shm to a 0700 temp dir (Firefox holds the live DB exclusive) and read icloud.com rows."""
     with tempfile.TemporaryDirectory() as td:
         os.chmod(td, 0o700)
         for suf in ("", "-wal", "-shm"):
-            src = profile / f"cookies.sqlite{suf}"
-            if src.exists():
-                shutil.copy2(src, Path(td) / src.name)
+            f = profile / f"cookies.sqlite{suf}"
+            if f.exists():
+                shutil.copy2(f, Path(td) / f.name)
         con = sqlite3.connect(f"file:{td}/cookies.sqlite?mode=ro", uri=True)
         try:
             rows = con.execute(
@@ -147,7 +158,7 @@ def seed_session(jar_dir: Path, acct: str, cookies: list[dict], src_dir: Path | 
 
 def main(argv: list[str]) -> int:
     try:
-        cookies = read_cookies(find_profile())
+        cookies = load_cookies()
         if "--check" in argv:
             print(token_expiry(cookies))
             return 0
@@ -159,31 +170,23 @@ def main(argv: list[str]) -> int:
     jar_dir = Path(os.environ.get("ICLOUD_IMPORT_JAR_DIR") or state / "pyicloud")
     marker = state / "reminders-auth-required"
     dry = "--dry-run" in argv
-    with tempfile.TemporaryDirectory() as td:
+    if not dry:
+        jar_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(jar_dir, 0o700)
+    # same filesystem as jar_dir so os.replace is atomic
+    # ponytail: blocking LOCK_EX; Rust's 120s timeout + kill_on_drop bounds the wait
+    with contextlib.nullcontext() if dry else open(state / "lock", "w") as lk, \
+            tempfile.TemporaryDirectory(dir=None if dry else jar_dir.parent) as td:
+        if lk:
+            fcntl.flock(lk, fcntl.LOCK_EX)
         work = Path(td)
         os.chmod(td, 0o700)
-        target = work if dry else jar_dir
-        if not dry:
-            jar_dir.mkdir(parents=True, exist_ok=True)
-            os.chmod(jar_dir, 0o700)
-            for f in jar_dir.glob("*"):
-                shutil.copy2(f, work / (f.name + ".bak"))
-        def rollback():
-            for f in jar_dir.glob("*"):
-                f.unlink()
-            for b in work.glob("*.bak"):
-                shutil.copy2(b, jar_dir / b.name[:-4])
-
-        try:
-            has_tok = seed_session(target, acct, cookies, jar_dir if jar_dir.exists() else None)
-            build_jar(cookies, target, acct)
-            ok, reason, n = validate(target, acct)
-        except BaseException:
-            if not dry:
-                rollback()
-            raise
-        if not dry and not ok:
-            rollback()
+        has_tok = seed_session(work, acct, cookies, jar_dir if jar_dir.exists() else None)
+        build_jar(cookies, work, acct)
+        ok, reason, n = validate(work, acct)
+        if ok and not dry:
+            for f in work.iterdir():
+                os.replace(f, jar_dir / f.name)
         names = sorted({c["name"] for c in cookies})
         print(json.dumps({
             "ok": ok, "kind": None if ok else "auth", "msg": None if ok else reason,

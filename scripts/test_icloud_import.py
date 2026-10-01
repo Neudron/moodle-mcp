@@ -1,5 +1,5 @@
 """Run: uv run scripts/test_icloud_import.py (pyicloud needed for the jar class)."""
-import importlib.util, io, json, os, sqlite3, sys, tempfile, unittest, contextlib
+import importlib.util, io, json, os, sqlite3, subprocess, sys, tempfile, unittest, contextlib
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -58,7 +58,7 @@ class T(unittest.TestCase):
         con = make_profile(self.root / "ff", ROWS, wal_only=True)
         self.env()
         self.assertTrue(list((self.root / "ff/p.default").glob("*.sqlite-wal")))
-        cookies = imp.read_cookies(imp.find_profile())
+        cookies = imp.load_cookies()
         con.close()
         self.assertEqual({c["name"] for c in cookies}, {"X-APPLE-WEBAUTH-TOKEN", "X-APPLE-DS-WEB-SESSION-TOKEN"})
         self.assertEqual(imp.token_expiry(cookies), 1_900_000_000)  # ms -> s
@@ -87,6 +87,35 @@ class T(unittest.TestCase):
         self.assertTrue((state / "reminders-auth-required").exists())
         self.assertEqual(json.loads((jar / "aicloudcom.session").read_text())["session_token"], "OLD")
         self.assertEqual((jar / "aicloudcom.cookiejar").read_text(), "#LWP-Cookies-2.0\n")
+
+    def test_next_profile_when_first_has_no_icloud(self):
+        root = self.root / "ff"
+        make_profile(root, [("o", "x", ".example.com", "/", 1, 1)]).close()
+        p2 = root / "q.other"
+        p2.mkdir()
+        c = sqlite3.connect(p2 / "cookies.sqlite")
+        c.execute("CREATE TABLE moz_cookies(name,value,host,path,expiry,isSecure)")
+        c.executemany("INSERT INTO moz_cookies VALUES(?,?,?,?,?,?)", ROWS)
+        c.commit(); c.close()
+        (root / "profiles.ini").write_text("[P]\nPath=q.other\nDefault=1\n")
+        self.env()
+        self.assertEqual(imp.token_expiry(imp.load_cookies()), 1_900_000_000)
+
+    def test_locked_live_db_does_not_hang(self):
+        prof = self.root / "ff" / "p.default"
+        prof.mkdir(parents=True)
+        (self.root / "ff" / "installs.ini").write_text("[X]\nDefault=p.default\n")
+        live = sqlite3.connect(prof / "cookies.sqlite")
+        live.execute("PRAGMA locking_mode=EXCLUSIVE")
+        live.execute("PRAGMA journal_mode=WAL")
+        live.execute("CREATE TABLE moz_cookies(name,value,host,path,expiry,isSecure)")
+        live.execute("INSERT INTO moz_cookies VALUES(?,?,?,?,?,?)", ROWS[0])
+        live.commit()
+        self.addCleanup(live.close)
+        env = dict(os.environ, FIREFOX_DIR=str(self.root / "ff"))
+        r = subprocess.run([sys.executable, str(HERE / "icloud_import_cookies.py"), "--check"],
+                           env=env, capture_output=True, text=True, timeout=10)  # hang -> TimeoutExpired
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "1900000000"))
 
     def test_no_profile_exit_3(self):
         self.env()
