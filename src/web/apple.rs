@@ -17,6 +17,9 @@ pub struct Summary {
     pub errors: Vec<String>,
     #[serde(skip)]
     pub errs: Vec<AppleErr>,
+    /// Some error came from a calendar (event-*) call.
+    #[serde(skip)]
+    pub cal: bool,
 }
 
 impl Summary {
@@ -32,6 +35,8 @@ impl Summary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     Auth,
+    /// Needs the user (no list, no app password, no account).
+    Config,
     Network,
     Other,
 }
@@ -88,6 +93,7 @@ pub async fn cli(args: &[&str]) -> Result<String, AppleErr> {
     if !out.status.success() {
         let kind = match (v["kind"].as_str(), out.status.code()) {
             (Some("auth"), _) | (None, Some(2)) => Kind::Auth,
+            (Some("config"), _) => Kind::Config,
             (Some("network" | "server"), _) => Kind::Network,
             _ => Kind::Other,
         };
@@ -111,6 +117,10 @@ pub async fn cli(args: &[&str]) -> Result<String, AppleErr> {
 struct Gate {
     blocked: bool,
     tried: bool,
+    /// `list-new` already attempted this pass.
+    listed: bool,
+    /// Calendar needs the user: skip event-* calls for the rest of the pass.
+    cal_down: bool,
 }
 
 /// todo-* call that is skipped (no spawn) once Reminders auth is known dead.
@@ -120,6 +130,13 @@ async fn todo_cli(app: &App, args: &[&str], g: &mut Gate, s: &mut Summary) -> Re
         return Err(());
     }
     let mut r = cli(args).await;
+    // Our list is gone (or never made): create it once and retry.
+    if matches!(&r, Err(e) if e.kind == Kind::Config && e.msg.contains("no existe")) && !g.listed {
+        g.listed = true;
+        if cli(&["list-new", "--name", NAME]).await.is_ok() {
+            r = cli(args).await;
+        }
+    }
     if matches!(&r, Err(e) if e.kind == Kind::Auth) && !g.tried {
         g.tried = true;
         if import(app, IMPORT_GAP).await == Imp::Ok {
@@ -127,7 +144,19 @@ async fn todo_cli(app: &App, args: &[&str], g: &mut Gate, s: &mut Summary) -> Re
         }
     }
     r.map_err(|e| {
-        g.blocked |= e.kind == Kind::Auth;
+        g.blocked |= matches!(e.kind, Kind::Auth | Kind::Config);
+        s.fail(e);
+    })
+}
+
+/// event-* call; a Config failure (missing app password) stops further calendar calls this pass.
+async fn cal_cli(args: &[&str], g: &mut Gate, s: &mut Summary) -> Result<String, ()> {
+    if g.cal_down {
+        return Err(());
+    }
+    cli(args).await.map_err(|e| {
+        g.cal_down |= e.kind == Kind::Config;
+        s.cal = true;
         s.fail(e);
     })
 }
@@ -226,7 +255,9 @@ pub fn status(app: &App) -> serde_json::Value {
     };
     serde_json::json!({
         "reminders": reminders,
-        "calendar": if state == "err" { "error" } else { "ok" },
+        "calendar": if state == "cal" { "error" } else { "ok" },
+        "state": state,
+        "error": kv("apple_error").unwrap_or_default(),
         "last_import_at": num("apple_import_at"),
         "token_expiry": num("apple_token_expiry"),
     })
@@ -262,15 +293,19 @@ fn record(app: &App, s: &Summary) {
     for e in &s.errs {
         let kind = match e.kind {
             Kind::Auth => "apple-auth",
+            Kind::Config => "apple-config",
             Kind::Network => "apple-net",
             Kind::Other => "apple",
         };
         app.db.log_error("apple", kind, &e.msg).ok();
     }
-    let state = match s.errs.first().map(|e| e.kind) {
-        None => "ok",
-        Some(_) if s.auth() => "auth",
-        Some(_) => "err",
+    let has = |k| s.errs.iter().any(|e| e.kind == k);
+    let state = match () {
+        _ if s.errs.is_empty() => "ok",
+        _ if s.auth() => "auth",
+        _ if has(Kind::Config) => "config",
+        _ if s.cal => "cal",
+        _ => "err",
     };
     let at = now().to_string();
     if app.db.kv_get("apple_state").ok().flatten().as_deref() != Some(state) {
@@ -290,6 +325,8 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
     let mut g = Gate {
         blocked: marker(),
         tried: false,
+        listed: false,
+        cal_down: false,
     };
     if g.blocked {
         g.tried = true;
@@ -312,9 +349,9 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
         }
         let mut ok = true;
         if !ev.is_empty() {
-            match cli(&["event-delete", "--calendar", NAME, ev]).await {
+            match cal_cli(&["event-delete", "--calendar", NAME, ev], &mut g, s).await {
                 Ok(_) => s.deleted += 1,
-                Err(e) => (ok, _) = (false, s.fail(e)),
+                Err(_) => ok = false,
             }
         }
         if !todo.is_empty() {
@@ -375,7 +412,7 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
             if had_ev {
                 a.extend(["--uid", &ev]);
             }
-            match cli(&a).await {
+            match cal_cli(&a, &mut g, s).await {
                 Ok(u) if !u.is_empty() => {
                     ev = u;
                     if had_ev {
@@ -386,9 +423,10 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
                 }
                 Ok(_) => {
                     ok = false;
+                    s.cal = true;
                     s.fail(AppleErr::new(Kind::Other, "event-new: no uid"));
                 }
-                Err(e) => (ok, _) = (false, s.fail(e)),
+                Err(_) => ok = false,
             }
             // Reminders have no update call: retire the old one, create a new one.
             if !todo.is_empty() {

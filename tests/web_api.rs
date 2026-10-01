@@ -674,6 +674,10 @@ async fn auth_status_states_and_renew_rate_limit() {
         (Some("auth"), Some("x"))
     );
     assert!(v["at"].as_i64().unwrap() > 0);
+    // no Moodle error: last_error falls back to the Apple one
+    app.db.kv_set("last_error", "").unwrap();
+    app.db.kv_set("apple_error", "boom").unwrap();
+    assert_eq!(get("/api/auth/status").await["last_error"], "boom");
     // manual renew: no Firefox session -> no-session; immediate repeat -> 429
     let ff = root.join("ff");
     std::fs::create_dir_all(&ff).unwrap();

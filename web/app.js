@@ -645,7 +645,8 @@ function filterPalette(items, q) {
 function authBannerText(a) {
   const m = [];
   if (a && a.moodle && a.moodle !== 'ok') m.push('Moodle: sessió caducada. Obre Moodle a Firefox i prem Renova');
-  if (a && (a.apple === 'auth' || a.apple === 'err')) m.push("Recordatoris: sessió d'iCloud caducada");
+  const ap = { auth: "Recordatoris: sessió d'iCloud caducada", config: "iCloud: falta configuració. Executa «icloud-glass setup»", cal: 'Calendari: error en sincronitzar amb iCloud', err: 'Recordatoris: error en sincronitzar amb iCloud' }[a && a.apple];
+  if (ap) m.push(a.apple_error && a.apple !== 'auth' ? `${ap} (${a.apple_error})` : ap);
   return m.join(' · ');
 }
 // auth-helpers-end

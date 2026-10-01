@@ -597,7 +597,11 @@ async fn auth_status(State(app): S) -> R<Json<Value>> {
     Ok(Json(json!({
         "moodle": kv("auth_state").unwrap_or_else(|| "ok".into()),
         "apple": kv("apple_state").unwrap_or_else(|| "ok".into()),
-        "last_error": kv("last_error").unwrap_or_default(),
+        "apple_error": kv("apple_error").unwrap_or_default(),
+        "last_error": kv("last_error")
+            .filter(|e| !e.is_empty())
+            .or_else(|| kv("apple_error"))
+            .unwrap_or_default(),
         "at": n,
     })))
 }

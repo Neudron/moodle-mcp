@@ -24,7 +24,7 @@ impl Fake {
         std::fs::write(
             &sh,
             format!(
-                "#!/bin/sh\necho \"$@\" >> {d}/log\nif [ -f {d}/fail_$1 ]; then\n case \"$(cat {d}/fail_$1)\" in\n auth) echo '{{\"error\":\"x\",\"kind\":\"auth\"}}'; exit 2;;\n *) echo oops >&2; exit 1;;\n esac\nfi\necho '{{\"uid\":\"U-'$1'\"}}'\n"
+                "#!/bin/sh\necho \"$@\" >> {d}/log\n[ \"$1\" = list-new ] && rm -f {d}/fail_todo-new\nif [ -f {d}/fail_$1 ]; then\n case \"$(cat {d}/fail_$1)\" in\n auth) echo '{{\"error\":\"x\",\"kind\":\"auth\"}}'; exit 2;;\n nolist) echo '{{\"error\":\"La lista no existe.\",\"kind\":\"config\"}}'; exit 1;;\n config) echo '{{\"error\":\"falta\",\"kind\":\"config\"}}'; exit 1;;\n *) echo oops >&2; exit 1;;\n esac\nfi\necho '{{\"uid\":\"U-'$1'\"}}'\n"
             ),
         )
         .unwrap();
@@ -349,4 +349,42 @@ fn proactive_decision() {
     assert!(!apple::needs_refresh(now + 86400 * 8, now));
     assert!(!apple::needs_refresh(0, now), "unknown expiry: leave alone");
     assert!(apple::needs_refresh(now - 5, now), "already expired");
+}
+
+#[tokio::test]
+async fn missing_list_is_created_once_then_retried() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("nolist");
+    f.fail("todo-new", "nolist");
+    let app = f.app();
+    let due = web::now() + 86400 * 5;
+    app.db
+        .upsert_tasks(&[task_n(1, due), task_n(2, due)])
+        .unwrap();
+    let r = apple::sync(&app).await;
+    assert_eq!((f.calls("list-new"), f.calls("todo-new")), (1, 3));
+    assert!(r.errors.is_empty());
+    assert_eq!(app.db.kv_get("apple_state").unwrap().unwrap(), "ok");
+}
+
+#[tokio::test]
+async fn calendar_config_error_stops_calendar_and_is_reported() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("calcfg");
+    f.fail("event-new", "config");
+    let app = f.app();
+    let due = web::now() + 86400 * 5;
+    app.db
+        .upsert_tasks(&[task_n(1, due), task_n(2, due), task_n(3, due)])
+        .unwrap();
+    let r = apple::sync(&app).await;
+    assert_eq!(f.calls("event-new"), 1, "no noisy retries");
+    assert_eq!(r.errors, vec!["falta".to_string()]);
+    assert_eq!(app.db.kv_get("apple_state").unwrap().unwrap(), "config");
+    assert_eq!(app.db.kv_get("apple_error").unwrap().unwrap(), "falta");
+    // other calendar failure: state "cal", status says calendar error.
+    f.fail("event-new", "other");
+    apple::sync(&app).await;
+    assert_eq!(app.db.kv_get("apple_state").unwrap().unwrap(), "cal");
+    assert_eq!(apple::status(&app)["calendar"], "error");
 }
