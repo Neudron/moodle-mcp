@@ -59,6 +59,7 @@ struct Shared {
     warn_fn: Option<&'static str>,
     status: Option<&'static str>,
     files_down: Arc<AtomicBool>,
+    insert_first: Arc<AtomicBool>,
 }
 
 pub struct MockMoodle {
@@ -82,6 +83,7 @@ pub struct MockMoodle {
     #[allow(dead_code)]
     hits: Arc<AtomicUsize>,
     files_down: Arc<AtomicBool>,
+    insert_first: Arc<AtomicBool>,
 }
 
 impl MockMoodle {
@@ -92,6 +94,7 @@ impl MockMoodle {
         let base = format!("http://{}", listener.local_addr().expect("mock addr"));
         let (site_info, courses, contents, files) = fixtures(&base);
         let files_down = Arc::new(AtomicBool::new(false));
+        let insert_first = Arc::new(AtomicBool::new(false));
         let shared = Arc::new(Shared {
             site_info: site_info.clone(),
             courses: courses.clone(),
@@ -104,6 +107,7 @@ impl MockMoodle {
             warn_fn: config.warn_fn,
             status: config.status,
             files_down: Arc::clone(&files_down),
+            insert_first: Arc::clone(&insert_first),
         });
         let hits = Arc::new(AtomicUsize::new(0));
         let hits_accept = Arc::clone(&hits);
@@ -129,7 +133,15 @@ impl MockMoodle {
             files,
             hits,
             files_down,
+            insert_first,
         }
+    }
+
+    /// While true, `core_course_get_contents` lists a new description-only
+    /// module before the existing ones in section 1.
+    #[allow(dead_code)]
+    pub fn set_insert_first(&self, on: bool) {
+        self.insert_first.store(on, Ordering::SeqCst);
     }
 
     /// While true, every pluginfile download answers HTTP 500.
@@ -454,7 +466,17 @@ fn route(
                 serde_json::to_vec(&shared.courses).unwrap_or_default()
             }
             Some("core_course_get_contents") => {
-                serde_json::to_vec(&shared.contents).unwrap_or_default()
+                let mut c = shared.contents.clone();
+                if shared.insert_first.load(Ordering::SeqCst) {
+                    if let Some(m) = c[1]["modules"].as_array_mut() {
+                        m.insert(
+                            0,
+                            serde_json::json!({"id": 9999, "name": "Inserted", "modname": "label",
+                                "description": "<p>new</p>"}),
+                        );
+                    }
+                }
+                serde_json::to_vec(&c).unwrap_or_default()
             }
             Some(other) if shared.warn_fn == Some(other) => serde_json::to_vec(&serde_json::json!(
                 [{"item": "x", "itemid": 7, "warningcode": "couldnotsavesubmission", "message": "duedatereached"}]

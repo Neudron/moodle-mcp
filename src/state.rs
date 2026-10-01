@@ -149,6 +149,9 @@ pub struct CourseState {
     pub files: BTreeMap<String, FileEntry>,
     #[serde(default)]
     pub fullname: String,
+    /// Module id -> folder name; keeps folders stable when modules shift.
+    #[serde(default)]
+    pub modules: BTreeMap<String, String>,
     #[serde(default)]
     pub sections: BTreeMap<String, String>,
     #[serde(default)]
@@ -752,6 +755,7 @@ mod tests {
                     fullname: "C".to_string(),
                     shortname: "C".to_string(),
                     synced_at: "1700000000".to_string(),
+                    modules: BTreeMap::new(),
                     sections: BTreeMap::new(),
                     files: BTreeMap::from([(
                         "u".to_string(),
@@ -785,6 +789,7 @@ mod tests {
                 fullname: "C".to_string(),
                 shortname: "C".to_string(),
                 synced_at: "2023-11-14T22:13:20Z".to_string(),
+                modules: BTreeMap::new(),
                 sections: BTreeMap::new(),
                 files: BTreeMap::from([
                     (
@@ -852,6 +857,7 @@ mod tests {
                 fullname: String::new(),
                 shortname: String::new(),
                 synced_at: "1700000000".to_string(),
+                modules: BTreeMap::new(),
                 sections: BTreeMap::new(),
                 files: BTreeMap::from([(
                     "u".to_string(),

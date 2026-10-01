@@ -86,6 +86,8 @@ fn layout_sections(
     contents: &[CourseSection],
     course_dir: &Path,
     keep_empty: bool,
+    known: &BTreeMap<String, String>,
+    files: &BTreeMap<String, crate::state::FileEntry>,
 ) -> Vec<SectionLayout> {
     let mut sections = Vec::new();
     for (si, section) in contents.iter().enumerate() {
@@ -117,24 +119,20 @@ fn layout_sections(
         }
         let sec_dir = course_dir.join(ra::sanitize(&sec_folder));
         let summary_md = html_to_md(&section.summary);
-        let mut taken: Vec<String> = Vec::new();
+        let folders = planner::assign_module_folders(section, known, files, |m| {
+            planner::module_kept(m, keep_empty)
+        });
         let mut modules = Vec::new();
-        for (mi, module) in section.modules.iter().enumerate() {
-            let has_files = module
-                .contents
-                .as_ref()
-                .map(|c| !c.is_empty())
-                .unwrap_or(false);
+        for (module, mod_folder) in section.modules.iter().zip(folders) {
+            let Some(mod_folder) = mod_folder else {
+                continue;
+            };
             let has_desc = !module
                 .description
                 .as_deref()
                 .unwrap_or("")
                 .trim()
                 .is_empty();
-            if !has_files && !has_desc && !keep_empty {
-                continue;
-            }
-            let mod_folder = planner::module_folder(mi, &module.name, &mut taken);
             modules.push(ModuleLayout {
                 id: module.id,
                 name: module.name.clone(),
@@ -273,10 +271,19 @@ pub async fn sync_course_with_options(
         return Ok(report);
     }
 
-    let layout = layout_sections(&contents, &course_dir, filters.keep_empty);
+    let layout = layout_sections(
+        &contents,
+        &course_dir,
+        filters.keep_empty,
+        &cs.modules,
+        &cs.files,
+    );
     for section in &layout {
         cs.sections
             .insert(section.id.to_string(), section.folder.clone());
+        for m in &section.modules {
+            cs.modules.insert(m.id.to_string(), m.folder.clone());
+        }
     }
     ensure_layout(&layout, 20).await?;
     write_readmes(&layout).await?;
@@ -443,7 +450,7 @@ mod tests {
                          "description": "<p>Delivers in RA3</p>"}]
         }]))
         .unwrap();
-        let layout = layout_sections(&contents, &dir, false);
+        let layout = layout_sections(&contents, &dir, false, &BTreeMap::new(), &BTreeMap::new());
         ensure_layout(&layout, 20).await.unwrap();
         write_readmes(&layout).await.unwrap();
         let readme = dir.join("RA03/001-Task/README.md");

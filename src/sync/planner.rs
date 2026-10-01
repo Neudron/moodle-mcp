@@ -179,6 +179,53 @@ pub fn module_folder(index: usize, name: &str, taken: &mut Vec<String>) -> Strin
     candidate
 }
 
+/// Shared keep rule for planner and layout: files, a description, or `keep_empty`.
+#[must_use]
+pub fn module_kept(m: &crate::moodle::CourseModule, keep_empty: bool) -> bool {
+    keep_empty
+        || m.contents.as_ref().is_some_and(|c| !c.is_empty())
+        || !m.description.as_deref().unwrap_or("").trim().is_empty()
+}
+
+/// Module folders for one section, `None` for modules not kept. Known ids
+/// (state, else the module component of an already-downloaded file's path)
+/// keep their folder; the rest get `module_folder`.
+/// ponytail: a teacher rename does not move the folder; add a rename pass if wanted.
+#[must_use]
+pub fn assign_module_folders(
+    section: &CourseSection,
+    known: &BTreeMap<String, String>,
+    files: &BTreeMap<String, crate::state::FileEntry>,
+    keep: impl Fn(&crate::moodle::CourseModule) -> bool,
+) -> Vec<Option<String>> {
+    let mut taken: Vec<String> = Vec::new();
+    let mut out: Vec<Option<String>> = vec![None; section.modules.len()];
+    let mut todo = Vec::new();
+    for (mi, m) in section.modules.iter().enumerate() {
+        if !keep(m) {
+            continue;
+        }
+        let seeded = known.get(&m.id.to_string()).cloned().or_else(|| {
+            m.contents.iter().flatten().find_map(|f| {
+                let p = &files.get(f.fileurl.as_deref()?)?.path;
+                let mut it = p.split('/');
+                (it.clone().count() >= 4).then(|| it.nth(2).map(str::to_string))?
+            })
+        });
+        match seeded {
+            Some(f) if !taken.contains(&f) => {
+                taken.push(f.clone());
+                out[mi] = Some(f);
+            }
+            _ => todo.push(mi),
+        }
+    }
+    for mi in todo {
+        out[mi] = Some(module_folder(mi, &section.modules[mi].name, &mut taken));
+    }
+    out
+}
+
 fn sha8_hex(input: &str) -> String {
     use sha2::Digest as _;
     let digest = sha2::Sha256::digest(input.as_bytes());
@@ -407,20 +454,14 @@ pub fn plan(
         if !has_content {
             continue;
         }
-        let mut taken: Vec<String> = Vec::new();
-        for (mi, module) in section.modules.iter().enumerate() {
-            let files = module.contents.clone().unwrap_or_default();
-            let has_files = !files.is_empty();
-            let has_desc = !module
-                .description
-                .as_deref()
-                .unwrap_or("")
-                .trim()
-                .is_empty();
-            if !has_files && !has_desc {
+        let folders = assign_module_folders(section, &state.modules, &state.files, |m| {
+            module_kept(m, filters.keep_empty)
+        });
+        for (module, mod_folder) in section.modules.iter().zip(folders) {
+            let Some(mod_folder) = mod_folder else {
                 continue;
-            }
-            let mod_folder = module_folder(mi, &module.name, &mut taken);
+            };
+            let files = module.contents.clone().unwrap_or_default();
             let dir_key = format!("{sec_folder}/{mod_folder}");
             for f in &files {
                 let Some(url) = f.fileurl.clone() else {
@@ -729,7 +770,7 @@ mod tests {
         files.insert(
             "http://h.invalid/webservice/pluginfile.php/1/a.pdf".to_string(),
             FileEntry {
-                path: "C/RA01/001-old/a.pdf".to_string(),
+                path: "C/RA02/001-old/a.pdf".to_string(),
                 sha256: "abc".to_string(),
                 size: 100,
                 ..Default::default()

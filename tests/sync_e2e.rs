@@ -405,3 +405,45 @@ async fn e2e_failed_download_keeps_tracked_url() {
     assert_eq!(r.files_new, 1, "errors: {:?}", r.errors);
     assert!(dest.is_file(), "restored at original path, no -2 suffix");
 }
+
+#[tokio::test]
+async fn e2e_inserted_module_keeps_folders() {
+    let (m, c, courses, root) = setup().await;
+    let course = course_of(&courses);
+    let mut state = State::default();
+    sync_course(&c, &mut state, course, &root)
+        .await
+        .expect("seed");
+    let dirs = |p: &str| -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(std::path::Path::new(&root).join(p))
+            .expect("dir")
+            .map(|e| e.expect("e").file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    let before = dirs("MOCK101/RA01");
+    let paths: Vec<String> = state.courses["101"]
+        .files
+        .values()
+        .map(|f| f.path.clone())
+        .collect();
+
+    m.set_insert_first(true);
+    let r = sync_course(&c, &mut state, course, &root)
+        .await
+        .expect("resync");
+    assert_eq!(r.files_new, 0, "errors: {:?}", r.errors);
+    assert!(r.errors.is_empty());
+    let after = dirs("MOCK101/RA01");
+    assert_eq!(after.len(), before.len() + 1, "{after:?}");
+    for d in &before {
+        assert!(after.contains(d), "folder {d} lost: {after:?}");
+    }
+    let now: Vec<String> = state.courses["101"]
+        .files
+        .values()
+        .map(|f| f.path.clone())
+        .collect();
+    assert_eq!(paths, now, "no moves, no -2 files");
+}
