@@ -1159,7 +1159,7 @@ views.ide = async (...parts) => {
     h('div', { class: 'v-idesplit' + (live ? ' live' : '') }, box, frame));
   wrap.addEventListener('mounted', async () => {
     let m = null;
-    try { if (lang === 'markdown') await loadJs(MARKED); /* before Monaco's AMD loader, or marked registers as an AMD module */ await loadMonaco(); m = window.monaco; }
+    try { if (lang === 'markdown') { const d = window.define; window.define = undefined; try { await loadJs(MARKED); } finally { window.define = d; } } await loadMonaco(); m = window.monaco; }
     catch (e) { /* CDN down: plain textarea below keeps the file editable */ }
     if (!wrap.isConnected) return;
     let onchange = () => {};
