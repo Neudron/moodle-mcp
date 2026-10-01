@@ -502,7 +502,7 @@ h2.grp{font-size:16px;color:var(--text)}
 .pal li{border:0}
 .pal li[aria-selected="true"]{background:color-mix(in oklab,var(--accent) 14%,var(--raised));box-shadow:inset 3px 0 0 var(--accent)}
 .v-editbar{height:56px;border-bottom:1px solid var(--line)}
-.v-tasca .meta .cn{max-width:44ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.v-tasca .meta .cn{max-width:100%;white-space:normal}
 .v-pane>.field-row,.v-item .field-row{flex-direction:row}
 
 /* round 2: calmer, Notion-like */
