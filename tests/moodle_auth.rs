@@ -145,21 +145,34 @@ fn session_json(host: &str, name: &str) -> Vec<u8> {
 fn session_cookie_picks_moodle_host() {
     let j = session_json(".educaciodigital.cat", "MoodleSessioniespalamos");
     assert_eq!(
-        moodle_session_cookie(&j).unwrap(),
+        moodle_session_cookie(&j, None).unwrap(),
         ("MoodleSessioniespalamos".into(), COOKIE.into())
     );
     let top =
         br#"{"cookies":[{"host":"educaciodigital.cat","name":"MoodleSessionA","value":"v"}]}"#;
-    assert_eq!(moodle_session_cookie(top).unwrap().1, "v");
+    assert_eq!(moodle_session_cookie(top, None).unwrap().1, "v");
+}
+
+#[test]
+fn session_cookie_host_and_path_strict() {
+    let j = br#"{"cookies":[
+      {"host":"evileducaciodigital.cat","name":"MoodleSessionE","value":"evil"},
+      {"host":"a.educaciodigital.cat","path":"/","name":"MoodleSessionR","value":"root"},
+      {"host":"a.educaciodigital.cat","path":"/m","name":"MoodleSessionM","value":"m"},
+      {"host":"a.educaciodigital.cat","path":"/mx","name":"MoodleSessionX","value":"mx"}]}"#;
+    assert_eq!(moodle_session_cookie(j, Some("/m/x")).unwrap().1, "m");
+    assert_eq!(moodle_session_cookie(j, Some("")).unwrap().1, "root");
+    let e = br#"{"cookies":[{"host":"evileducaciodigital.cat","name":"MoodleSessionE","value":"evil"}]}"#;
+    assert_eq!(moodle_session_cookie(e, None), Err(FfError::NoSession));
 }
 
 #[test]
 fn session_cookie_missing_is_nosession_without_value() {
     let j = session_json("other.org", "MoodleSessionz");
-    assert_eq!(moodle_session_cookie(&j), Err(FfError::NoSession));
+    assert_eq!(moodle_session_cookie(&j, None), Err(FfError::NoSession));
     let j = session_json(".educaciodigital.cat", "OtherCookie");
-    assert_eq!(moodle_session_cookie(&j), Err(FfError::NoSession));
-    let e = moodle_session_cookie(b"not json").unwrap_err();
+    assert_eq!(moodle_session_cookie(&j, None), Err(FfError::NoSession));
+    let e = moodle_session_cookie(b"not json", None).unwrap_err();
     assert!(!e.to_string().contains("not json"));
 }
 
@@ -192,7 +205,7 @@ fn profile_discovery_and_missing_file() {
         .unwrap()
         .ends_with("Profiles/x.default"));
     assert_eq!(
-        moodle_mcp::firefox::session_cookie(&root),
+        moodle_mcp::firefox::session_cookie(&root, None),
         Err(FfError::NoSession)
     );
 }

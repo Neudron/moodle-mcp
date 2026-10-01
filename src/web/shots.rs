@@ -370,7 +370,7 @@ async fn make_shot(State(app): State<Arc<App>>, AxPath(id): AxPath<String>) -> R
     }
     const HINT: &str =
         "Firefox no té sessió de Moodle: inicia sessió a Moodle al Firefox i torna-ho a provar";
-    if crate::firefox::session_cookie(&crate::firefox::root()).is_err() {
+    if crate::firefox::session_cookie(&crate::firefox::root(), None).is_err() {
         return Err(ApiErr(StatusCode::CONFLICT, HINT.into()));
     }
     let cmd = std::env::var("SHOT_CMD").unwrap_or_else(|_| DEFAULT_CMD.into());

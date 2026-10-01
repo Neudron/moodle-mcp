@@ -110,25 +110,40 @@ pub fn mozlz4_decode(data: &[u8]) -> Result<Vec<u8>, FfError> {
     lz4_block(&data[12..], size)
 }
 
-/// First `MoodleSession*` cookie (name, value) for the Moodle host.
-pub fn moodle_session_cookie(session_json: &[u8]) -> Result<(String, String), FfError> {
+/// Best `MoodleSession*` cookie (name, value) for the Moodle host: host must
+/// be the domain or a subdomain; with `base_path`, the cookie path must be a
+/// `/`-boundary prefix of it, and the longest such path wins.
+pub fn moodle_session_cookie(
+    session_json: &[u8],
+    base_path: Option<&str>,
+) -> Result<(String, String), FfError> {
     let v: serde_json::Value =
         serde_json::from_slice(session_json).map_err(|_| FfError::Bad("json"))?;
     let mut lists: Vec<&serde_json::Value> = vec![&v["cookies"]];
     if let Some(ws) = v["windows"].as_array() {
         lists.extend(ws.iter().map(|w| &w["cookies"]));
     }
+    let mut best: Option<(usize, String, String)> = None;
     for c in lists.iter().filter_map(|l| l.as_array()).flatten() {
-        let host = c["host"].as_str().unwrap_or("");
+        let host = c["host"].as_str().unwrap_or("").trim_start_matches('.');
         let name = c["name"].as_str().unwrap_or("");
-        let host_ok = host.trim_start_matches('.').ends_with(MOODLE_HOST);
-        if host_ok && name.starts_with("MoodleSession") {
-            if let Some(val) = c["value"].as_str().filter(|s| !s.is_empty()) {
-                return Ok((name.to_string(), val.to_string()));
-            }
+        let host_ok = host == MOODLE_HOST || host.ends_with(&format!(".{MOODLE_HOST}"));
+        let cp = c["path"].as_str().unwrap_or("/");
+        let cp_t = cp.trim_end_matches('/');
+        let path_ok = base_path
+            .is_none_or(|b| b == cp_t || b.strip_prefix(cp_t).is_some_and(|r| r.starts_with('/')));
+        let Some(val) = c["value"].as_str().filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if host_ok
+            && path_ok
+            && name.starts_with("MoodleSession")
+            && best.as_ref().is_none_or(|b| cp.len() > b.0)
+        {
+            best = Some((cp.len(), name.to_string(), val.to_string()));
         }
     }
-    Err(FfError::NoSession)
+    best.map(|(_, n, v)| (n, v)).ok_or(FfError::NoSession)
 }
 
 /// Default profile dir from `<root>/installs.ini` (`Default=` of the first
@@ -156,8 +171,8 @@ pub fn root() -> PathBuf {
 }
 
 /// Moodle session cookie of the default profile under `root`.
-pub fn session_cookie(root: &Path) -> Result<(String, String), FfError> {
+pub fn session_cookie(root: &Path, base_path: Option<&str>) -> Result<(String, String), FfError> {
     let file = default_profile(root)?.join("sessionstore-backups/recovery.jsonlz4");
     let blob = std::fs::read(file).map_err(|_| FfError::NoSession)?;
-    moodle_session_cookie(&mozlz4_decode(&blob)?)
+    moodle_session_cookie(&mozlz4_decode(&blob)?, base_path)
 }

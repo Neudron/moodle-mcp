@@ -1338,7 +1338,7 @@ async fn run_job(app: Arc<App>, job: i64, _g: Running) {
         rescore(&app).await;
     }
     if env::get("SCAN_SHOTS").as_deref() != Some("0")
-        && crate::firefox::session_cookie(&crate::firefox::root()).is_ok()
+        && crate::firefox::session_cookie(&crate::firefox::root(), None).is_ok()
     {
         let cmd = env::get("SHOT_CMD").unwrap_or_else(|| shots::DEFAULT_CMD.into());
         for t in app.db.all_tasks().unwrap_or_default() {

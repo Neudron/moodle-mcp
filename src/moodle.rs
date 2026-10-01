@@ -883,14 +883,14 @@ impl Moodle {
     }
 }
 
-/// Lowercased `host[:port]` authority of an http(s) URL, if parseable.
+/// Lowercased `scheme://host[:port]` origin of an http(s) URL, if parseable.
 fn authority_of(url: &str) -> Option<String> {
     let rest = url.split("://").nth(1)?;
     let auth = rest.split('/').next()?;
     if auth.is_empty() {
         None
     } else {
-        Some(auth.to_ascii_lowercase())
+        Some(format!("{}://{}", url.split("://").next()?, auth).to_ascii_lowercase())
     }
 }
 
@@ -1128,7 +1128,11 @@ impl Moodle {
     }
 
     pub async fn refresh_token_at(&self, firefox_root: &Path, token_file: &Path) -> Renew {
-        let (name, value) = match crate::firefox::session_cookie(firefox_root) {
+        let base_path = self
+            .base
+            .split_once("://")
+            .map_or("", |(_, r)| r.find('/').map_or("", |i| &r[i..]));
+        let (name, value) = match crate::firefox::session_cookie(firefox_root, Some(base_path)) {
             Ok(c) => c,
             Err(crate::firefox::FfError::NoSession) => return Renew::NoSession,
             Err(e) => return Renew::Failed(e.to_string()),
@@ -1205,15 +1209,15 @@ mod tests {
     fn net_authority_parsing() {
         assert_eq!(
             authority_of("http://127.0.0.1:8080/a/b?x=1").as_deref(),
-            Some("127.0.0.1:8080")
+            Some("http://127.0.0.1:8080")
         );
         assert_eq!(
             authority_of("https://Example.INVALID/x").as_deref(),
-            Some("example.invalid")
+            Some("https://example.invalid")
         );
         assert_eq!(
             authority_of("ftp://x.invalid/f"),
-            Some("x.invalid".to_string())
+            Some("ftp://x.invalid".to_string())
         );
         assert_eq!(authority_of("not a url"), None);
         assert_eq!(authority_of("http:///path"), None);
@@ -1221,13 +1225,15 @@ mod tests {
 
     #[test]
     fn net_authed_url_strips_token_cross_host() {
-        let same = authed_url("http://h.invalid/f/x.pdf", "TOK", "h.invalid");
+        let same = authed_url("http://h.invalid/f/x.pdf", "TOK", "http://h.invalid");
         assert_eq!(same, "http://h.invalid/f/x.pdf?token=TOK");
-        let same_q = authed_url("http://h.invalid/f?sig=1", "TOK", "h.invalid");
+        let same_q = authed_url("http://h.invalid/f?sig=1", "TOK", "http://h.invalid");
         assert_eq!(same_q, "http://h.invalid/f?sig=1&token=TOK");
-        let cross = authed_url("https://cdn.invalid/f/x.pdf", "TOK", "h.invalid");
+        let cross = authed_url("https://cdn.invalid/f/x.pdf", "TOK", "http://h.invalid");
         assert_eq!(cross, "https://cdn.invalid/f/x.pdf");
         assert!(!cross.contains("TOK"));
+        let down = authed_url("http://h.invalid/f", "TOK", "https://h.invalid");
+        assert!(!down.contains("TOK"));
     }
 
     #[test]
