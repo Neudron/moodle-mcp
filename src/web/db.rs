@@ -442,21 +442,54 @@ impl Db {
         Ok(())
     }
 
+    /// New job; marks stale running jobs interrupted and keeps items of the last 5 jobs only.
     pub fn scan_new_job(&self, now: i64) -> Result<i64> {
-        let c = self.c();
-        c.execute(
+        let mut c = self.c();
+        let tx = c.transaction()?;
+        tx.execute(
+            "UPDATE scan_job SET state='interrupted' WHERE state='running'",
+            [],
+        )?;
+        tx.execute(
             "INSERT INTO scan_job(started,state) VALUES(?1,'running')",
             [now],
         )?;
-        Ok(c.last_insert_rowid())
+        let id = tx.last_insert_rowid();
+        tx.execute(
+            "DELETE FROM scan_item WHERE job NOT IN (SELECT id FROM scan_job ORDER BY id DESC LIMIT 5)",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(id)
+    }
+
+    pub fn scan_add_items<'a>(
+        &self,
+        job: i64,
+        items: impl IntoIterator<Item = (&'a str, &'a str, &'a str)>,
+    ) -> Result<()> {
+        let mut c = self.c();
+        let tx = c.transaction()?;
+        for (src, course, kind) in items {
+            tx.execute(
+                "INSERT OR IGNORE INTO scan_item(job,src,course,kind) VALUES(?1,?2,?3,?4)",
+                params![job, src, course, kind],
+            )?;
+        }
+        Ok(tx.commit()?)
     }
 
     pub fn scan_add_item(&self, job: i64, src: &str, course: &str, kind: &str) -> Result<()> {
-        self.c().execute(
-            "INSERT OR IGNORE INTO scan_item(job,src,course,kind) VALUES(?1,?2,?3,?4)",
-            params![job, src, course, kind],
-        )?;
-        Ok(())
+        self.scan_add_items(job, [(src, course, kind)])
+    }
+
+    /// Unconfirmed AI proposals.
+    pub fn proposed_count(&self) -> Result<i64> {
+        Ok(self.c().query_row(
+            "SELECT COUNT(*) FROM task WHERE json_extract(json,'$.source')='ai' AND json_extract(json,'$.ai_confirmed') IS NULL",
+            [],
+            |r| r.get(0),
+        )?)
     }
 
     pub fn scan_item_done(
@@ -682,5 +715,47 @@ mod tests {
         let j2 = db.scan_new_job(30).unwrap();
         assert!(j2 > j);
         assert_eq!(db.scan_progress().unwrap().unwrap()["job"], j2);
+    }
+
+    #[test]
+    fn scan_new_job_prunes_and_interrupts() {
+        let db = Db::memory().unwrap();
+        let mut js = vec![];
+        for i in 0..7 {
+            let j = db.scan_new_job(i).unwrap();
+            db.scan_add_item(j, "A/x", "A", "file").unwrap();
+            js.push(j);
+        }
+        let n = |j: i64| -> i64 {
+            db.c()
+                .query_row("SELECT COUNT(*) FROM scan_item WHERE job=?1", [j], |r| {
+                    r.get(0)
+                })
+                .unwrap()
+        };
+        assert_eq!((n(js[1]), n(js[2]), n(js[6])), (0, 1, 1));
+        let st: i64 = db
+            .c()
+            .query_row(
+                "SELECT COUNT(*) FROM scan_job WHERE state='running'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(st, 1);
+    }
+
+    #[test]
+    fn proposed_count_sql_matches_filter() {
+        let db = Db::memory().unwrap();
+        let mk = |id: &str, src: &str| Task {
+            id: id.into(),
+            source: src.into(),
+            ..Default::default()
+        };
+        db.upsert_tasks(&[mk("a", "ai"), mk("b", "ai"), mk("c", "moodle")])
+            .unwrap();
+        db.set_ai_confirmed("b", true).unwrap();
+        assert_eq!(db.proposed_count().unwrap(), 1);
     }
 }

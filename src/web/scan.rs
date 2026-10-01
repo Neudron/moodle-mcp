@@ -1352,9 +1352,9 @@ async fn run_job(app: Arc<App>, job: i64, _g: Running) {
     let items = tokio::task::spawn_blocking(move || inventory(Path::new(&a.root), &tasks))
         .await
         .unwrap_or_default();
-    for it in &items {
-        app.db.scan_add_item(job, &it.src, &it.course, it.kind).ok();
-    }
+    app.db
+        .scan_add_items(job, items.iter().map(|i| (&*i.src, &*i.course, i.kind)))
+        .ok();
     let sem = Arc::new(tokio::sync::Semaphore::new(4));
     let mut set = tokio::task::JoinSet::new();
     for it in items {
@@ -1441,12 +1441,7 @@ async fn progress(State(app): State<Arc<App>>) -> R<Json<Value>> {
     if !RUNNING.load(SeqCst) && v["state"] == "running" {
         v["state"] = json!("interrupted"); // server restarted mid-job
     }
-    v["proposed"] = json!(app
-        .db
-        .all_tasks()?
-        .iter()
-        .filter(|t| t.source == "ai" && t.ai_confirmed.is_none())
-        .count());
+    v["proposed"] = json!(app.db.proposed_count()?);
     Ok(Json(v))
 }
 
