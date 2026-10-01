@@ -226,14 +226,16 @@ pub async fn import(app: &App, gap: i64) -> Imp {
         return Imp::Failed;
     };
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+    if !out.status.success() {
+        let m = v["msg"].as_str().unwrap_or("import failed");
+        app.db.kv_set("apple_import_error", m).ok();
+        return Imp::Failed;
+    }
+    app.db.kv_set("apple_import_error", "").ok();
     if let Some(e) = v["token_expiry"].as_i64() {
         app.db.kv_set("apple_token_expiry", &e.to_string()).ok();
     }
-    if out.status.success() {
-        Imp::Ok
-    } else {
-        Imp::Failed
-    }
+    Imp::Ok
 }
 
 /// Cookie expiry under 7 days (or passed): time to re-import.
@@ -272,7 +274,8 @@ pub fn status(app: &App) -> serde_json::Value {
     };
     serde_json::json!({
         "reminders": reminders,
-        "calendar": if state == "cal" { "error" } else { "ok" },
+        "calendar": if kv("apple_cal_err").is_some_and(|e| !e.is_empty()) { "error" } else { "ok" },
+        "import_error": kv("apple_import_error").unwrap_or_default(),
         "state": state,
         "error": kv("apple_error").unwrap_or_default(),
         "last_import_at": num("apple_import_at"),
@@ -332,6 +335,12 @@ fn record(app: &App, s: &Summary) {
     app.db
         .kv_set("apple_error", s.errors.first().map_or("", |m| m))
         .ok();
+    let cal_err = if s.cal {
+        s.errors.first().map_or("", |m| m)
+    } else {
+        ""
+    };
+    app.db.kv_set("apple_cal_err", cal_err).ok();
     app.db.kv_set("apple_at", &at).ok();
 }
 

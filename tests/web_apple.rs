@@ -36,7 +36,7 @@ impl Fake {
         std::fs::write(
             &imp,
             format!(
-                "#!/bin/sh\necho \"$@\" >> {d}/imp_log\nif [ -f {d}/imp_ok ]; then rm -f {d}/state/reminders-auth-required {d}/fail_todo-new; echo '{{\"ok\":true,\"token_expiry\":1793381126}}'; exit 0; fi\necho '{{\"ok\":false,\"kind\":\"auth\",\"msg\":\"stale\"}}'; exit 2\n"
+                "#!/bin/sh\necho \"$@\" >> {d}/imp_log\nif [ -f {d}/imp_ok ]; then rm -f {d}/state/reminders-auth-required {d}/fail_todo-new; echo '{{\"ok\":true,\"token_expiry\":1793381126}}'; exit 0; fi\necho '{{\"ok\":false,\"kind\":\"auth\",\"msg\":\"stale\",\"token_expiry\":5}}'; exit 2\n"
             ),
         )
         .unwrap();
@@ -321,6 +321,8 @@ async fn failed_import_leaves_auth_and_no_retry() {
     assert!(r.auth());
     assert_eq!((f.imports(), f.calls("todo-new")), (1, 1));
     assert_eq!(app.db.kv_get("apple_state").unwrap().unwrap(), "auth");
+    assert_eq!(apple::status(&app)["import_error"], "stale");
+    assert_eq!(apple::status(&app)["token_expiry"], 0);
 }
 
 #[tokio::test]
@@ -387,6 +389,7 @@ async fn calendar_config_error_stops_calendar_and_is_reported() {
     assert_eq!(r.errors, vec!["falta".to_string()]);
     assert_eq!(app.db.kv_get("apple_state").unwrap().unwrap(), "config");
     assert_eq!(app.db.kv_get("apple_error").unwrap().unwrap(), "falta");
+    assert_eq!(apple::status(&app)["calendar"], "error");
     // other calendar failure: state "cal", status says calendar error.
     f.fail("event-new", "other");
     apple::sync(&app).await;
