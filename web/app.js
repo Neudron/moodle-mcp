@@ -148,7 +148,7 @@ function card(tv, hideCourse, quick) {
   // Badges only when they differ from the default 'Sense enviar'.
   const badges = [
     t.moodle_status !== 'new' && h('span', { class: 'badge' + (t.moodle_status === 'submitted' ? ' ok' : '') }, MSTATUS[t.moodle_status] || t.moodle_status),
-    tv.local.status && h('span', { class: 'badge ' + (tv.local.status === 'revisat OK' ? 'ok' : 'warn') }, LSTATUS[tv.local.status] || tv.local.status),
+    tv.local.status && h('span', { class: 'badge ' + (['revisat OK', 'lliurat'].includes(tv.local.status) ? 'ok' : 'warn') }, LSTATUS[tv.local.status] || tv.local.status),
     t.source === 'ai' && aiBadge(),
   ];
   const row = h('a', { class: 'row' + (done ? ' done' : left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
@@ -202,7 +202,7 @@ function scanControl() {
     const run = p.state === 'running', { finished, total } = scanTotals(p);
     go.setAttribute('aria-disabled', String(run)); stop.hidden = !run;
     prog.replaceChildren(...(run ? [bar(finished, total, "Progrés de l'escaneig", '', `${finished} de ${total} fitxers`)]
-      : p.state === 'idle' ? [] : [h('p', { class: 'dim' }, `${{ done: 'Acabat', cancelled: 'Cancel·lat', interrupted: 'Interromput' }[p.state] || p.state}: ${p.proposed || 0} proposades`)]));
+      : p.state === 'idle' || p.state === 'done' ? [] : [h('p', { class: 'dim' }, `${{ done: 'Acabat', cancelled: 'Cancel·lat', interrupted: 'Interromput' }[p.state] || p.state}: ${p.proposed || 0} proposades`)]));
     list.replaceChildren(...(p.items || []).map((i) => h('li', {}, h('b', {}, SL[i.status] || i.status), ` ${i.course} · `, h('span', { class: 'mono' }, i.src), i.error ? ` · ${i.error}` : '')));
     det.hidden = !(p.items || []).length;
   };
@@ -331,7 +331,7 @@ views.tauler = async () => {
   tabs.sel.tauler ??= (() => { try { return localStorage.getItem('tab-tauler'); } catch (e) { return null; } })() || (innerWidth < 600 ? 'agenda' : 'llista');
   const out = h('section', { class: 'v-tauler' },
     h('h1', {}, pending === 0 ? 'Tot al dia' : `Tens ${pending} ${pending === 1 ? 'tasca pendent' : 'tasques pendents'}`),
-    next ? h('a', { class: 'next', href: `#/tasca/${enc(next.task.id)}` },
+    next && !(by.late.length ? by.late : by.today.length ? by.today : by.week.length ? by.week : by.later).includes(next) ? h('a', { class: 'next', href: `#/tasca/${enc(next.task.id)}` },
       h('span', { class: 'lbl' }, 'La propera'), h('span', { class: 'nt' }, next.task.title),
       h('span', { class: 'nm' }, cname(next.task.course), ' · ', when(next.task.due))) : null,
     total ? h('div', { class: 'sub' }, bar(doneN, total, 'Tasques lliurades', '', `${doneN} de ${total} lliurades`)) : null,
@@ -465,7 +465,7 @@ views.tasca = async (id) => {
     extras.flat(Infinity).some(Boolean) ? h('div', { class: 'v-deliver' }, h('h2', { class: 'sr-only' }, 'Entrega'), extras) : null);
 
   const badges = [
-    l.status && h('span', { class: 'badge ' + (l.status === 'revisat OK' ? 'ok' : 'warn') }, LSTATUS[l.status] || l.status),
+    l.status && h('span', { class: 'badge ' + (['revisat OK', 'lliurat'].includes(l.status) ? 'ok' : 'warn') }, LSTATUS[l.status] || l.status),
     t.source === 'ai' && aiBadge()];
 
   const intro = sandboxed(t.body_html, `Enunciat: ${t.title}`);
@@ -1014,7 +1014,7 @@ views.forums = async () => {
   const read = posts.filter((p) => p.local.status === 'llegit');
   const grp = (name, n) => h('h2', { class: 'grp' }, name, h('span', { class: 'n' }, n));
   return h('section', { class: 'v-forums' }, h('h1', {}, 'Fòrums'),
-    unread.length ? [grp('Sense llegir', unread.length), h('div', { class: 'cards' }, unread.map(item))] : empty('Tot llegit', posts.length ? 'No tens cap avís nou.' : 'No hi ha avisos.'),
+    unread.length ? [grp('Sense llegir', unread.length), h('div', { class: 'cards' }, unread.map(item))] : posts.length ? empty('Tot llegit', 'No tens cap avís nou.') : empty('Cap avís', 'Encara no hi ha avisos.'),
     read.length ? [grp('Llegits', read.length), h('div', { class: 'cards' }, read.map(item))] : null);
 };
 
@@ -1147,7 +1147,7 @@ views.ide = async (...parts) => {
     if (!wrap.isConnected) return;
     let onchange = () => {};
     if (m) {
-      ed = m.editor.create(box, { value: f.content, language: lang, theme: curTheme() === 'light' ? 'vs' : 'vs-dark', automaticLayout: true, ariaLabel: 'Editor de codi' });
+      ed = m.editor.create(box, { value: f.content, language: lang, theme: curTheme() === 'light' ? 'vs' : 'vs-dark', minimap: { enabled: false }, wordWrap: 'on', fontSize: 14, scrollBeyondLastLine: false, automaticLayout: true, ariaLabel: 'Editor de codi' });
       ed.addCommand(m.KeyMod.CtrlCmd | m.KeyCode.KeyS, save);
       ed.onDidChangeModelContent(() => onchange());
     } else {
