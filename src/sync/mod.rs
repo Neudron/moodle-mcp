@@ -68,6 +68,7 @@ struct ModuleLayout {
     name: String,
     folder: String,
     dir: PathBuf,
+    readme_md: Option<String>,
 }
 
 struct SectionLayout {
@@ -139,6 +140,8 @@ fn layout_sections(
                 name: module.name.clone(),
                 folder: mod_folder.clone(),
                 dir: sec_dir.join(&mod_folder),
+                readme_md: has_desc
+                    .then(|| html_to_md(module.description.as_deref().unwrap_or(""))),
             });
         }
         sections.push(SectionLayout {
@@ -153,11 +156,7 @@ fn layout_sections(
     sections
 }
 
-async fn ensure_layout(
-    layout: &[SectionLayout],
-    keep_empty: bool,
-    section_threshold: usize,
-) -> Result<()> {
+async fn ensure_layout(layout: &[SectionLayout], section_threshold: usize) -> Result<()> {
     for section in layout {
         tokio::fs::create_dir_all(&section.dir)
             .await
@@ -175,35 +174,17 @@ async fn ensure_layout(
             tokio::fs::create_dir_all(&module.dir)
                 .await
                 .context("creating module dir")?;
-            let _ = keep_empty;
         }
     }
     Ok(())
 }
 
-async fn write_readmes(contents: &[CourseSection], layout: &[SectionLayout]) -> Result<()> {
-    // Map (section folder, module folder) → description via the same walk.
-    let mut descs: HashMap<(String, String), String> = HashMap::new();
-    for (si, section) in contents.iter().enumerate() {
-        let module_texts: Vec<&str> = section.modules.iter().map(|m| m.name.as_str()).collect();
-        let sec_folder = planner::section_folder_name(si, &section.name, &module_texts);
-        let mut taken: Vec<String> = Vec::new();
-        for (mi, module) in section.modules.iter().enumerate() {
-            let mod_folder = planner::module_folder(mi, &module.name, &mut taken);
-            if let Some(desc) = module.description.as_deref() {
-                if !desc.trim().is_empty() {
-                    descs.insert((sec_folder.clone(), mod_folder), html_to_md(desc));
-                }
-            }
-        }
-    }
-    for section in layout {
-        for module in &section.modules {
-            if let Some(md) = descs.get(&(section.folder.clone(), module.folder.clone())) {
-                tokio::fs::write(module.dir.join("README.md"), md.as_bytes())
-                    .await
-                    .context("writing README.md")?;
-            }
+async fn write_readmes(layout: &[SectionLayout]) -> Result<()> {
+    for module in layout.iter().flat_map(|s| &s.modules) {
+        if let Some(md) = &module.readme_md {
+            tokio::fs::write(module.dir.join("README.md"), md.as_bytes())
+                .await
+                .context("writing README.md")?;
         }
     }
     Ok(())
@@ -297,8 +278,8 @@ pub async fn sync_course_with_options(
         cs.sections
             .insert(section.id.to_string(), section.folder.clone());
     }
-    ensure_layout(&layout, filters.keep_empty, 20).await?;
-    write_readmes(&contents, &layout).await?;
+    ensure_layout(&layout, 20).await?;
+    write_readmes(&layout).await?;
 
     let old_files = cs.files.clone();
     let ctx = RunContext {
@@ -312,7 +293,7 @@ pub async fn sync_course_with_options(
     cs.files = new_files.clone();
     state.courses.insert(course.id.to_string(), cs);
 
-    write_index_and_meta(course, &contents, &layout, &plan, &new_files).await?;
+    write_index_and_meta(course, &layout, &plan, &new_files).await?;
     write_course_summary(&course_dir, course).await?;
 
     let receipt = Receipt {
@@ -345,7 +326,6 @@ fn planned_lookup(plan: &Plan) -> HashMap<String, PlannedFile> {
 
 async fn write_index_and_meta(
     course: &Course,
-    contents: &[CourseSection],
     layout: &[SectionLayout],
     plan: &Plan,
     new_files: &BTreeMap<String, crate::state::FileEntry>,
@@ -414,20 +394,6 @@ async fn write_index_and_meta(
         .unwrap_or_else(|| PathBuf::from("."));
     indexer::write_course_index(&course_dir, course, &inline_summary, &rows, &iso_now())?;
 
-    // Module ids for meta.json.
-    let mut module_ids: HashMap<(String, String), (i64, String)> = HashMap::new();
-    for (si, section) in contents.iter().enumerate() {
-        let module_texts: Vec<&str> = section.modules.iter().map(|m| m.name.as_str()).collect();
-        let sec_folder = planner::section_folder_name(si, &section.name, &module_texts);
-        let mut taken: Vec<String> = Vec::new();
-        for (mi, module) in section.modules.iter().enumerate() {
-            let mod_folder = planner::module_folder(mi, &module.name, &mut taken);
-            module_ids.insert(
-                (sec_folder.clone(), mod_folder),
-                (module.id, module.name.clone()),
-            );
-        }
-    }
     for section in layout {
         let mut section_files = 0usize;
         let mut section_bytes = 0u64;
@@ -438,11 +404,7 @@ async fn write_index_and_meta(
             let files = files.unwrap_or(&empty);
             section_files += files.len();
             section_bytes += files.iter().map(|f| f.size.max(0) as u64).sum::<u64>();
-            let (module_id, module_name) = module_ids
-                .get(&key)
-                .cloned()
-                .unwrap_or((module.id, module.name.clone()));
-            indexer::write_module_meta(&module.dir, module_id, &module_name, files)?;
+            indexer::write_module_meta(&module.dir, module.id, &module.name, files)?;
         }
         indexer::write_section_meta(
             &section.dir,
@@ -465,4 +427,28 @@ async fn write_course_summary(course_dir: &Path, course: &Course) -> Result<()> 
             .context("writing summary.md")?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn readme_follows_description_ra() {
+        let dir = std::env::temp_dir().join(format!("smx-t02-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let contents: Vec<CourseSection> = serde_json::from_value(serde_json::json!([{
+            "id": 1, "name": "Unit", "summary": "",
+            "modules": [{"id": 9, "name": "Task", "modname": "assign",
+                         "description": "<p>Delivers in RA3</p>"}]
+        }]))
+        .unwrap();
+        let layout = layout_sections(&contents, &dir, false);
+        ensure_layout(&layout, 20).await.unwrap();
+        write_readmes(&layout).await.unwrap();
+        let readme = dir.join("RA03/001-Task/README.md");
+        let ok = readme.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(ok, "{readme:?}");
+    }
 }
