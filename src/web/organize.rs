@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     io::Write,
     path::{Component, Path, PathBuf},
@@ -183,12 +184,16 @@ async fn deliver(app: &Arc<App>, t: &Task, out: &mut Delivered) -> Result<bool> 
     for a in &t.submission_files {
         let name = safe_name(&a.filename);
         let dst = dir.join(&name);
-        let have = tokio::fs::read(&dst).await.ok();
         // ponytail: same size == same file; a same-size edit is only caught when Moodle omits filesize.
-        if a.filesize > 0 && have.as_ref().is_some_and(|h| h.len() as i64 == a.filesize) {
+        if a.filesize > 0
+            && tokio::fs::metadata(&dst)
+                .await
+                .is_ok_and(|m| m.len() as i64 == a.filesize)
+        {
             delivered.push(name);
             continue;
         }
+        let have = tokio::fs::read(&dst).await.ok();
         let bytes = app.moodle.download(&a.fileurl).await?;
         if have.is_none() && same_in_submit(&app.root, &rel, &bytes) {
             continue; // already delivered under another name
@@ -325,6 +330,10 @@ struct Cx {
     canon: HashMap<String, String>,
     ops: Vec<Op>,
     skipped: Vec<String>,
+    /// Eligible tasks, read once per pass.
+    tasks: Vec<Task>,
+    /// rel path -> sha, dropped when the path moves.
+    hashes: RefCell<HashMap<String, String>>,
 }
 
 impl Cx {
@@ -345,7 +354,23 @@ impl Cx {
             teacher,
             ops: Vec::new(),
             skipped: Vec::new(),
+            tasks: app
+                .db
+                .all_tasks()?
+                .into_iter()
+                .filter(|t| t.kind != "post" && (t.source != "ai" || t.ai_confirmed == Some(true)))
+                .collect(),
+            hashes: RefCell::new(HashMap::new()),
         })
+    }
+
+    fn sha(&self, rel: &str) -> Result<String> {
+        if let Some(h) = self.hashes.borrow().get(rel) {
+            return Ok(h.clone());
+        }
+        let h = sha_file(&self.abs(rel))?;
+        self.hashes.borrow_mut().insert(rel.into(), h.clone());
+        Ok(h)
     }
 
     fn abs(&self, rel: &str) -> PathBuf {
@@ -382,8 +407,19 @@ impl Cx {
         if let Some(d) = b.parent() {
             std::fs::create_dir_all(d)?;
         }
-        std::fs::rename(&a, &b)?;
-        self.log("move", from, to, sha, "")
+        self.log("move", from, to, sha, "")?; // log first: a crash mid-move stays undoable
+        {
+            let mut h = self.hashes.borrow_mut();
+            h.remove(from);
+            h.remove(to);
+        }
+        if let Err(e) = std::fs::rename(&a, &b) {
+            self.ops.pop();
+            let keep: Vec<Op> = read_log(&self.root)?;
+            write_log(&self.root, &keep[..keep.len().saturating_sub(1)])?;
+            return Err(e.into());
+        }
+        Ok(())
     }
 
     fn trash(&mut self, from: &str) -> Result<()> {
@@ -402,7 +438,7 @@ impl Cx {
         }
         let (lf, lt) = (from.starts_with(LLIURAT), to.starts_with(LLIURAT));
         if self.abs(to).exists() {
-            if sha_file(&self.abs(from))? == sha_file(&self.abs(to))? {
+            if self.sha(from)? == self.sha(to)? {
                 // same bytes: the delivered copy is the one that stays
                 let (keep, drop) = if lf && !lt { (from, to) } else { (to, from) };
                 api::repoint(&self.app, drop, keep).map_err(ae)?;
@@ -452,20 +488,13 @@ impl Cx {
     /// shared title words). No evidence or a tie: none.
     fn find_task(&self, rel: &str) -> Result<Option<(Task, Local)>> {
         let name = base(rel);
-        let sha = sha_file(&self.abs(rel)).ok();
+        let sha = self.sha(rel).ok();
         let mut best: Vec<((bool, usize), Task, Local)> = Vec::new();
-        for t in self
-            .app
-            .db
-            .all_tasks()?
-            .into_iter()
-            .filter(|t| t.kind != "post" && (t.source != "ai" || t.ai_confirmed == Some(true)))
-        {
+        for t in self.tasks.iter().cloned() {
             let l = self.app.db.local(&t.id)?;
             let (exact, ov) = affinity(&t, name);
             let linked = l.files.iter().any(|f| {
-                base(f).eq_ignore_ascii_case(name)
-                    || sha.is_some() && sha_file(&self.abs(f)).ok() == sha
+                base(f).eq_ignore_ascii_case(name) || sha.is_some() && self.sha(f).ok() == sha
             });
             let key = (exact || linked, ov);
             if key != (false, 0) {
@@ -513,7 +542,7 @@ impl Cx {
         files::walk(&self.root, "submit/_lliurat", &mut delivered);
         let by_sha: HashMap<String, String> = delivered
             .into_iter()
-            .filter_map(|f| Some((sha_file(&self.abs(&f)).ok()?, f)))
+            .filter_map(|f| Some((self.sha(&f).ok()?, f)))
             .collect();
         let courses: Vec<String> = files::list(&self.root, "")
             .unwrap_or_default()
@@ -535,7 +564,7 @@ impl Cx {
                 if !(in_lliuraments || stem.ends_with("_amin")) || self.protected(&f) {
                     continue;
                 }
-                if let Some(keep) = by_sha.get(&sha_file(&self.abs(&f))?) {
+                if let Some(keep) = by_sha.get(&self.sha(&f)?) {
                     api::repoint(&self.app, &f, keep).map_err(ae)?;
                     self.trash(&f)?;
                     continue;

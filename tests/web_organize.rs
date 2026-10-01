@@ -648,3 +648,26 @@ async fn unconfirmed_ai_task_does_not_claim_loose_file() {
         assert_eq!(r.join(to).exists(), moved, "{confirmed:?}");
     }
 }
+
+#[tokio::test]
+async fn deliver_skips_download_when_size_matches() {
+    let m = MockMoodle::start(MockConfig::default()).await;
+    let r = root("deliver-size");
+    let app = app_at(&r, m.base());
+    let mut t = task("assign:8", "C1", "Entrega B");
+    t.moodle_status = "submitted".into();
+    t.submission_files = vec![attachment(&m, "s1-m0-0.pdf", "0/s1-m0-0.pdf")];
+    let n = t.submission_files[0].filesize as usize;
+    app.db.upsert_tasks(&[t]).unwrap();
+    app.db
+        .set_local(&local("assign:8", "Mod A", "lliurat", &[]))
+        .unwrap();
+    put(
+        &r,
+        "submit/_lliurat/Mod A/Entrega B/s1-m0-0.pdf",
+        &"x".repeat(n),
+    );
+    m.reset_hits();
+    organize_delivered(&app).await;
+    assert_eq!(m.hits(), 0);
+}
