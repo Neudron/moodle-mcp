@@ -23,6 +23,7 @@
   <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
   <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
   <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/></symbol>
   <symbol id="i-warn" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
@@ -38,6 +39,7 @@
   <div class="foot">
     <button id="sync" type="button" class="icon" aria-label="Sincronitza" title="Sincronitza"><svg class="ic" aria-hidden="true"><use href="#i-sync"/></svg></button>
     <button id="keys" class="icon" type="button" aria-label="Dreceres de teclat" title="Dreceres de teclat"><svg class="ic" aria-hidden="true"><use href="#i-keys"/></svg></button>
+    <button id="notif-b" class="icon" type="button" popovertarget="notif" aria-label="Notificacions" title="Notificacions"><svg class="ic" aria-hidden="true"><use href="#i-bell"/></svg><span id="notif-n" class="pill" hidden></span></button>
     <button id="theme" class="icon" type="button" aria-label="Tema fosc" aria-pressed="true"><svg class="ic" aria-hidden="true"><use id="theme-use" href="#i-moon"/></svg></button>
     <small id="lastsync" role="status"></small>
   </div>
@@ -65,7 +67,8 @@
 <div class="col">
   <div class="stack">
     <div id="banner" class="banner" role="alert" hidden></div>
-    <div id="auth-banner" class="banner auth" role="status" hidden><svg class="ic" aria-hidden="true"><use href="#i-warn"/></svg><span id="auth-msg"></span><button id="auth-renew" type="button">Renova</button></div>
+    <div id="auth-banner" class="banner auth" role="status" hidden><svg class="ic" aria-hidden="true"><use href="#i-warn"/></svg><span id="auth-msg"></span><button id="auth-renew" type="button">Renova</button><button id="auth-x" type="button" class="ghost icon" aria-label="Tanca l'avís"><svg class="ic" aria-hidden="true"><use href="#i-x"/></svg></button></div>
+    <div id="notif" popover><h2>Notificacions</h2><ul id="notif-l"></ul></div>
   </div>
   <main id="main" tabindex="-1"></main>
 </div>

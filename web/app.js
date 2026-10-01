@@ -700,13 +700,15 @@ function filterPalette(items, q) {
 }
 // palette-helpers-end
 // auth-helpers-start
-function authBannerText(a) {
-  const m = [];
-  if (a && a.moodle && a.moodle !== 'ok') m.push('Moodle: sessió caducada. Obre Moodle a Firefox i prem Renova');
+function notifItems(a) {
+  const o = [];
+  if (a && a.moodle && a.moodle !== 'ok') o.push({ key: `moodle:${a.moodle}`, text: 'Moodle: sessió caducada. Obre Moodle a Firefox i prem Renova', act: 'Renova' });
   const ap = { auth: "Recordatoris: sessió d'iCloud caducada", config: "iCloud: falta configuració. Executa «icloud-glass setup»", cal: 'Calendari: error en sincronitzar amb iCloud', err: 'Recordatoris: error en sincronitzar amb iCloud' }[a && a.apple];
-  if (ap) m.push(a.apple_error && a.apple !== 'auth' ? `${ap} (${a.apple_error})` : ap);
-  return m.join(' · ');
+  if (ap) o.push({ key: `apple:${a.apple}:${a.apple_since || 0}`, text: a.apple_error && a.apple !== 'auth' ? `${ap} (${a.apple_error})` : ap, act: a.apple === 'auth' || a.apple === 'err' ? 'Torna a importar' : '' });
+  return o;
 }
+const authBannerText = (a) => notifItems(a).map((i) => i.text).join(' · ');
+const visibleBanner = (items, dismissed) => items.filter((i) => !dismissed.has(i.key));
 // auth-helpers-end
 async function refreshStatus() {
   try {
@@ -717,17 +719,39 @@ async function refreshStatus() {
     const b = $('#banner'); b.hidden = !s.error; setText(b, s.error || '');
   } catch (e) { /* server restarting */ }
   try {
-    const t = authBannerText(await api('/api/auth/status')), ab = $('#auth-banner');
-    ab.hidden = !t; setText($('#auth-msg'), t);
+    const items = notifItems(await api('/api/auth/status')), keys = new Set(items.map((i) => i.key));
+    const dis = new Set(dismissed().filter((k) => keys.has(k)));
+    try { localStorage.setItem('notif-dismissed', JSON.stringify([...dis])); } catch (e) { /* private mode */ }
+    const vis = visibleBanner(items, dis), ab = $('#auth-banner');
+    ab.hidden = !vis.length; setText($('#auth-msg'), vis.map((i) => i.text).join(' · '));
+    $('#auth-renew').hidden = !vis.some((i) => i.act);
+    const n = $('#notif-n'); n.hidden = !items.length; setText(n, String(items.length));
+    $('#notif-b').setAttribute('aria-label', items.length ? `Notificacions (${items.length})` : 'Notificacions');
+    const l = $('#notif-l'), had = l.contains(document.activeElement); l.replaceChildren();
+    for (const i of items) {
+      const li = document.createElement('li'), t = document.createElement('span'); t.textContent = i.text; li.append(t);
+      if (i.act) { const b = document.createElement('button'); b.type = 'button'; b.textContent = i.act; b.addEventListener('click', renew); li.append(b); }
+      l.append(li);
+    }
+    if (!items.length) { const li = document.createElement('li'); li.textContent = 'Cap avís'; l.append(li); }
+    if (had) (l.querySelector('button') || $('#notif-b')).focus();
+    refreshStatus.items = items;
   } catch (e) { /* ignore */ }
 }
-$('#auth-renew').addEventListener('click', async (e) => {
+function dismissed() { try { return JSON.parse(localStorage.getItem('notif-dismissed')) || []; } catch (e) { return []; } }
+$('#auth-x').addEventListener('click', () => {
+  const k = new Set(dismissed()); for (const i of refreshStatus.items || []) k.add(i.key);
+  try { localStorage.setItem('notif-dismissed', JSON.stringify([...k])); } catch (e) { /* private mode */ }
+  $('#auth-banner').hidden = true; $('#notif-b').focus();
+});
+async function renew(e) {
   const b = e.currentTarget;
   if (b.getAttribute('aria-busy') === 'true') return;
   b.setAttribute('aria-disabled', 'true'); b.setAttribute('aria-busy', 'true');
   try { await api('/api/auth/renew', { method: 'POST' }); } catch (err) { toast(err.status === 429 ? 'Massa aviat, torna-ho a provar d\'aquí una estona' : err.message, true); }
   b.removeAttribute('aria-disabled'); b.removeAttribute('aria-busy'); refreshStatus();
-});
+}
+$('#auth-renew').addEventListener('click', renew);
 
 async function loadCourses() {
   const cs = await api('/api/courses');
