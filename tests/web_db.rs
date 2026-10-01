@@ -77,3 +77,30 @@ fn pragmas_applied() {
     assert_eq!(db.pragma("synchronous").unwrap(), 1);
     assert_eq!(db.pragma("foreign_keys").unwrap(), 1);
 }
+
+#[test]
+fn checkpoint_truncates_wal() {
+    let p = tmp("ckpt");
+    let db = Db::open(&p).unwrap();
+    db.backup(&p.with_extension("bak")).unwrap();
+    let wal = p.with_extension("db-wal");
+    assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+    db.checkpoint().unwrap();
+    assert_eq!(std::fs::metadata(&wal).unwrap().len(), 0);
+}
+
+#[test]
+fn rotate_log_moves_big_file_only() {
+    let d = tmp("rot").parent().unwrap().to_path_buf();
+    let log = d.join("web-server.log");
+    std::fs::write(&log, b"small").unwrap();
+    moodle_mcp::web::rotate_log(&log, 10);
+    assert!(log.exists() && !d.join("web-server.log.1").exists());
+    std::fs::write(&log, b"0123456789abc").unwrap();
+    moodle_mcp::web::rotate_log(&log, 10);
+    assert!(!log.exists());
+    assert_eq!(
+        std::fs::read(d.join("web-server.log.1")).unwrap(),
+        b"0123456789abc"
+    );
+}

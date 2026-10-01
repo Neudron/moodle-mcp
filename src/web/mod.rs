@@ -153,3 +153,26 @@ pub async fn serve_on(listener: tokio::net::TcpListener, app: Arc<App>) -> anyho
     axum::serve(listener, router(app)).await?;
     Ok(())
 }
+
+/// Rename `path` to `path.1` when it exceeds `max` bytes (one generation kept).
+pub fn rotate_log(path: &std::path::Path, max: u64) {
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > max) {
+        let mut to = path.as_os_str().to_owned();
+        to.push(".1");
+        let _ = std::fs::rename(path, to);
+    }
+}
+
+/// Like `serve_on`, but stops accepting when `stop` flips to true.
+pub async fn serve_until(
+    listener: tokio::net::TcpListener,
+    app: Arc<App>,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    axum::serve(listener, router(app))
+        .with_graceful_shutdown(async move {
+            let _ = stop.wait_for(|s| *s).await;
+        })
+        .await?;
+    Ok(())
+}

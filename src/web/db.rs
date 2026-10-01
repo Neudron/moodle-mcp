@@ -195,6 +195,13 @@ impl Db {
         Ok(())
     }
 
+    /// Fold the WAL into the main file and empty it (clean shutdown).
+    pub fn checkpoint(&self) -> Result<()> {
+        self.c()
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
     /// Consistent copy of the whole database (WAL-safe).
     pub fn backup(&self, to: &Path) -> Result<()> {
         self.c()
