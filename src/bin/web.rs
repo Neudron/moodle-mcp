@@ -9,10 +9,13 @@ async fn main() -> Result<()> {
     web::env::load(&root)?;
     let log = std::path::Path::new(&root).join(".moodle/web-server.log");
     web::rotate_log(&log, 1 << 20);
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
+        .mode(0o600)
         .open(&log)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -20,6 +23,7 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .with_writer(std::sync::Mutex::new(file))
         .init();
+    std::panic::set_hook(Box::new(|i| tracing::error!("panic: {i}")));
     let port: u16 = web::env::get("WEB_PORT")
         .and_then(|p| p.parse().ok())
         .unwrap_or(8787);
@@ -39,20 +43,34 @@ async fn main() -> Result<()> {
     let mut bg_stop = stop.clone();
     tokio::spawn(async move {
         loop {
-            match web::run_sync(&bg, true).await {
-                Ok(_) => {
-                    if let Err(e) = web::organize::delivered_sync(&bg).await {
-                        tracing::warn!(error = %e, "delivered sync failed");
+            // A panic in one pass must not kill the loop: spawn and log the JoinError.
+            let pass = Arc::clone(&bg);
+            if let Err(e) = tokio::spawn(async move {
+                let t = std::time::Instant::now();
+                match web::run_sync(&pass, true).await {
+                    Ok(ev) => {
+                        tracing::info!(
+                            ms = t.elapsed().as_millis() as u64,
+                            events = ev.len(),
+                            "sync done"
+                        );
+                        if let Err(e) = web::organize::delivered_sync(&pass).await {
+                            tracing::warn!(error = %e, "delivered sync failed");
+                        }
                     }
+                    Err(e) => tracing::warn!(error = %e, "background sync failed"),
                 }
-                Err(e) => tracing::warn!(error = %e, "background sync failed"),
+                web::apple::proactive(&pass).await;
+                let r = web::apple::sync(&pass).await;
+                if !r.errors.is_empty() {
+                    tracing::warn!(errors = ?r.errors, "apple sync");
+                }
+                web::scan::rescore_idle(&pass).await;
+            })
+            .await
+            {
+                tracing::error!(error = %e, "background pass failed");
             }
-            web::apple::proactive(&bg).await;
-            let r = web::apple::sync(&bg).await;
-            if !r.errors.is_empty() {
-                tracing::warn!(errors = ?r.errors, "apple sync");
-            }
-            web::scan::rescore_idle(&bg).await;
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(30 * 60)) => {}
                 _ = bg_stop.wait_for(|s| *s) => break,
