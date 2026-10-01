@@ -495,8 +495,16 @@ impl Moodle {
             if !status.is_success() {
                 bail!("download http {status}");
             }
-            let bytes = resp.bytes().await.context("file body")?;
-            return Ok(bytes.to_vec());
+            let mut resp = resp;
+            let mut body = Vec::new();
+            while let Some(c) = resp.chunk().await.context("file body")? {
+                body.extend_from_slice(&c);
+                // same cap as the web previews/scan (64 MiB)
+                if body.len() > 64 << 20 {
+                    bail!("download too large");
+                }
+            }
+            return Ok(body);
         }
         bail!("download: too many redirects (max {MAX_REDIRECT_HOPS})");
     }

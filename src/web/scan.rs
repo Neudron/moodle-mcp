@@ -17,7 +17,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    net::IpAddr,
+    net::{IpAddr, Ipv4Addr},
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
@@ -580,12 +580,19 @@ pub async fn google_public(url: &str) -> Option<String> {
         .timeout(Duration::from_secs(30))
         .build()
         .ok()?;
-    let r = http.get(url).send().await.ok()?;
+    let mut r = http.get(url).send().await.ok()?;
     let ct = r.headers().get("content-type")?.to_str().ok()?.to_string();
     if !r.status().is_success() || !(ct.starts_with("text/plain") || ct.starts_with("text/csv")) {
         return None;
     }
-    r.text().await.ok()
+    let mut body = Vec::new();
+    while let Some(c) = r.chunk().await.ok()? {
+        body.extend_from_slice(&c);
+        if body.len() as u64 > super::preview::MAX_BYTES {
+            return None;
+        }
+    }
+    Some(String::from_utf8_lossy(&body).into_owned())
 }
 
 /// Server-rendered page of a Google file: the editors draw on a canvas, these are plain HTML.
@@ -615,18 +622,31 @@ fn google_host(h: &str) -> bool {
 fn public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(a) => {
+            let o = a.octets();
             !(a.is_loopback()
                 || a.is_private()
                 || a.is_link_local()
                 || a.is_unspecified()
-                || a.is_broadcast())
+                || a.is_broadcast()
+                || a.is_multicast()
+                || o[0] == 0
+                || o[0] >= 240
+                || (o[0] == 100 && o[1] & 0xc0 == 64) // CGNAT 100.64/10
+                || (o[0] == 198 && o[1] & 0xfe == 18)) // benchmarking 198.18/15
         }
         IpAddr::V6(a) => {
             !(a.is_loopback()
                 || a.is_unspecified()
                 || a.is_unique_local()
-                || a.is_unicast_link_local())
+                || a.is_unicast_link_local()
+                || a.is_multicast())
                 && a.to_ipv4_mapped().is_none_or(|v4| public_ip(v4.into()))
+                && {
+                    // 64:ff9b::/96 (NAT64) embeds a v4 address
+                    let o = a.octets();
+                    a.segments()[..6] != [0x64, 0xff9b, 0, 0, 0, 0]
+                        || public_ip(Ipv4Addr::new(o[12], o[13], o[14], o[15]).into())
+                }
         }
     }
 }
@@ -1777,6 +1797,24 @@ mod tests {
         assert!(browser_text("https://docs.google.com.evil.com/x")
             .await
             .is_err());
+    }
+
+    #[test]
+    fn public_ip_blocks_reserved_ranges() {
+        for u in [
+            "100.64.0.1",
+            "0.1.2.3",
+            "198.18.0.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "ff02::1",
+            "64:ff9b::1",
+        ] {
+            assert!(!public_ip(u.parse().unwrap()), "{u}");
+        }
+        for u in ["8.8.8.8", "2606:4700::1"] {
+            assert!(public_ip(u.parse().unwrap()), "{u}");
+        }
     }
 
     #[test]
