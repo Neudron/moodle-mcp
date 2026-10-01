@@ -10,7 +10,7 @@ use moodle_mcp::{
     web::{
         self,
         db::Db,
-        office,
+        office, preview,
         scan::{self, Ex},
     },
 };
@@ -91,6 +91,7 @@ async fn docx_goes_through_convert_service() {
     tokio::spawn(async move { axum::serve(l, fake).await.ok() });
     std::env::set_var("ONLYOFFICE_JWT", "s3cret");
     std::env::set_var("ONLYOFFICE_URL", &oo);
+    std::env::remove_var("OO_HOST");
 
     let root = tmp("ds");
     put(&root, "C/a.docx", "zip-bytes");
@@ -109,30 +110,21 @@ async fn docx_goes_through_convert_service() {
     );
     let url = b["url"].as_str().unwrap();
     assert!(
-        url.starts_with("http://host.docker.internal:8787/oo/file?t="),
+        url.starts_with("http://host.docker.internal:8787/oo/psrc?t="),
         "{url}"
     );
     assert_eq!(
         office::verify_file_token("s3cret", url.split("t=").nth(1).unwrap()).unwrap(),
-        "C/a.docx"
+        format!("{}.docx", preview::sha_hex(b"zip-bytes"))
     );
     assert!(b["token"].is_string());
     assert!(!b.to_string().contains("s3cret"));
 
-    // A DS answer pointing outside ONLYOFFICE_URL is refused.
-    std::env::set_var("ONLYOFFICE_URL", "http://127.0.0.1:1");
-    assert!(
-        scan::ds_convert(&a, "C/a.docx", "docx", "txt", &"b".repeat(64))
-            .await
-            .is_err()
-    );
     // No secret: the document is flagged, not a hard failure of the whole scan.
     std::env::remove_var("ONLYOFFICE_JWT");
-    assert!(
-        scan::ds_convert(&a, "C/a.docx", "docx", "txt", &"c".repeat(64))
-            .await
-            .is_err()
-    );
+    assert!(preview::convert(&a, b"other-bytes", "docx", "txt")
+        .await
+        .is_err());
 }
 
 const FAKE: &str = r#"

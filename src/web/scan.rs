@@ -4,7 +4,7 @@
 use crate::web::{
     api::{ApiErr, R},
     db::Task,
-    env, files, jev, office, shots, App,
+    env, files, jev, shots, App,
 };
 use anyhow::{anyhow, ensure};
 use axum::{
@@ -13,7 +13,6 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use jsonwebtoken::{encode, EncodingKey, Header};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -566,58 +565,12 @@ pub async fn zip_text(p: &Path) -> anyhow::Result<String> {
     Ok(out)
 }
 
-/// OnlyOffice ConvertService: `rel` is fetched by the container through a signed `/oo/file` link.
-/// ponytail: duplicates WP1's Office->PDF helper; the integrator may point this at it.
-pub async fn ds_convert(
-    app: &App,
-    rel: &str,
-    from: &str,
-    to: &str,
-    sha: &str,
-) -> anyhow::Result<Vec<u8>> {
-    let secret = env::get("ONLYOFFICE_JWT").ok_or_else(|| anyhow!("OnlyOffice no disponible"))?;
-    let oo = env::get("ONLYOFFICE_URL").unwrap_or_else(|| "http://127.0.0.1:8080".into());
-    let oo = oo.trim_end_matches('/');
-    let host = format!("http://host.docker.internal:{}", app.port);
-    let mut body = json!({
-        "async": false, "filetype": from, "outputtype": to,
-        "key": format!("{}-{to}", &sha[..24]),
-        "title": rel.rsplit('/').next().unwrap_or(rel),
-        "url": format!("{host}/oo/file?t={}", office::file_token(&secret, rel, crate::web::now())),
-    });
-    body["token"] = Value::String(encode(
-        &Header::default(),
-        &body,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    )?);
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
-        .build()?;
-    let r: Value = http
-        .post(format!("{oo}/ConvertService.ashx"))
-        .header("Accept", "application/json")
-        .json(&body)
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    let url = r["fileUrl"]
-        .as_str()
-        .filter(|_| r["endConvert"] == true)
-        .ok_or_else(|| anyhow!("conversió fallida (error {})", r["error"]))?;
-    ensure!(
-        url.starts_with(&format!("{oo}/")),
-        "url fora d'ONLYOFFICE_URL"
-    );
-    Ok(http
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?
-        .to_vec())
+/// Office file -> txt/pdf through the shared preview converter (cached by sha).
+async fn convert(app: &App, p: &Path, ext: &str, to: &str) -> anyhow::Result<Vec<u8>> {
+    let bytes = tokio::fs::read(p).await?;
+    super::preview::convert(app, &bytes, ext, to)
+        .await
+        .map_err(|e| anyhow!(e.1))
 }
 
 /// Public export first. Redirects are NOT followed: a 30x means Google wants a login.
@@ -895,12 +848,12 @@ pub async fn extract(app: &App, p: &Path, rel: &str, sha: &str) -> anyhow::Resul
             t => t,
         },
         "docx" | "doc" | "odt" | "rtf" => {
-            String::from_utf8_lossy(&ds_convert(app, rel, &ext, "txt", sha).await?).into_owned()
+            String::from_utf8_lossy(&convert(app, p, &ext, "txt").await?).into_owned()
         }
         "pptx" | "ppt" | "odp" | "xlsx" | "xls" | "ods" => {
             let tmp = ws(app).join(format!("{sha}-{}.pdf", uniq()));
             tokio::fs::create_dir_all(ws(app)).await?;
-            tokio::fs::write(&tmp, ds_convert(app, rel, &ext, "pdf", sha).await?).await?;
+            tokio::fs::write(&tmp, convert(app, p, &ext, "pdf").await?).await?;
             let t = pdf_text(&tmp).await;
             tokio::fs::remove_file(&tmp).await.ok();
             t?
