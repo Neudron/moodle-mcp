@@ -165,6 +165,19 @@ fn shot_path(r: &Value) -> Option<String> {
     })
 }
 
+/// `pageState.url` of a screenshot reply: the page that was really captured.
+fn page_url(r: &Value) -> String {
+    r["content"]
+        .as_array()
+        .and_then(|a| {
+            a.iter().find_map(|c| {
+                let v: Value = serde_json::from_str(c["text"].as_str()?).ok()?;
+                v["pageState"]["url"].as_str().map(String::from)
+            })
+        })
+        .unwrap_or_default()
+}
+
 /// Spawn the MCP server and run the handshake.
 async fn session(cmd: &str) -> Result<Mcp> {
     let mut m = Mcp::spawn(cmd)?;
@@ -263,6 +276,9 @@ pub async fn shoot(cmd: &str, url: &str, dest: &Path) -> Result<()> {
                     .await?
             }
         };
+        if page_url(&r).contains("/login/") {
+            bail!("Moodle demana iniciar sessió al navegador");
+        }
         let src = shot_path(&r).context("no screenshot_path in reply")?;
         if let Some(dir) = dest.parent() {
             tokio::fs::create_dir_all(dir).await?;
@@ -379,6 +395,7 @@ mod tests {
             ["browser_navigate", "browser_wait", "browser_screenshot"]
         );
         shoot_falls_back_to_full_page().await;
+        shoot_refuses_a_login_page_and_keeps_the_old_shot().await;
     }
 
     // same body as above: FAKE_MCP_FAIL_SELECTOR is process-global and would leak into the parallel test
@@ -396,6 +413,19 @@ mod tests {
             .matches("browser_screenshot")
             .count();
         assert_eq!(n, 2, "selector attempt + fullPage attempt");
+    }
+
+    // called from the first test: FAKE_MCP_URL is process-global
+    async fn shoot_refuses_a_login_page_and_keeps_the_old_shot() {
+        let d = tmp("login");
+        let (png, log, dest) = (d.join("s.png"), d.join("log"), d.join("x.png"));
+        std::fs::write(&dest, "good").unwrap();
+        std::env::set_var("FAKE_MCP_URL", "https://aula.example.cat/login/index.php");
+        let cmd = format!("sh {FAKE} {} {}", png.display(), log.display());
+        let r = shoot(&cmd, "http://127.0.0.1:1/x", &dest).await;
+        std::env::remove_var("FAKE_MCP_URL");
+        assert!(r.unwrap_err().to_string().contains("iniciar sessió"));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"good");
     }
 
     #[tokio::test]

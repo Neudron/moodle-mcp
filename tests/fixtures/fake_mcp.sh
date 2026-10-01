@@ -23,7 +23,7 @@ while IFS= read -r line; do
           printf '{"jsonrpc":"2.0","id":%s,"result":{"isError":true,"content":[]}}\n' "$id"; continue; fi ;;
       esac
       printf '\211PNG\r\n\032\n' > "$png"
-      r="{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"screenshot_path\\\":\\\"$png\\\"}\"}]}" ;;
+      r="{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"screenshot_path\\\":\\\"$png\\\",\\\"pageState\\\":{\\\"url\\\":\\\"${FAKE_MCP_URL:-http://x/mod/assign/view.php}\\\"}}\"}]}" ;;
     *'"name":"browser_get_dom"'*)
       echo "browser_get_dom" >> "$log"
       r="{\"content\":[{\"type\":\"text\",\"text\":\"$FAKE_MCP_DOM\"}]}" ;;
