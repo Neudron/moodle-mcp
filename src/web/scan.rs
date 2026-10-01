@@ -1196,15 +1196,44 @@ async fn item_run(app: &App, it: &Item) -> anyhow::Result<Out> {
     }
 }
 
-async fn process(app: &App, job: i64, it: &Item) {
-    let (sha, status, note) = match item_run(app, it).await {
-        Ok(o) => o,
-        Err(e) => (
+/// Per-item limit; `SCAN_ITEM_SECS` overrides it.
+fn item_limit() -> Duration {
+    Duration::from_secs(
+        env::get("SCAN_ITEM_SECS")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(600),
+    )
+}
+
+/// A stuck item becomes an error row instead of freezing the job.
+async fn bounded(d: Duration, f: impl std::future::Future<Output = anyhow::Result<Out>>) -> Out {
+    match tokio::time::timeout(d, f).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => (
             String::new(),
             "error",
             crate::errors::redact_token(&e.to_string()),
         ),
-    };
+        Err(_) => (String::new(), "error", "temps esgotat".into()),
+    }
+}
+
+/// Wait for the set; on cancel, abort what is still in flight.
+async fn drain(set: &mut tokio::task::JoinSet<()>, cancel: &AtomicBool) {
+    while !set.is_empty() {
+        tokio::select! {
+            _ = set.join_next() => {}
+            _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                if cancel.load(SeqCst) {
+                    set.abort_all();
+                }
+            }
+        }
+    }
+}
+
+async fn process(app: &App, job: i64, it: &Item) {
+    let (sha, status, note) = bounded(item_limit(), item_run(app, it)).await;
     app.db
         .scan_item_done(job, &it.src, &sha, status, &note, crate::web::now())
         .ok();
@@ -1340,7 +1369,11 @@ async fn run_job(app: Arc<App>, job: i64, _g: Running) {
             drop(permit);
         });
     }
-    while set.join_next().await.is_some() {}
+    drain(&mut set, &CANCEL).await;
+    // Timed-out or aborted items skip stage()'s cleanup; no course copies left in the working folder.
+    tokio::fs::remove_dir_all(Path::new(&app.root).join("_scan"))
+        .await
+        .ok();
     if !CANCEL.load(SeqCst) {
         rescore(&app).await;
     }
@@ -2065,5 +2098,30 @@ mod tests {
             "{t}"
         );
         assert!(!t.contains("x.class") && !t.contains("mac junk"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn slow_item_times_out_as_error() {
+        let slow = async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok(skip("x".into()))
+        };
+        let (_, st, note) = bounded(Duration::from_millis(20), slow).await;
+        assert_eq!(st, "error");
+        assert!(note.contains("temps"), "{note}");
+        let (_, st, _) = bounded(Duration::from_secs(1), async { Ok(skip("x".into())) }).await;
+        assert_eq!(st, "needs_review");
+    }
+
+    #[tokio::test]
+    async fn cancel_aborts_in_flight_set() {
+        let flag = AtomicBool::new(false);
+        let mut set = tokio::task::JoinSet::new();
+        set.spawn(std::future::pending::<()>());
+        flag.store(true, SeqCst);
+        tokio::time::timeout(Duration::from_secs(5), drain(&mut set, &flag))
+            .await
+            .expect("drain must return after cancel");
+        assert!(set.is_empty());
     }
 }

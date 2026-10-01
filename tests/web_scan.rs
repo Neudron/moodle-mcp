@@ -406,7 +406,7 @@ async fn scan_end_to_end() {
     );
     assert_eq!(v["proposed"], 3);
 
-    // ---- run 3: every model fails; second start is refused; cancel keeps in-flight item
+    // ---- run 3: every model fails; second start is refused; cancel aborts the in-flight item (left pending)
     put(
         &root,
         "CursA/nou.txt",
@@ -427,14 +427,9 @@ async fn scan_end_to_end() {
     assert_eq!(post("/api/scan/cancel").send().await.unwrap().status(), 200);
     let v = wait_idle(&c, &base).await;
     assert_eq!(v["state"], "cancelled", "{v}");
-    assert_eq!(v["counts"]["error"], 1, "{v}");
-    let bad = v["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|i| i["src"] == "CursA/nou.txt")
-        .unwrap();
-    assert_eq!(bad["status"], "error");
+    assert_eq!(v["counts"]["error"], Value::Null, "{v}");
+    assert!(!root.join("_scan").exists(), "staged copies swept");
+    assert_eq!(v["counts"]["pending"], 1, "{v}");
     assert_eq!(v["proposed"], 3);
     assert_eq!(
         a.db.all_tasks()
