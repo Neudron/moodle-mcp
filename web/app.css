@@ -205,6 +205,7 @@ dl.kv{display:flex;flex-direction:column}dl.kv>div{padding:var(--s1) 0}dl.kv>div
 .rail h2{margin:0 0 var(--s1)}.rail .btn,.rail button{width:100%}.rail .ext{width:auto}.rail .field-row button{width:auto}.rail .field-row select{flex:1}
 .hint{font-size:14px}.hint:empty{display:none}
 .notice{background:var(--accent-soft);border-radius:var(--r-md);padding:var(--s2)}
+.v-pane>.notice{margin:var(--s2) 0}.notice p{margin:0 0 var(--s1)}
 .split{container-type:inline-size}
 .split>.grid{display:grid;gap:var(--s4)}
 .two{display:grid;gap:var(--s4)}

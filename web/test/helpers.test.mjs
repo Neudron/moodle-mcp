@@ -15,3 +15,10 @@ test('authBannerText', () => {
   assert.match(authBannerText({ moodle: 'ok', apple: 'err' }), /^Recordatoris: error/);
   assert.match(authBannerText({ moodle: 'expired', apple: 'auth' }), /Moodle.*·.*iCloud/);
 });
+
+const { hasText } = new Function(`${block('intro')}; return { hasText };`)();
+test('hasText', () => {
+  for (const x of [undefined, '', '  ', '<p> </p>', '<p>&nbsp;</p><br>']) assert.equal(hasText(x), false);
+  assert.equal(hasText('<p>Hola</p>'), true);
+  assert.equal(hasText('<p><img src=x></p>'), true);
+});
