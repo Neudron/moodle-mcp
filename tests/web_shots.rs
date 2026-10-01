@@ -98,12 +98,22 @@ async fn shot_routes() {
     ff::firefox_session(&ffroot);
 
     // session in Firefox but the page is a login: 409
-    std::env::set_var("FAKE_MCP_URL", "https://x/login/index.php");
+    std::env::set_var(
+        "SHOT_CMD",
+        format!(
+            "env FAKE_MCP_URL=https://x/login/index.php sh {FAKE} {} {}",
+            png.display(),
+            log.display()
+        ),
+    );
     assert_eq!(
         post("/api/shot/assign:7").send().await.unwrap().status(),
         409
     );
-    std::env::remove_var("FAKE_MCP_URL");
+    std::env::set_var(
+        "SHOT_CMD",
+        format!("sh {FAKE} {} {}", png.display(), log.display()),
+    );
 
     // happy path
     let r = post("/api/shot/assign:7").send().await.unwrap();

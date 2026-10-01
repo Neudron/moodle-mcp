@@ -9,6 +9,8 @@ use moodle_mcp::{
 use serde_json::json;
 use std::sync::Arc;
 
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 const SECRET: &str = "oo-secret";
 
 fn sign(v: &serde_json::Value) -> String {
@@ -22,6 +24,7 @@ fn sign(v: &serde_json::Value) -> String {
 
 #[tokio::test]
 async fn callback_saves_with_bak_and_guards_url() {
+    let _g = ENV_LOCK.lock().await;
     // Fake Document Server serving the edited file.
     let fake = axum::Router::new()
         .route("/cache/f", axum::routing::get(|| async { "edited" }))
@@ -162,6 +165,7 @@ async fn callback_saves_with_bak_and_guards_url() {
 
 #[tokio::test]
 async fn office_config_is_post_only_office_only_and_repoints_task_files() {
+    let _g = ENV_LOCK.lock().await;
     std::env::set_var("ONLYOFFICE_JWT", SECRET);
     let m = MockMoodle::healthy().await;
     let root = std::env::temp_dir().join(format!("mweb-oocfg-{}", std::process::id()));

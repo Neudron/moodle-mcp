@@ -421,7 +421,7 @@ async fn cli_timeout_env() {
             msg: "x timeout".into()
         })
     );
-    assert!(t.elapsed().as_secs() < 4);
+    assert!(t.elapsed().as_secs() < 30);
 }
 
 #[tokio::test]

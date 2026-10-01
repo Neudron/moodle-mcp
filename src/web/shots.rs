@@ -448,14 +448,16 @@ mod tests {
         shoot_refuses_a_login_page_and_keeps_the_old_shot().await;
     }
 
-    // same body as above: FAKE_MCP_FAIL_SELECTOR is process-global and would leak into the parallel test
+    // same body as above: kept as one test body for the shared log
     async fn shoot_falls_back_to_full_page() {
         let d = tmp("fb");
         let (png, log, dest) = (d.join("s.png"), d.join("log"), d.join("x.png"));
-        std::env::set_var("FAKE_MCP_FAIL_SELECTOR", "1");
-        let cmd = format!("sh {FAKE} {} {}", png.display(), log.display());
+        let cmd = format!(
+            "env FAKE_MCP_FAIL_SELECTOR=1 sh {FAKE} {} {}",
+            png.display(),
+            log.display()
+        );
         let r = shoot(&cmd, "http://127.0.0.1:1/x", &dest).await;
-        std::env::remove_var("FAKE_MCP_FAIL_SELECTOR");
         r.unwrap();
         assert!(dest.exists());
         let n = std::fs::read_to_string(&log)
@@ -465,15 +467,17 @@ mod tests {
         assert_eq!(n, 2, "selector attempt + fullPage attempt");
     }
 
-    // called from the first test: FAKE_MCP_URL is process-global
+    // called from the first test
     async fn shoot_refuses_a_login_page_and_keeps_the_old_shot() {
         let d = tmp("login");
         let (png, log, dest) = (d.join("s.png"), d.join("log"), d.join("x.png"));
         std::fs::write(&dest, "good").unwrap();
-        std::env::set_var("FAKE_MCP_URL", "https://aula.example.cat/login/index.php");
-        let cmd = format!("sh {FAKE} {} {}", png.display(), log.display());
+        let cmd = format!(
+            "env FAKE_MCP_URL=https://aula.example.cat/login/index.php sh {FAKE} {} {}",
+            png.display(),
+            log.display()
+        );
         let r = shoot(&cmd, "http://127.0.0.1:1/x", &dest).await;
-        std::env::remove_var("FAKE_MCP_URL");
         assert!(r.unwrap_err().to_string().contains("iniciar sessió"));
         assert_eq!(std::fs::read(&dest).unwrap(), b"good");
     }
@@ -514,14 +518,12 @@ mod tests {
     async fn not_connected_is_retried_and_dom_html_is_unwrapped() {
         let d = tmp("flap");
         let cmd = format!(
-            "sh {FAKE} {} {} {}",
+            r#"env FAKE_MCP_DOM={{\"html\":\"<p>hola</p>\"}} sh {FAKE} {} {} {}"#,
             d.join("s.png").display(),
             d.join("log").display(),
             d.join("flap").display()
         );
-        std::env::set_var("FAKE_MCP_DOM", r#"{\"html\":\"<p>hola</p>\"}"#);
         let t = page_dom(&cmd, "https://docs.google.com/document/d/x/mobilebasic").await;
-        std::env::remove_var("FAKE_MCP_DOM");
         assert_eq!(t.unwrap(), "<p>hola</p>");
         assert!(d.join("flap").exists());
     }

@@ -8,6 +8,8 @@ use moodle_mcp::{
 };
 use std::sync::Arc;
 
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn start(tag: &str) -> (String, Arc<web::App>, MockMoodle, std::path::PathBuf) {
     start_with(tag, MockConfig::default()).await
 }
@@ -630,6 +632,7 @@ async fn submit_move_failure_is_a_warning_not_a_500() {
 
 #[tokio::test]
 async fn apple_auth_failure_is_409_and_visible_in_status() {
+    let _g = ENV_LOCK.lock().await;
     use std::os::unix::fs::PermissionsExt;
     let (base, app, _m, root) = start("apple409").await;
     let sh = root.join("fake.sh");
@@ -713,6 +716,7 @@ async fn apple_auth_failure_is_409_and_visible_in_status() {
 
 #[tokio::test]
 async fn auth_status_states_and_renew_rate_limit() {
+    let _g = ENV_LOCK.lock().await;
     let (base, app, m, root) = start("authst").await;
     let c = reqwest::Client::new();
     let get = |p: &'static str| {
