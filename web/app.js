@@ -188,7 +188,7 @@ async function scanPoll() {
   if (route.cur === 'tauler') route({ soft: true });
 }
 function scanControl() {
-  const SL = { needs_review: 'Per revisar', error: 'Error' };
+  const SL = { needs_review: 'Per revisar', error: 'Error', broken: 'Enllaç trencat' };
   const go = h('button', { type: 'button', class: 'primary', onclick: async () => {
     if (SCAN.p?.state === 'running') return;
     try { await api('/api/scan', { method: 'POST' }); } catch (e) { if (e.status === 409) toast('Ja hi ha un escaneig en marxa'); else return toast(e.message, true); }

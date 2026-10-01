@@ -995,6 +995,34 @@ async fn url_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
     Ok((sha, "done", note))
 }
 
+const BROKEN_TTL: i64 = 7 * 86400;
+
+/// Why a link is permanently dead (NXDOMAIN, bad TLS cert, 404/410). Transient failures (offline,
+/// timeout, refused) are `None` so an offline laptop marks nothing as broken.
+fn broken(e: &anyhow::Error) -> Option<String> {
+    let t = e
+        .chain()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(": ")
+        .to_lowercase();
+    let has = |ks: &[&str]| ks.iter().any(|k| t.contains(k));
+    if has(&["name or service not known", "no such host"]) {
+        Some("el domini no existeix".into())
+    } else if has(&[
+        "invalid peer certificate",
+        "certificate expired",
+        "unknownissuer",
+        "notvalidforname",
+    ]) {
+        Some("certificat TLS caducat o invàlid".into())
+    } else if has(&["http 404", "http 410"]) {
+        Some("pàgina no trobada".into())
+    } else {
+        None
+    }
+}
+
 /// Any other link: a Drive file is downloaded and extracted, a page becomes text (forms.gle and
 /// Forms fall back to the browser when they need the student's login).
 async fn link_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
@@ -1004,10 +1032,29 @@ async fn link_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
         None => u.to_string(),
     };
     let sha = sha_hex(get.as_bytes());
-    if app.db.cache_get(&sha)?.is_some() {
-        return Ok((sha, "cached", String::new()));
+    if let Some(c) = app.db.cache_get(&sha)? {
+        let v: Value = serde_json::from_str(&c).unwrap_or_default();
+        match v["broken"].as_str() {
+            None => return Ok((sha, "cached", String::new())),
+            Some(why) if crate::web::now() - v["at"].as_i64().unwrap_or(0) < BROKEN_TTL => {
+                return Ok((sha, "broken", format!("enllaç trencat: {why}")));
+            }
+            Some(_) => {} // older than a week: retry
+        }
     }
     let got = web_get(&get).await;
+    if let (Err(e), None) = (&got, &drive) {
+        if let Some(why) = broken(e) {
+            let at = crate::web::now();
+            app.db.cache_put(
+                &sha,
+                &it.src,
+                &json!({"broken": why, "at": at}).to_string(),
+                at,
+            )?;
+            return Ok((sha, "broken", format!("enllaç trencat: {why}")));
+        }
+    }
     if let Ok((ct, name, bytes)) = &got {
         if !ct.contains("html") {
             let ext = ext_of(name);
@@ -1549,6 +1596,65 @@ mod tests {
         assert!(browser_text("https://docs.google.com.evil.com/x")
             .await
             .is_err());
+    }
+
+    #[test]
+    fn broken_only_for_permanent_failures() {
+        let b = |m: &str| broken(&anyhow!("{m}"));
+        assert_eq!(
+            b("dns error: Name or service not known").unwrap(),
+            "el domini no existeix"
+        );
+        assert!(b("no such host").is_some());
+        assert!(b("invalid peer certificate: Expired").is_some());
+        assert!(b("invalid peer certificate: UnknownIssuer").is_some());
+        assert_eq!(b("HTTP 404 Not Found").unwrap(), "pàgina no trobada");
+        assert!(b("HTTP 410 Gone").is_some());
+        assert!(b("HTTP 500").is_none());
+        assert!(b("Temporary failure in name resolution").is_none());
+        assert!(b("operation timed out").is_none());
+        assert!(b("Connection refused").is_none());
+        let chained = anyhow!("Name or service not known").context("error sending request");
+        assert!(broken(&chained).is_some());
+    }
+
+    #[tokio::test]
+    async fn link_item_broken_cache_hit_skips_network() {
+        let root = std::env::temp_dir().join(format!("scanbrk-{}", uniq()));
+        let app = App::new(
+            crate::web::db::Db::memory().unwrap(),
+            crate::moodle::Moodle::new("http://127.0.0.1:1", "t"),
+            root.to_str().unwrap(),
+            0,
+        );
+        let it = Item {
+            src: "A/x.txt".into(),
+            course: "A".into(),
+            kind: "file",
+        };
+        let u = "https://dead.example.invalid/x";
+        let sha = sha_hex(u.as_bytes());
+        let now = crate::web::now();
+        let put = |at: i64| {
+            app.db
+                .cache_put(
+                    &sha,
+                    "A/x.txt",
+                    &json!({"broken": "el domini no existeix", "at": at}).to_string(),
+                    at,
+                )
+                .unwrap()
+        };
+        put(now);
+        let (_, st, note) = link_item(&app, &it, u).await.unwrap();
+        assert_eq!(st, "broken");
+        assert_eq!(note, "enllaç trencat: el domini no existeix");
+        // older than 7 days: retried (.invalid never resolves, so it is re-marked broken fresh)
+        put(now - BROKEN_TTL - 10);
+        let (_, st, _) = link_item(&app, &it, u).await.unwrap();
+        assert_eq!(st, "broken");
+        let v: Value = serde_json::from_str(&app.db.cache_get(&sha).unwrap().unwrap()).unwrap();
+        assert!(v["at"].as_i64().unwrap() >= now);
     }
 
     #[test]

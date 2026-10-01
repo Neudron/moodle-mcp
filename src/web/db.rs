@@ -474,7 +474,7 @@ impl Db {
             counts.insert(k, n.into());
         }
         let mut it = c.prepare(
-            "SELECT src,course,status,error FROM scan_item WHERE job=?1 AND status IN ('needs_review','error') ORDER BY src LIMIT 200",
+            "SELECT src,course,status,error FROM scan_item WHERE job=?1 AND status IN ('needs_review','error','broken') ORDER BY src LIMIT 200",
         )?;
         let items = it
             .query_map([id], |r| {
@@ -584,15 +584,19 @@ mod tests {
             .unwrap();
         db.scan_item_done(j, "A/y.png", "", "needs_review", "sense text", 12)
             .unwrap();
+        db.scan_add_item(j, "A/w.url", "A", "link").unwrap();
+        db.scan_item_done(j, "A/w.url", "", "broken", "enllaç trencat: x", 13)
+            .unwrap();
         let p = db.scan_progress().unwrap().unwrap();
         assert_eq!(p["job"], j);
         assert_eq!(p["state"], "running");
         assert_eq!(p["counts"]["done"], 1);
         assert_eq!(p["counts"]["needs_review"], 1);
         assert_eq!(p["counts"]["pending"], 1);
-        assert_eq!(p["items"].as_array().unwrap().len(), 1);
-        assert_eq!(p["items"][0]["src"], "A/y.png");
-        assert_eq!(p["items"][0]["error"], "sense text");
+        assert_eq!(p["counts"]["broken"], 1);
+        assert_eq!(p["items"].as_array().unwrap().len(), 2);
+        assert_eq!(p["items"][0]["src"], "A/w.url");
+        assert_eq!(p["items"][1]["error"], "sense text");
         db.scan_finish(j, "done", 20).unwrap();
         let p = db.scan_progress().unwrap().unwrap();
         assert_eq!(
