@@ -582,6 +582,16 @@ function groupByDue(tasks, now) {
 // Refresh the view when a sync finished, unless the user is typing or editing.
 const shouldSoftRoute = (prev, cur, tag, view) => !!prev && !!cur && prev !== cur && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && view !== 'edita' && view !== 'ide';
 // triage-helpers-end
+// palette-helpers-start
+// Lowercase includes, prefix matches first (stable), max 50.
+function filterPalette(items, q) {
+  q = q.trim().toLowerCase();
+  if (!q) return items.slice(0, 50);
+  const pre = [], inc = [];
+  for (const it of items) { const i = it.label.toLowerCase().indexOf(q); if (i === 0) pre.push(it); else if (i > 0) inc.push(it); }
+  return [...pre, ...inc].slice(0, 50);
+}
+// palette-helpers-end
 // auth-helpers-start
 function authBannerText(a) {
   const m = [];
@@ -661,7 +671,7 @@ addEventListener('hashchange', async () => {
 // Never bound to an action button (Puja/Envia/Desa/Sincronitza).
 const GO = { t: 'tauler', c: 'calendari', f: 'fitxers', n: 'notes', o: 'forums', z: 'organitza' };
 const keysOn = () => { try { return localStorage.getItem('keys') !== 'off'; } catch (e) { return true; } };
-const KEYS = [['j / k', 'fila següent / anterior'], ['g t', 'Tauler'], ['g c', 'Calendari'], ['g f', 'Fitxers'], ['g n', 'Notes'], ['g o', 'Fòrums'], ['g z', 'Organitza'], ['/', 'filtra el tauler'], ['Esc', 'esborra el filtre']];
+const KEYS = [['j / k', 'fila següent / anterior'], ['g t', 'Tauler'], ['g c', 'Calendari'], ['g f', 'Fitxers'], ['g n', 'Notes'], ['g o', 'Fòrums'], ['g z', 'Organitza'], ['/ o Ctrl+K', 'cerca i salta'], ['Esc', 'tanca / esborra el filtre']];
 function showKeys() {
   const on = h('input', { type: 'checkbox', checked: keysOn(), onchange: (e) => { try { localStorage.setItem('keys', e.target.checked ? 'on' : 'off'); } catch (x) { /* ignore */ } } });
   confirmDialog('Dreceres de teclat', h('div', {},
@@ -679,13 +689,61 @@ document.addEventListener('keydown', (e) => {
   if (keyNav.g && GO[k]) { location.hash = `#/${GO[k]}`; keyNav.g = 0; return; }
   keyNav.g = 0;
   if (k === 'g') { keyNav.g = 1; setTimeout(() => (keyNav.g = 0), 1000); }
-  else if (k === '/') { const f = $('#filter'); if (f) { e.preventDefault(); f.focus(); } }
+  else if (k === '/') { e.preventDefault(); openPalette(); }
   else if (k === 'j' || k === 'k') {
-    const rows = [...document.querySelectorAll('#main .row')].filter((r) => r.offsetParent);
+    const rows = [...document.querySelectorAll('#main .row, #main .fpost > summary, #main .v-fname')].filter((r) => r.offsetParent);
     if (!rows.length) return;
     const i = rows.indexOf(document.activeElement);
     rows[Math.min(rows.length - 1, Math.max(0, i + (k === 'j' ? 1 : -1)))].focus();
   }
+});
+
+// Command palette: modal combobox + listbox (focus stays in the input, aria-activedescendant marks the option).
+const pal = { items: [], files: null, act: 0, shown: [], opener: null };
+const PAL_VIEWS = [['Tauler', 'tauler'], ['Calendari', 'calendari'], ['Fitxers', 'fitxers'], ['Notes', 'notes'], ['Organitza', 'organitza'], ['Fòrums', 'forums']];
+async function palItems() {
+  const go = PAL_VIEWS.map(([label, v]) => ({ label, kind: 'Vés a', hash: `#/${v}` }));
+  const cs = Object.entries(COURSES).map(([s, t]) => ({ label: t, kind: 'Curs', hash: `#/curs/${enc(s)}` }));
+  let ts = []; try { ts = (await tasksOnce()).filter((tv) => tv.task.kind !== 'post').map((tv) => ({ label: tv.task.title, kind: 'Tasca', hash: `#/tasca/${enc(tv.task.id)}` })); } catch (e) { /* ignore */ }
+  return [...go, ...cs, ...ts];
+}
+function palRender() {
+  const inp = $('#pal-q'), ul = $('#pal-l');
+  pal.shown = filterPalette([...pal.items, ...(pal.files || [])], inp.value);
+  pal.act = Math.min(pal.act, Math.max(0, pal.shown.length - 1));
+  ul.replaceChildren(...pal.shown.map((it, i) => h('li', { id: `pal-o${i}`, role: 'option', 'aria-selected': String(i === pal.act), onclick: () => palGo(it), onmousemove: () => { if (pal.act !== i) { pal.act = i; palMark(); } } }, h('span', {}, it.label), h('small', {}, it.kind))));
+  inp.setAttribute('aria-expanded', String(pal.shown.length > 0));
+  palMark();
+  setText($('#pal-n'), pal.shown.length ? `${pal.shown.length} resultats` : 'Cap resultat');
+}
+function palMark() {
+  const inp = $('#pal-q');
+  [...$('#pal-l').children].forEach((li, i) => { li.setAttribute('aria-selected', String(i === pal.act)); if (i === pal.act) li.scrollIntoView({ block: 'nearest' }); });
+  if (pal.shown.length) inp.setAttribute('aria-activedescendant', `pal-o${pal.act}`); else inp.removeAttribute('aria-activedescendant');
+}
+function palGo(it) { if (!it) return; $('#pal').close(); location.hash = it.hash; }
+async function openPalette() {
+  const d = $('#pal');
+  if (d.open || document.querySelector('dialog[open]')) return;
+  pal.opener = document.activeElement; pal.act = 0; $('#pal-q').value = '';
+  pal.items = []; pal.files = null;
+  d.showModal(); palRender();
+  pal.items = await palItems(); if (d.open) palRender();
+  if (d.open && !pal.files) {
+    try { const f = await api('/api/files?path='); pal.files = (f.entries || []).map((e) => ({ label: e.name, kind: e.is_dir ? 'Carpeta' : 'Fitxer', hash: `#/fitxers/${enc(e.rel)}` })); } catch (e) { pal.files = []; }
+    if (d.open) palRender();
+  }
+}
+$('#pal-q').addEventListener('input', () => { pal.act = 0; palRender(); });
+$('#pal-q').addEventListener('keydown', (e) => {
+  const n = pal.shown.length;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); if (n) { pal.act = (pal.act + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; palMark(); } }
+  else if (e.key === 'Enter') { e.preventDefault(); palGo(pal.shown[pal.act]); }
+});
+$('#pal').addEventListener('close', () => { const o = pal.opener; pal.opener = null; if (o && o.isConnected) o.focus(); });
+$('#pal').addEventListener('click', (e) => { if (e.target === e.currentTarget) e.currentTarget.close(); });
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k' && !e.target.closest('input,textarea,select,[contenteditable]') && !['edita', 'ide'].includes($('#main').dataset.view)) { e.preventDefault(); openPalette(); }
 });
 const keyNav = { g: 0 };
 $('#keys').addEventListener('click', showKeys);

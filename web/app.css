@@ -438,3 +438,12 @@ small{font-size:16px}
 .g-ai details.fold{margin:var(--s2) 0}.g-ai details.fold>summary{min-height:44px;display:flex;align-items:center;cursor:pointer;font-weight:600}
 .g-ai>.ghost{margin-top:var(--s1)}
 #toast-u{flex:none;min-height:44px}
+
+/* command palette */
+dialog.pal{padding:var(--s2);max-width:min(560px,calc(100vw - 32px));margin-top:12vh}
+.pal input{width:100%;min-height:44px}
+.pal ul{list-style:none;padding:0;margin:var(--s1) 0 0;max-height:50vh;overflow:auto;font:inherit;background:none}
+.pal li{display:flex;justify-content:space-between;gap:var(--s2);align-items:center;min-height:44px;padding:0 var(--s2);border-radius:var(--r-md);cursor:pointer;border:2px solid transparent}
+.pal li small{color:var(--dim);flex:none}
+.pal li[aria-selected="true"]{background:var(--hover);border-color:var(--accent)}
+@media (forced-colors:active){.pal li[aria-selected="true"]{background:Highlight;color:HighlightText;forced-color-adjust:none}}
