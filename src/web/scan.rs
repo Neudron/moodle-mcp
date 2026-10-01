@@ -108,7 +108,7 @@ pub fn ext_of(s: &str) -> String {
 pub fn is_own(rel: &str) -> bool {
     let n = rel.rsplit('/').next().unwrap_or(rel).to_lowercase();
     let stem = n.rsplit_once('.').map_or(n.as_str(), |(s, _)| s);
-    stem.ends_with("_amin") || n.ends_with(".bak") || n.ends_with(".tmp")
+    crate::web::files::has_owner(stem) || n.ends_with(".bak") || n.ends_with(".tmp")
 }
 
 pub fn google_parts(u: &str) -> Option<(String, String)> {

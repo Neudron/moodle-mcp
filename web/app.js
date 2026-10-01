@@ -593,7 +593,7 @@ $('#picker-q').addEventListener('keydown', (e) => {
 });
 $('#picker').addEventListener('close', () => { const o = pk.opener; pk.opener = null; if (o && o.isConnected) o.focus(); });
 // amin-helpers-start
-const aminName = (n) => { const i = n.lastIndexOf('.'), st = i > 0 ? n.slice(0, i) : n; return st.endsWith('_amin') ? n : i > 0 ? `${st}_amin${n.slice(i)}` : `${n}_amin`; };
+const aminName = (n) => { const i = n.lastIndexOf('.'), st = (i > 0 ? n.slice(0, i) : n).replace(/_amin$/i, '_amin'), x = i > 0 ? n.slice(i) : ''; return st.split(/[^\p{L}\p{N}]+/u).some((w) => w.toLowerCase() === 'amin') ? st + x : `${st}_amin${x}`; };
 // amin-helpers-end
 async function metaDialog(id, f, owners) {
   const base = f.split('/').pop();

@@ -47,19 +47,7 @@ fn base(rel: &str) -> &str {
     rel.rsplit('/').next().unwrap_or(rel)
 }
 
-/// `*_Amin.*` -> `*_amin.*`.
-fn amin(name: &str) -> String {
-    let (stem, ext) = match name.rsplit_once('.') {
-        Some((s, e)) => (s, format!(".{e}")),
-        None => (name, String::new()),
-    };
-    match stem.len().checked_sub(5).and_then(|i| stem.get(i..)) {
-        Some(t) if t.eq_ignore_ascii_case("_amin") => {
-            format!("{}_amin{ext}", &stem[..stem.len() - 5])
-        }
-        _ => name.to_string(),
-    }
-}
+use crate::web::files::lower_amin as amin;
 
 fn toks(s: &str) -> HashSet<String> {
     s.split(|c: char| !c.is_alphanumeric())
@@ -564,7 +552,7 @@ impl Cx {
                 let name = base(&f).to_string();
                 let in_lliuraments = f.split('/').any(|p| p == "lliuraments");
                 let stem = name.rsplit_once('.').map_or(name.as_str(), |p| p.0);
-                if !(in_lliuraments || stem.ends_with("_amin")) || self.protected(&f) {
+                if !(in_lliuraments || crate::web::files::has_owner(stem)) || self.protected(&f) {
                     continue;
                 }
                 if let Some(keep) = by_sha.get(&self.sha(&f)?) {

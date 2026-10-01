@@ -473,7 +473,7 @@ async fn upload_files(
             .file_stem()
             .map(|s| s.to_string_lossy())
             .unwrap_or_default();
-        if !stem.ends_with("_amin")
+        if !crate::web::files::has_owner(&stem)
             && !p.starts_with(croot.join("submit"))
             && !(f.starts_with("submit/") && !p.starts_with(&croot))
         {
@@ -541,7 +541,7 @@ async fn pick(State(app): S, Path(id): Path<String>, Json(b): Json<PickIn>) -> R
             .file_stem()
             .map(|s| s.to_string_lossy())
             .unwrap_or_default();
-        if p.starts_with(&croot) && !stem.ends_with("_amin") {
+        if p.starts_with(&croot) && !crate::web::files::has_owner(&stem) {
             return Err(bad(
                 "original del professor: obre'l per crear la còpia _amin",
             ));

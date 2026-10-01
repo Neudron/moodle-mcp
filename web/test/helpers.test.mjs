@@ -49,5 +49,8 @@ test('aminName', () => {
   assert.equal(aminName('Pràctica 1.docx'), 'Pràctica 1_amin.docx');
   assert.equal(aminName('a_amin.docx'), 'a_amin.docx');
   assert.equal(aminName('arxiu'), 'arxiu_amin');
+  assert.equal(aminName('E3_RA1_Amin.docx'), 'E3_RA1_amin.docx');
+  assert.equal(aminName('E3_Amin_v2.docx'), 'E3_Amin_v2.docx');
+  assert.equal(aminName('Examination.pdf'), 'Examination_amin.pdf');
   assert.equal(aminName('x.tar.gz'), 'x.tar_amin.gz');
 });

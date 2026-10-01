@@ -73,14 +73,14 @@ fn amin_copy_in(root: &Path, rel: &str, home: &Path) -> Result<String, String> {
     if !src.starts_with(&croot) {
         return Ok(rel.to_string()); // home pick via submit/ link: edit in place
     }
-    if stem.ends_with("_amin") {
+    if files::has_owner(&stem) {
         return rel_of(&src);
     }
-    let ext = src
-        .extension()
-        .map(|e| e.to_string_lossy().into_owned())
+    let name = src
+        .file_name()
+        .map(|n| n.to_string_lossy())
         .unwrap_or_default();
-    let dst = src.with_file_name(format!("{stem}_amin.{ext}"));
+    let dst = src.with_file_name(files::amin_name(&name));
     if !dst.exists() {
         std::fs::copy(&src, &dst).map_err(|e| e.to_string())?;
     }
@@ -314,6 +314,16 @@ mod tests {
             &val
         )
         .is_ok());
+    }
+
+    #[test]
+    fn amin_copy_no_double_suffix() {
+        let r = std::env::temp_dir().join(format!("mweb-i14-{}", std::process::id()));
+        std::fs::create_dir_all(r.join("C")).unwrap();
+        std::fs::write(r.join("C/E3_Amin.docx"), "x").unwrap();
+        assert_eq!(amin_copy(&r, "C/E3_Amin.docx").unwrap(), "C/E3_Amin.docx");
+        assert!(!r.join("C/E3_Amin_amin.docx").exists());
+        std::fs::remove_dir_all(&r).ok();
     }
 
     #[test]

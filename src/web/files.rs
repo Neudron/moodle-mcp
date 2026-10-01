@@ -20,6 +20,40 @@ fn hidden(p: &Path) -> bool {
     })
 }
 
+/// `*_Amin.*` -> `*_amin.*`.
+pub fn lower_amin(name: &str) -> String {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
+        _ => (name, String::new()),
+    };
+    match stem.len().checked_sub(5).and_then(|i| stem.get(i..)) {
+        Some(t) if t.eq_ignore_ascii_case("_amin") => {
+            format!("{}_amin{ext}", &stem[..stem.len() - 5])
+        }
+        _ => name.to_string(),
+    }
+}
+
+/// True when the stem has a separated `amin` token, any case (`a_Amin`, `a_amin_v2`; not `aminoacids`).
+pub fn has_owner(stem: &str) -> bool {
+    stem.split(|c: char| !c.is_alphanumeric())
+        .any(|w| w.eq_ignore_ascii_case("amin"))
+}
+
+/// The one owner-suffix rule: never doubles `_amin`, whatever the case.
+pub fn amin_name(name: &str) -> String {
+    let n = lower_amin(name);
+    let (stem, ext) = match n.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
+        _ => (n.as_str(), String::new()),
+    };
+    if has_owner(stem) {
+        n
+    } else {
+        format!("{stem}_amin{ext}")
+    }
+}
+
 /// Browse/pick root: MOODLE_PICK_HOME (tests) else HOME, canonical.
 pub fn home() -> PathBuf {
     static H: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -176,6 +210,19 @@ pub fn mime(path: &Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn amin_name_rule() {
+        for (a, b) in [
+            ("E3_RA1_Amin.docx", "E3_RA1_amin.docx"),
+            ("E3_Amin_v2.docx", "E3_Amin_v2.docx"),
+            ("Doc.docx", "Doc_amin.docx"),
+            ("README", "README_amin"),
+            ("Examination.pdf", "Examination_amin.pdf"),
+        ] {
+            assert_eq!(amin_name(a), b);
+        }
+    }
 
     #[test]
     fn mime_covers_preview_types() {
