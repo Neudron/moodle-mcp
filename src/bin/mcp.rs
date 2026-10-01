@@ -1,5 +1,7 @@
 use anyhow::Result;
-use moodle_mcp::{moodle::Moodle, state::State, sync::sync_course, sync::SyncReport};
+use moodle_mcp::{
+    moodle::Moodle, state::State, sync::sync_course_renewing as sync_course, sync::SyncReport,
+};
 use rmcp::schemars::JsonSchema;
 use rmcp::{
     handler::server::tool::ToolRouter, handler::server::wrapper::Parameters, model::*, tool,
@@ -146,7 +148,7 @@ impl ServerHandler for MoodleMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             instructions: Some(
-                "Moodle extraction server for Institut de Palamós. Use list_courses first, then sync_course or sync_all. Files land under $MOODLE_ROOT/<shortname>/<RAxx>/<nnn-module>/."
+                "Moodle extraction server for Institut de Palamós. Use list_courses first, then sync_course_tool or sync_all. Files land under $MOODLE_ROOT/<shortname>/<RAxx>/<nnn-module>/."
                     .into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),

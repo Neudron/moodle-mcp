@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use moodle_mcp::{moodle::Moodle, state::State, sync::sync_course};
+use moodle_mcp::{moodle::Moodle, state::State, sync::sync_course_renewing as sync_course};
 
 #[tokio::main]
 async fn main() -> Result<()> {

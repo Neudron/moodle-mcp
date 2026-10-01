@@ -59,7 +59,13 @@ async fn fetch_contents(moodle: &Moodle, course_id: i64) -> Result<Vec<CourseSec
             &[("courseid", course_id.to_string())],
         )
         .await
-        .map_err(|e| anyhow::anyhow!("get contents: {e}"))?;
+        .map_err(|e| match e {
+            // keep the type so callers can downcast and renew auth
+            crate::errors::CoreError::Auth(m) => {
+                crate::errors::CoreError::Auth(format!("get contents: {m}")).into()
+            }
+            e => anyhow::anyhow!("get contents: {e}"),
+        })?;
     serde_json::from_value(value).context("decoding contents")
 }
 
@@ -229,6 +235,26 @@ pub async fn sync_course(
     )
     .await?;
     Ok(report.to_sync_report())
+}
+
+/// `sync_course`, but on an Auth failure renew the token once and retry.
+pub async fn sync_course_renewing(
+    moodle: &Moodle,
+    state: &mut State,
+    course: &Course,
+    root: &str,
+) -> Result<SyncReport> {
+    match sync_course(moodle, state, course, root).await {
+        Err(e)
+            if matches!(
+                e.downcast_ref::<crate::errors::CoreError>(),
+                Some(crate::errors::CoreError::Auth(_))
+            ) && moodle.recover_auth().await == crate::moodle::Renew::Ok =>
+        {
+            sync_course(moodle, state, course, root).await
+        }
+        r => r,
+    }
 }
 
 /// Full sync with explicit filters, run options and audit actor.

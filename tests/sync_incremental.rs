@@ -55,3 +55,23 @@ async fn skips_unchanged_by_size_mtime() {
     assert_eq!(r.files_skipped, 50);
     assert_eq!(m.hits(), 1, "contents only, no file downloads");
 }
+
+#[tokio::test]
+async fn renewing_returns_auth_error_when_recovery_fails() {
+    let m = MockMoodle::unauthorized().await;
+    let c = client(&m);
+    let dir = test_root("renewing");
+    std::env::set_var("MOODLE_FIREFOX_ROOT", &dir);
+    std::env::set_var("MOODLE_TOKEN_FILE", format!("{dir}/token"));
+    let course: moodle_mcp::moodle::Course = serde_json::from_value(
+        serde_json::json!({"id": COURSE_ID, "fullname": "x", "shortname": "x"}),
+    )
+    .expect("course");
+    let err = moodle_mcp::sync::sync_course_renewing(&c, &mut State::default(), &course, &dir)
+        .await
+        .expect_err("unauthorized");
+    assert!(matches!(
+        err.downcast_ref::<moodle_mcp::errors::CoreError>(),
+        Some(moodle_mcp::errors::CoreError::Auth(_))
+    ));
+}
