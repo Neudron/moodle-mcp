@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS scan_item(job INT NOT NULL, src TEXT NOT NULL, course
     "ALTER TABLE caldav_map ADD COLUMN ev_uid TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE caldav_map ADD COLUMN todo_uid TEXT NOT NULL DEFAULT ''",
     "DROP TABLE IF EXISTS notify_log",
+    // Legacy DBs jumped to v3 before error_log was added to migration 0.
+    "CREATE TABLE IF NOT EXISTS error_log(at INT NOT NULL, source TEXT NOT NULL, kind TEXT NOT NULL, msg TEXT NOT NULL)",
 ];
 
 fn version(c: &Connection) -> Result<usize> {
