@@ -114,7 +114,7 @@ pub async fn convert(app: &App, bytes: &[u8], ext: &str, output: &str) -> Result
     let name = format!("{sha}.{ext}");
     let src = dir.join("src").join(&name);
     if !src.exists() {
-        tokio::fs::write(&src, bytes).await.map_err(ioe)?;
+        files::write_atomic(&src, bytes).map_err(ioe)?;
     }
     let host = env::get("OO_HOST").unwrap_or_else(|| "host.docker.internal".into());
     let url = format!(
@@ -177,7 +177,7 @@ pub async fn convert(app: &App, bytes: &[u8], ext: &str, output: &str) -> Result
         .await
         .map_err(gw)?
         .to_vec();
-    tokio::fs::write(&cached, &out).await.map_err(ioe)?;
+    files::write_atomic(&cached, &out).map_err(ioe)?;
     Ok(out)
 }
 
@@ -225,7 +225,7 @@ async fn moodle_bytes(app: &App, url: &str) -> R<Vec<u8>> {
         .await
         .is_ok()
     {
-        tokio::fs::write(&cached, &b).await.ok();
+        files::write_atomic(&cached, &b).ok();
     }
     Ok(b)
 }

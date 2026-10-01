@@ -88,6 +88,23 @@ pub fn walk(root: &Path, rel: &str, out: &mut Vec<String>) {
     }
 }
 
+/// Write via unique tmp (pid + counter) then rename, so readers never see partial files.
+pub fn write_atomic(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    let tmp = path.with_file_name(name);
+    std::fs::write(&tmp, data)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
 pub fn mime(path: &Path) -> &'static str {
     let ext = path
         .extension()
@@ -190,6 +207,24 @@ mod tests {
         let p = jail(&r, "Digitalització aplicada/RA01/Mapa IT·OT l'any.docx").unwrap();
         assert!(p.ends_with("Mapa IT·OT l'any.docx"));
         assert!(jail(&r, "").is_ok());
+    }
+
+    #[test]
+    fn write_atomic_no_tmp_concurrent() {
+        let r = root("atomic");
+        let p = r.join("out.bin");
+        let hs: Vec<_> = (0..8)
+            .map(|i| {
+                let p = p.clone();
+                std::thread::spawn(move || write_atomic(&p, [i; 64]).unwrap())
+            })
+            .collect();
+        hs.into_iter().for_each(|h| h.join().unwrap());
+        assert_eq!(std::fs::read(&p).unwrap().len(), 64);
+        let n = std::fs::read_dir(&r).unwrap().flatten();
+        assert!(!n
+            .into_iter()
+            .any(|e| e.file_name().to_string_lossy().contains(".tmp")));
     }
 
     #[test]

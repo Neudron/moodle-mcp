@@ -105,10 +105,12 @@ fn file_name(rel: &str) -> &str {
 }
 
 pub fn submit_dir(module: &str, title: &str) -> String {
+    let t = title.replace('/', "-");
+    let t = t.trim_start_matches('.');
     format!(
         "submit/{}/{}",
         module.replace('/', "-"),
-        title.replace('/', "-")
+        if t.is_empty() { "_" } else { t }
     )
 }
 
@@ -185,9 +187,7 @@ pub fn write(db: &Db, root: &str) -> Result<()> {
     if path.exists() {
         std::fs::copy(&path, dir.join("README.md.bak"))?;
     }
-    let tmp = dir.join("README.md.tmp");
-    std::fs::write(&tmp, md)?;
-    std::fs::rename(tmp, path)?;
+    crate::web::files::write_atomic(&path, md)?;
     Ok(())
 }
 
@@ -332,6 +332,14 @@ mod tests {
             submit_dir("LMSGI 0373", "M4_A2 o A3/P"),
             "submit/LMSGI 0373/M4_A2 o A3-P"
         );
+    }
+
+    #[test]
+    fn submit_dir_no_leading_dot() {
+        for t in ["..", ".x"] {
+            let d = submit_dir("M", t);
+            assert!(!d.rsplit('/').next().unwrap().starts_with('.'), "{d}");
+        }
     }
 
     #[test]
