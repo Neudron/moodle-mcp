@@ -1002,14 +1002,14 @@ async fn url_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
     };
     let canon = format!("https://docs.google.com/{kind}/d/{id}/edit");
     let sha = sha_hex(canon.as_bytes());
-    if app.db.cache_get(&sha)?.is_some() {
+    if app.db.cache_fresh(&sha, BROKEN_TTL, crate::web::now())? {
         return Ok((sha, "cached", String::new()));
     }
     let text = match google_public(&export_url(&kind, &id)).await {
         Some(t) if !short(&t) => t,
         _ => {
             if let Ok(o) = browser_doc(app, it, &kind, &id).await {
-                return Ok(o);
+                return remember(app, it, &sha, o);
             }
             browser_text(&view_url(&kind, &id)).await? // download failed: the HTML view
         }
@@ -1021,7 +1021,16 @@ async fn url_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
     Ok((sha, "done", note))
 }
 
-const BROKEN_TTL: i64 = 7 * 86400;
+const BROKEN_TTL: i64 = 7 * 86400; // also the TTL of URL-keyed cache entries
+
+/// A fetched file is cached by content sha; also key it by its URL so the next scan skips the fetch.
+fn remember(app: &App, it: &Item, url_sha: &str, o: Out) -> anyhow::Result<Out> {
+    if matches!(o.1, "done" | "cached") && o.0 != url_sha {
+        app.db
+            .cache_put(url_sha, &it.src, "[]", crate::web::now())?;
+    }
+    Ok(o)
+}
 
 /// Why a link is permanently dead (NXDOMAIN, bad TLS cert, 404/410). Transient failures (offline,
 /// timeout, refused) are `None` so an offline laptop marks nothing as broken.
@@ -1061,7 +1070,10 @@ async fn link_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
     if let Some(c) = app.db.cache_get(&sha)? {
         let v: Value = serde_json::from_str(&c).unwrap_or_default();
         match v["broken"].as_str() {
-            None => return Ok((sha, "cached", String::new())),
+            None if app.db.cache_fresh(&sha, BROKEN_TTL, crate::web::now())? => {
+                return Ok((sha, "cached", String::new()));
+            }
+            None => {} // older than a week: refetch
             Some(why) if crate::web::now() - v["at"].as_i64().unwrap_or(0) < BROKEN_TTL => {
                 return Ok((sha, "broken", format!("enllaç trencat: {why}")));
             }
@@ -1087,7 +1099,7 @@ async fn link_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
             if !extractable(Path::new(name), &ext) {
                 return Ok(skip(format!("format .{ext} sense text extraïble")));
             }
-            return stage(app, it, bytes, &ext).await;
+            return remember(app, it, &sha, stage(app, it, bytes, &ext).await?);
         }
     }
     if let Some(id) = &drive {
@@ -1095,7 +1107,7 @@ async fn link_item(app: &App, it: &Item, u: &str) -> anyhow::Result<Out> {
         let au = env::get("SCAN_AUTHUSER").unwrap_or_else(|| "0".into());
         return Ok(
             match local_copy(app, id, &format!("{get}&authuser={au}"), "").await {
-                Ok(p) => local_item(app, it, &p).await?,
+                Ok(p) => remember(app, it, &sha, local_item(app, it, &p).await?)?,
                 Err(_) => skip("fitxer de Drive privat".into()),
             },
         );
@@ -1824,6 +1836,47 @@ mod tests {
         assert_eq!(st, "broken");
         let v: Value = serde_json::from_str(&app.db.cache_get(&sha).unwrap().unwrap()).unwrap();
         assert!(v["at"].as_i64().unwrap() >= now);
+    }
+
+    #[tokio::test]
+    async fn url_cache_ttl_and_remember() {
+        let root = std::env::temp_dir().join(format!("scanttl-{}", uniq()));
+        std::fs::create_dir_all(&root).unwrap();
+        let app = App::new(
+            crate::web::db::Db::open(&root.join("w.db")).unwrap(),
+            crate::moodle::Moodle::new("http://127.0.0.1:1", "t"),
+            root.to_str().unwrap(),
+            0,
+        );
+        let it = Item {
+            src: "A/x.txt".into(),
+            course: "A".into(),
+            kind: "file",
+        };
+        let now = crate::web::now();
+        // fresh public-doc entry: no fetch; stale (older than TTL): not served from cache
+        let u = "https://docs.google.com/document/d/abc/edit";
+        let sha = sha_hex(u.as_bytes());
+        app.db.cache_put(&sha, "A/x.txt", "[]", now).unwrap();
+        assert_eq!(url_item(&app, &it, u).await.unwrap().1, "cached");
+        assert!(app.db.cache_fresh(&sha, BROKEN_TTL, now).unwrap());
+        app.db
+            .cache_put(&sha, "A/x.txt", "[]", now - BROKEN_TTL - 10)
+            .unwrap();
+        assert!(!app.db.cache_fresh(&sha, BROKEN_TTL, now).unwrap());
+        remember(&app, &it, &sha, ("content".into(), "cached", String::new())).unwrap();
+        assert!(app.db.cache_fresh(&sha, BROKEN_TTL, now).unwrap());
+        // a successful fetch writes the URL-keyed entry; the next scan hits it
+        let l = "https://example.com/f.docx";
+        let ls = sha_hex(l.as_bytes());
+        let o = remember(&app, &it, &ls, ("content".into(), "done", String::new())).unwrap();
+        assert_eq!(o.0, "content");
+        assert!(app.db.cache_fresh(&ls, BROKEN_TTL, now).unwrap());
+        assert_eq!(link_item(&app, &it, l).await.unwrap().1, "cached");
+        // skips are not remembered
+        let k = sha_hex(b"k");
+        remember(&app, &it, &k, ("c2".into(), "skipped", String::new())).unwrap();
+        assert!(app.db.cache_get(&k).unwrap().is_none());
     }
 
     #[test]

@@ -348,6 +348,17 @@ impl Db {
             .optional()?)
     }
 
+    /// True when `sha` is cached and younger than `ttl` seconds.
+    pub fn cache_fresh(&self, sha: &str, ttl: i64, now: i64) -> Result<bool> {
+        let at: Option<i64> = self
+            .c()
+            .query_row("SELECT at FROM extract_cache WHERE sha=?1", [sha], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(at.is_some_and(|a| now - a < ttl))
+    }
+
     pub fn cache_put(&self, sha: &str, url: &str, json: &str, at: i64) -> Result<()> {
         self.c().execute(
             "INSERT OR REPLACE INTO extract_cache(sha,source_url,result_json,at) VALUES(?1,?2,?3,?4)",
@@ -628,6 +639,9 @@ mod tests {
         let db = Db::memory().unwrap();
         db.cache_put("s", "u", "[]", 1).unwrap();
         assert_eq!(db.cache_get("s").unwrap().as_deref(), Some("[]"));
+        assert!(db.cache_fresh("s", 10, 5).unwrap());
+        assert!(!db.cache_fresh("s", 10, 11).unwrap());
+        assert!(!db.cache_fresh("x", 10, 5).unwrap());
         db.kv_set("a", "1").unwrap();
         db.kv_set("a", "2").unwrap();
         assert_eq!(db.kv_get("a").unwrap().as_deref(), Some("2"));
