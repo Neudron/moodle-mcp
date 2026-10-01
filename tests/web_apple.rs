@@ -24,7 +24,7 @@ impl Fake {
         std::fs::write(
             &sh,
             format!(
-                "#!/bin/sh\necho \"$@\" >> {d}/log\n[ \"$1\" = list-new ] && rm -f {d}/fail_todo-new\nif [ -f {d}/fail_$1 ]; then\n case \"$(cat {d}/fail_$1)\" in\n auth) echo '{{\"error\":\"x\",\"kind\":\"auth\"}}'; exit 2;;\n nolist) echo '{{\"error\":\"La lista no existe.\",\"kind\":\"config\"}}'; exit 1;;\n config) echo '{{\"error\":\"falta\",\"kind\":\"config\"}}'; exit 1;;\n *) echo oops >&2; exit 1;;\n esac\nfi\necho '{{\"uid\":\"U-'$1'\"}}'\n"
+                "#!/bin/sh\necho \"$@\" >> {d}/log\n[ \"$1\" = list-new ] && rm -f {d}/fail_todo-new\nif [ -f {d}/fail_$1 ]; then\n case \"$(cat {d}/fail_$1)\" in\n auth) echo '{{\"error\":\"x\",\"kind\":\"auth\"}}'; exit 2;;\n nolist) echo '{{\"error\":\"La lista no existe.\",\"kind\":\"config\"}}'; exit 1;;\n gone) echo '{{\"error\":\"icloud-glass: fallo inesperado (RemindersApiError).\",\"kind\":\"unknown\"}}'; exit 1;;\n config) echo '{{\"error\":\"falta\",\"kind\":\"config\"}}'; exit 1;;\n *) echo oops >&2; exit 1;;\n esac\nfi\necho '{{\"uid\":\"U-'$1'\"}}'\n"
             ),
         )
         .unwrap();
@@ -387,4 +387,53 @@ async fn calendar_config_error_stops_calendar_and_is_reported() {
     apple::sync(&app).await;
     assert_eq!(app.db.kv_get("apple_state").unwrap().unwrap(), "cal");
     assert_eq!(apple::status(&app)["calendar"], "error");
+}
+
+#[tokio::test]
+async fn cli_timeout_env() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("tmo");
+    let sh = f.dir.join("slow.sh");
+    std::fs::write(&sh, "#!/bin/sh\nsleep 5\n").unwrap();
+    std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::env::set_var("ICLOUD_GLASS_CMD", &sh);
+    std::env::set_var("ICLOUD_GLASS_TIMEOUT_SECS", "1");
+    let t = std::time::Instant::now();
+    let r = apple::cli(&["x"]).await;
+    std::env::remove_var("ICLOUD_GLASS_TIMEOUT_SECS");
+    assert_eq!(
+        r,
+        Err(AppleErr {
+            kind: Kind::Network,
+            msg: "x timeout".into()
+        })
+    );
+    assert!(t.elapsed().as_secs() < 4);
+}
+
+#[tokio::test]
+async fn stale_reminder_row_is_cleared() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("gone");
+    f.fail("todo-done", "gone");
+    let app = f.app();
+    app.db.set_caldav("assign:1", "h", "", "T1").unwrap();
+    let r = apple::sync(&app).await;
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert!(app.db.caldav_rows().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn changed_task_with_gone_reminder_gets_new_one() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("gone2");
+    f.fail("todo-done", "gone");
+    let app = f.app();
+    let due = web::now() + 86400 * 5;
+    app.db.upsert_tasks(&[task_n(1, due)]).unwrap();
+    app.db.set_caldav("assign:1", "old", "E1", "T1").unwrap();
+    let r = apple::sync(&app).await;
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    assert_eq!(f.calls("todo-new"), 1);
+    assert_eq!(app.db.caldav_rows().unwrap()[0].3, "U-todo-new");
 }

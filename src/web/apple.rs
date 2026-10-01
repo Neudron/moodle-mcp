@@ -75,7 +75,7 @@ fn marker() -> bool {
     state_dir().join("reminders-auth-required").exists()
 }
 
-/// Run the CLI (60s cap); returns the "uid" of its JSON stdout ("" when it prints none).
+/// Run the CLI (60s cap, ICLOUD_GLASS_TIMEOUT_SECS overrides); returns the "uid" of its JSON stdout ("" when it prints none).
 pub async fn cli(args: &[&str]) -> Result<String, AppleErr> {
     let bin = std::env::var("ICLOUD_GLASS_CMD").unwrap_or_else(|_| {
         format!(
@@ -85,10 +85,18 @@ pub async fn cli(args: &[&str]) -> Result<String, AppleErr> {
     });
     let mut cmd = Command::new(&bin);
     cmd.args(args).kill_on_drop(true);
-    let out = tokio::time::timeout(Duration::from_secs(60), cmd.output())
-        .await
-        .map_err(|_| AppleErr::new(Kind::Network, &format!("{} timeout", args[0])))?
-        .map_err(|e| AppleErr::new(Kind::Other, &format!("{}: {e}", args[0])))?;
+    let out = tokio::time::timeout(
+        Duration::from_secs(
+            std::env::var("ICLOUD_GLASS_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60),
+        ),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| AppleErr::new(Kind::Network, &format!("{} timeout", args[0])))?
+    .map_err(|e| AppleErr::new(Kind::Other, &format!("{}: {e}", args[0])))?;
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
     if !out.status.success() {
         let kind = match (v["kind"].as_str(), out.status.code()) {
@@ -141,6 +149,15 @@ async fn todo_cli(app: &App, args: &[&str], g: &mut Gate, s: &mut Summary) -> Re
         g.tried = true;
         if import(app, IMPORT_GAP).await == Imp::Ok {
             r = cli(args).await;
+        }
+    }
+    // ponytail: icloud-glass maps unknown uid and transient API failures to the same
+    // message, so retry once and treat only a repeat as "stale reminder = done";
+    // upgrade path is a notfound kind in icloud-glass.
+    if args[0] == "todo-done" && matches!(&r, Err(e) if e.msg.contains("RemindersApiError")) {
+        r = cli(args).await;
+        if matches!(&r, Err(e) if e.msg.contains("RemindersApiError")) {
+            return Ok(String::new());
         }
     }
     r.map_err(|e| {
