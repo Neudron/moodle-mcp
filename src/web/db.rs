@@ -337,23 +337,6 @@ impl Db {
         Ok(())
     }
 
-    pub fn caldav_hash(&self, id: &str) -> Result<Option<String>> {
-        Ok(self
-            .c()
-            .query_row("SELECT hash FROM caldav_map WHERE task_id=?1", [id], |r| {
-                r.get(0)
-            })
-            .optional()?)
-    }
-
-    pub fn set_caldav_hash(&self, id: &str, hash: &str) -> Result<()> {
-        self.c().execute(
-            "INSERT OR REPLACE INTO caldav_map(task_id,hash) VALUES(?1,?2)",
-            params![id, hash],
-        )?;
-        Ok(())
-    }
-
     /// (task_id, hash, event uid, reminder uid) for every mirrored task.
     pub fn caldav_rows(&self) -> Result<Vec<(String, String, String, String)>> {
         let c = self.c();
@@ -629,8 +612,6 @@ mod tests {
         db.kv_set("a", "1").unwrap();
         db.kv_set("a", "2").unwrap();
         assert_eq!(db.kv_get("a").unwrap().as_deref(), Some("2"));
-        db.set_caldav_hash("t", "h").unwrap();
-        assert_eq!(db.caldav_hash("t").unwrap().as_deref(), Some("h"));
     }
 
     #[test]

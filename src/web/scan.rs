@@ -415,7 +415,7 @@ async fn exec(mut c: Command) -> anyhow::Result<String> {
     let out = tokio::time::timeout(Duration::from_secs(secs), c.output()).await??;
     ensure!(
         out.status.success(),
-        "exit {}: {}",
+        "{}: {}",
         out.status,
         String::from_utf8_lossy(&out.stderr)
             .chars()

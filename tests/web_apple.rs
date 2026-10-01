@@ -112,8 +112,13 @@ async fn cli_types_errors() {
     .unwrap();
     std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::env::set_var("ICLOUD_GLASS_CMD", &sh);
-    let e = apple::cli(&["z"]).await.unwrap_err();
+    let e = apple::cli(&["list-new"]).await.unwrap_err();
     assert_eq!((e.kind, e.msg.len()), (Kind::Auth, 200));
+    // other commands: exit 2 without JSON is Other.
+    assert_eq!(apple::cli(&["z"]).await.unwrap_err().kind, Kind::Other);
+    // missing binary is a Config problem.
+    std::env::set_var("ICLOUD_GLASS_CMD", f.dir.join("nope"));
+    assert_eq!(apple::cli(&["z"]).await.unwrap_err().kind, Kind::Config);
 }
 
 #[tokio::test]

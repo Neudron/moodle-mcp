@@ -96,11 +96,20 @@ pub async fn cli(args: &[&str]) -> Result<String, AppleErr> {
     )
     .await
     .map_err(|_| AppleErr::new(Kind::Network, &format!("{} timeout", args[0])))?
-    .map_err(|e| AppleErr::new(Kind::Other, &format!("{}: {e}", args[0])))?;
+    .map_err(|e| {
+        let k = if e.kind() == std::io::ErrorKind::NotFound {
+            Kind::Config
+        } else {
+            Kind::Other
+        };
+        AppleErr::new(k, &format!("{}: {e}", args[0]))
+    })?;
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
     if !out.status.success() {
         let kind = match (v["kind"].as_str(), out.status.code()) {
-            (Some("auth"), _) | (None, Some(2)) => Kind::Auth,
+            (Some("auth"), _) => Kind::Auth,
+            // exit 2 without JSON only means Auth for list-new.
+            (None, Some(2)) if args[0] == "list-new" => Kind::Auth,
             (Some("config"), _) => Kind::Config,
             (Some("network" | "server"), _) => Kind::Network,
             _ => Kind::Other,
@@ -115,7 +124,7 @@ pub async fn cli(args: &[&str]) -> Result<String, AppleErr> {
                     .map(String::from)
             })
             .filter(|m| !m.trim().is_empty())
-            .unwrap_or_else(|| format!("{} exit {}", args[0], out.status));
+            .unwrap_or_else(|| format!("{} {}", args[0], out.status));
         return Err(AppleErr::new(kind, &msg));
     }
     Ok(clean(v["uid"].as_str().unwrap_or("")))
