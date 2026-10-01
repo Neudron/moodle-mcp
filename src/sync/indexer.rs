@@ -37,7 +37,14 @@ pub struct ModuleFileMeta {
 }
 
 fn yaml_escape(value: &str) -> String {
-    value.replace('"', "'")
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
+fn cell_escape(value: &str) -> String {
+    value.replace('|', "\\|").replace('\n', " ")
 }
 
 fn file_cell(row: &IndexRow) -> String {
@@ -83,9 +90,9 @@ pub fn render_index_md(
     for row in rows {
         out.push_str(&format!(
             "| {} | {} | {} | {} |\n",
-            row.section,
-            row.module,
-            file_cell(row),
+            cell_escape(&row.section),
+            cell_escape(&row.module),
+            cell_escape(&file_cell(row)),
             row.size
         ));
     }
@@ -277,9 +284,36 @@ mod tests {
         let md = render_index_md(&course, "hello", &rows, "2026-09-18T00:00:00Z");
         assert!(md.starts_with("---\n"), "frontmatter missing: {md}");
         assert!(md.contains("course_id: 7"));
-        assert!(md.contains("Test 'Course'"), "quotes must be escaped");
+        assert!(
+            md.contains(r#"title: "Test \"Course\"""#),
+            "quotes must be escaped"
+        );
         assert!(md.contains("weirdname.pdf (original: weird:name.pdf)"));
         assert!(md.contains("[link: slides](https://docs.google.com/x)"));
+    }
+
+    #[test]
+    fn indexer_escapes_hostile_names() {
+        let course = Course {
+            id: 1,
+            fullname: "a\"b\\c\nd|e".to_string(),
+            shortname: "S".to_string(),
+            summary: String::new(),
+        };
+        let row = IndexRow {
+            section: "s|x".to_string(),
+            module: "m\nn".to_string(),
+            original: "o|p.pdf".to_string(),
+            stored: "o|p.pdf".to_string(),
+            size: 1,
+            url: String::new(),
+            is_external: false,
+        };
+        let md = render_index_md(&course, "", &[row], "t");
+        let title = md.lines().find(|l| l.starts_with("title: ")).unwrap();
+        assert_eq!(title, r#"title: "a\"b\\c\nd|e""#);
+        let line = md.lines().last().unwrap();
+        assert_eq!(line.replace("\\|", "").matches('|').count(), 5, "{line}");
     }
 
     #[test]

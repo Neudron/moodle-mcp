@@ -443,8 +443,22 @@ async fn submit_files(State(app): S) -> R<Json<Vec<String>>> {
 
 fn frontmatter(md: &str, key: &str) -> Option<String> {
     md.lines().take(12).find_map(|l| {
-        l.strip_prefix(&format!("{key}: "))
-            .map(|v| v.trim().trim_matches('"').to_string())
+        l.strip_prefix(&format!("{key}: ")).map(|v| {
+            let v = v.trim();
+            let Some(q) = v.strip_prefix('"').and_then(|x| x.strip_suffix('"')) else {
+                return v.to_string();
+            };
+            let (mut out, mut it) = (String::new(), q.chars());
+            while let Some(c) = it.next() {
+                out.push(match (c, if c == '\\' { it.next() } else { None }) {
+                    ('\\', Some('n')) => '\n',
+                    ('\\', Some(x)) => x,
+                    ('\\', None) => '\\',
+                    _ => c,
+                });
+            }
+            out
+        })
     })
 }
 
@@ -904,5 +918,25 @@ mod open_tests {
         assert_eq!(app.db.local("a").unwrap().files, ["C/x_amin.docx"]);
         assert_eq!(app.db.local("b").unwrap().files, ["C/x_amin.docx"]);
         assert_eq!(app.db.local("c").unwrap().files, ["C/y.docx"]);
+    }
+}
+
+#[cfg(test)]
+mod frontmatter_tests {
+    use super::frontmatter;
+    use crate::moodle::Course;
+    use crate::sync::indexer::render_index_md;
+
+    #[test]
+    fn frontmatter_unescapes_title() {
+        let c = Course {
+            id: 7,
+            fullname: "a\"b\\c\nd \\n".into(),
+            shortname: String::new(),
+            summary: String::new(),
+        };
+        let md = render_index_md(&c, "", &[], "t");
+        assert_eq!(frontmatter(&md, "title").unwrap(), "a\"b\\c\nd \\n");
+        assert_eq!(frontmatter(&md, "course_id").unwrap(), "7");
     }
 }
