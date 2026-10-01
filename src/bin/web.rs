@@ -60,7 +60,6 @@ async fn main() -> Result<()> {
                     }
                     Err(e) => tracing::warn!(error = %e, "background sync failed"),
                 }
-                web::apple::proactive(&pass).await;
                 let r = web::apple::sync(&pass).await;
                 if !r.errors.is_empty() {
                     tracing::warn!(errors = ?r.errors, "apple sync");
@@ -74,6 +73,17 @@ async fn main() -> Result<()> {
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(30 * 60)) => {}
                 _ = bg_stop.wait_for(|s| *s) => break,
+            }
+        }
+    });
+    let ka = Arc::clone(&app);
+    let mut ka_stop = stop.clone();
+    tokio::spawn(async move {
+        loop {
+            web::apple::keepalive(&ka).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(300)) => {}
+                _ = ka_stop.wait_for(|s| *s) => break,
             }
         }
     });

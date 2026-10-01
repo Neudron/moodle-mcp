@@ -252,20 +252,51 @@ pub fn needs_refresh(expiry: i64, at: i64) -> bool {
     expiry > 0 && expiry - at < 7 * 86400
 }
 
-/// Daily check from the background loop: re-import when the token nears expiry.
-pub async fn proactive(app: &App) {
-    let Some(mut c) = importer() else { return };
-    let Ok(Ok(out)) =
-        tokio::time::timeout(Duration::from_secs(60), c.arg("--check").output()).await
-    else {
+/// 5-min keepalive: re-import when the marker is set, auth failed, or the Firefox token
+/// expiry rotated or is near. Failures back off 5min*2^n (max 6h); 2 in a row = "failed".
+pub async fn keepalive(app: &App) {
+    let kv = |k: &str| app.db.kv_get(k).ok().flatten().unwrap_or_default();
+    let num = |k: &str| kv(k).parse::<i64>().unwrap_or(0);
+    let ff = async {
+        let mut c = importer()?;
+        let out = tokio::time::timeout(Duration::from_secs(60), c.arg("--check").output())
+            .await
+            .ok()?
+            .ok()?;
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .parse::<i64>()
+            .ok()
+    }
+    .await;
+    let auth = kv("apple_state") == "auth";
+    let urgent = marker() || auth || ff.is_some_and(|e| e != num("apple_token_expiry"));
+    let need = urgent || ff.is_some_and(|e| needs_refresh(e, now()));
+    let set = |k: &str, v: &str| app.db.kv_set(k, v).ok();
+    if !need {
+        set("apple_auto_fails", "0");
+        set("apple_auto", "ok");
         return;
-    };
-    let Ok(exp) = String::from_utf8_lossy(&out.stdout).trim().parse::<i64>() else {
-        return;
-    };
-    app.db.kv_set("apple_token_expiry", &exp.to_string()).ok();
-    if needs_refresh(exp, now()) {
-        import(app, 86400).await;
+    }
+    let fails = num("apple_auto_fails");
+    let gap = (300 << fails.min(8)).min(6 * 3600);
+    // near-expiry alone: at most daily, Firefox may not renew for days
+    match import(app, if urgent { gap } else { gap.max(86400) }).await {
+        Imp::Ok => {
+            set("apple_auto_fails", "0");
+            set("apple_auto", "refreshed");
+            if auth {
+                set("apple_state", "ok");
+            }
+        }
+        Imp::Failed => {
+            set("apple_auto_fails", &(fails + 1).to_string());
+            set(
+                "apple_auto",
+                if fails + 1 >= 2 { "failed" } else { "retrying" },
+            );
+        }
+        Imp::Limited(_) => {}
     }
 }
 

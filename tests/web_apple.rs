@@ -36,7 +36,7 @@ impl Fake {
         std::fs::write(
             &imp,
             format!(
-                "#!/bin/sh\necho \"$@\" >> {d}/imp_log\nif [ -f {d}/imp_ok ]; then rm -f {d}/state/reminders-auth-required {d}/fail_todo-new; echo '{{\"ok\":true,\"token_expiry\":1793381126}}'; exit 0; fi\necho '{{\"ok\":false,\"kind\":\"auth\",\"msg\":\"stale\",\"token_expiry\":5}}'; exit 2\n"
+                "#!/bin/sh\n[ \"$1\" = --check ] && {{ cat {d}/ff_expiry 2>/dev/null; exit 0; }}\necho \"$@\" >> {d}/imp_log\nif [ -f {d}/imp_ok ]; then rm -f {d}/state/reminders-auth-required {d}/fail_todo-new; echo \"{{\\\"ok\\\":true,\\\"token_expiry\\\":$(cat {d}/ff_expiry 2>/dev/null || echo 1793381126)}}\"; exit 0; fi\necho '{{\"ok\":false,\"kind\":\"auth\",\"msg\":\"stale\",\"token_expiry\":5}}'; exit 2\n"
             ),
         )
         .unwrap();
@@ -46,6 +46,9 @@ impl Fake {
     }
     fn import_ok(&self) {
         std::fs::write(self.dir.join("imp_ok"), "").unwrap();
+    }
+    fn ff(&self, e: i64) {
+        std::fs::write(self.dir.join("ff_expiry"), format!("{e}\n")).unwrap();
     }
     fn imports(&self) -> usize {
         std::fs::read_to_string(self.dir.join("imp_log"))
@@ -570,4 +573,85 @@ async fn network_failure_stops_pass_calls() {
         .unwrap();
     apple::sync(&app).await;
     assert_eq!((f.calls("todo-new"), f.calls("event-new")), (1, 1));
+}
+
+fn kv(app: &web::App, k: &str) -> String {
+    app.db.kv_get(k).unwrap().unwrap_or_default()
+}
+
+#[tokio::test]
+async fn keepalive_noop_when_in_sync() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("kanoop");
+    let app = f.app();
+    f.ff(1793381126);
+    app.db.kv_set("apple_token_expiry", "1793381126").unwrap();
+    apple::keepalive(&app).await;
+    assert_eq!(f.imports(), 0);
+    assert_eq!(kv(&app, "apple_auto"), "ok");
+}
+
+#[tokio::test]
+async fn keepalive_reimports_on_marker() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("kamarker");
+    f.import_ok();
+    f.marker();
+    f.ff(1793381126);
+    let app = f.app();
+    app.db.kv_set("apple_state", "auth").unwrap();
+    apple::keepalive(&app).await;
+    assert_eq!(f.imports(), 1);
+    assert_eq!(kv(&app, "apple_auto"), "refreshed");
+    assert_eq!(kv(&app, "apple_state"), "ok");
+    apple::keepalive(&app).await;
+    assert_eq!(f.imports(), 1, "in sync after import");
+}
+
+#[tokio::test]
+async fn keepalive_reimports_when_firefox_expiry_rotated() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("karot");
+    f.import_ok();
+    f.ff(1793381126);
+    let app = f.app();
+    app.db.kv_set("apple_token_expiry", "100").unwrap();
+    apple::keepalive(&app).await;
+    assert_eq!(f.imports(), 1);
+    assert_eq!(kv(&app, "apple_token_expiry"), "1793381126");
+}
+
+#[tokio::test]
+async fn keepalive_backs_off_then_fails() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("kafail");
+    f.marker();
+    let app = f.app();
+    apple::keepalive(&app).await;
+    assert_eq!(
+        (f.imports(), kv(&app, "apple_auto").as_str()),
+        (1, "retrying")
+    );
+    apple::keepalive(&app).await;
+    assert_eq!(f.imports(), 1, "backoff holds the retry");
+    let old = (web::now() - 700).to_string();
+    app.db.kv_set("apple_import_at", &old).unwrap();
+    apple::keepalive(&app).await;
+    assert_eq!(f.imports(), 2);
+    assert_eq!(kv(&app, "apple_auto"), "failed");
+    assert_eq!(kv(&app, "apple_auto_fails"), "2");
+}
+
+#[tokio::test]
+async fn keepalive_near_expiry_imports_once_a_day() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("kanear");
+    f.import_ok();
+    let e = web::now() + 3 * 86400;
+    f.ff(e);
+    let app = f.app();
+    app.db.kv_set("apple_token_expiry", &e.to_string()).unwrap();
+    apple::keepalive(&app).await;
+    apple::keepalive(&app).await;
+    assert_eq!(f.imports(), 1);
 }

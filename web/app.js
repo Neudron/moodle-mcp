@@ -704,7 +704,7 @@ function notifItems(a) {
   const o = [];
   if (a && a.moodle && a.moodle !== 'ok') o.push({ key: `moodle:${a.moodle}`, text: 'Moodle: sessió caducada. Obre Moodle a Firefox i prem Renova', act: 'Renova' });
   const ap = { auth: "Recordatoris: sessió d'iCloud caducada", config: "iCloud: falta configuració. Executa «icloud-glass setup»", cal: 'Calendari: error en sincronitzar amb iCloud', err: 'Recordatoris: error en sincronitzar amb iCloud' }[a && a.apple];
-  if (ap) o.push({ key: `apple:${a.apple}:${a.apple_since || 0}`, text: a.apple_error && a.apple !== 'auth' ? `${ap} (${a.apple_error})` : ap, act: a.apple === 'auth' || a.apple === 'err' ? 'Torna a importar' : '' });
+  if (ap && (a.apple !== 'auth' || a.apple_auto === 'failed')) o.push({ key: `apple:${a.apple}:${a.apple_since || 0}`, text: a.apple_error && a.apple !== 'auth' ? `${ap} (${a.apple_error})` : ap, act: a.apple === 'auth' || a.apple === 'err' ? 'Torna a importar' : '' });
   return o;
 }
 const authBannerText = (a) => notifItems(a).map((i) => i.text).join(' · ');
