@@ -21,6 +21,7 @@ use serde::Deserialize;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use tracing::Instrument;
 
 use crate::errors::{redact_token, CoreError};
 use crate::retry;
@@ -307,7 +308,6 @@ impl Moodle {
         loop {
             self.limiter.acquire().await;
             let span = tracing::info_span!("moodle.call", function = %function);
-            let _guard = span.enter();
             let started = Instant::now();
             let mut form: Vec<(&str, String)> = Vec::with_capacity(params.len() + 3);
             form.push(("wstoken", self.token()));
@@ -320,6 +320,7 @@ impl Moodle {
                 .form(&form)
                 .timeout(API_TIMEOUT)
                 .send()
+                .instrument(span)
                 .await;
             if started.elapsed() > SLOW_CALL_WARN {
                 tracing::warn!(

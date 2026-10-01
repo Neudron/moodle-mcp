@@ -181,7 +181,7 @@ impl RateLimiter {
 pub struct CircuitBreaker {
     threshold: u32,
     cooldown: Duration,
-    state: Mutex<BreakerState>,
+    state: std::sync::Mutex<BreakerState>,
 }
 
 #[derive(Debug)]
@@ -206,19 +206,21 @@ impl CircuitBreaker {
         Self {
             threshold: threshold.max(1),
             cooldown,
-            state: Mutex::new(BreakerState {
+            state: std::sync::Mutex::new(BreakerState {
                 consecutive_failures: 0,
                 opened_at: None,
             }),
         }
     }
 
+    fn lock(&self) -> std::sync::MutexGuard<'_, BreakerState> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// `true` while the breaker is open (caller must fail fast).
     /// A cooled-down breaker half-opens (resets) here.
     pub fn is_open(&self) -> bool {
-        let Ok(mut state) = self.state.try_lock() else {
-            return false;
-        };
+        let mut state = self.lock();
         match state.opened_at {
             Some(at) if at.elapsed() < self.cooldown => true,
             Some(_) => {
@@ -232,7 +234,8 @@ impl CircuitBreaker {
 
     /// A call fully succeeded: close the breaker.
     pub fn record_success(&self) {
-        if let Ok(mut state) = self.state.try_lock() {
+        {
+            let mut state = self.lock();
             state.consecutive_failures = 0;
             state.opened_at = None;
         }
@@ -240,7 +243,8 @@ impl CircuitBreaker {
 
     /// A qualifying failure (transport/429/5xx after retries exhausted).
     pub fn record_failure(&self) {
-        if let Ok(mut state) = self.state.try_lock() {
+        {
+            let mut state = self.lock();
             state.consecutive_failures = state.consecutive_failures.saturating_add(1);
             if state.consecutive_failures >= self.threshold {
                 state.opened_at = Some(Instant::now());
@@ -258,6 +262,21 @@ impl Default for CircuitBreaker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn net_breaker_concurrent_failures_all_counted() {
+        let b = std::sync::Arc::new(CircuitBreaker::with_tuning(100, Duration::from_secs(30)));
+        let hs: Vec<_> = (0..10)
+            .map(|_| {
+                let b = b.clone();
+                std::thread::spawn(move || b.record_failure())
+            })
+            .collect();
+        for h in hs {
+            h.join().unwrap();
+        }
+        assert_eq!(b.lock().consecutive_failures, 10);
+    }
 
     #[test]
     fn net_backoff_grows_then_caps() {
