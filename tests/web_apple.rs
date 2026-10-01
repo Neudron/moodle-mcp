@@ -24,7 +24,7 @@ impl Fake {
         std::fs::write(
             &sh,
             format!(
-                "#!/bin/sh\necho \"$@\" >> {d}/log\n[ \"$1\" = list-new ] && rm -f {d}/fail_todo-new\nif [ -f {d}/fail_$1 ]; then\n case \"$(cat {d}/fail_$1)\" in\n auth) echo '{{\"error\":\"x\",\"kind\":\"auth\"}}'; exit 2;;\n nolist) echo '{{\"error\":\"La lista no existe.\",\"kind\":\"config\"}}'; exit 1;;\n gone) echo '{{\"error\":\"icloud-glass: fallo inesperado (RemindersApiError).\",\"kind\":\"unknown\"}}'; exit 1;;\n config) echo '{{\"error\":\"falta\",\"kind\":\"config\"}}'; exit 1;;\n *) echo oops >&2; exit 1;;\n esac\nfi\necho '{{\"uid\":\"U-'$1'\"}}'\n"
+                "#!/bin/sh\necho \"$@\" >> {d}/log\n[ \"$1\" = list-new ] && rm -f {d}/fail_todo-new\nif [ -f {d}/fail_$1 ]; then\n case \"$(cat {d}/fail_$1)\" in\n auth) echo '{{\"error\":\"x\",\"kind\":\"auth\"}}'; exit 2;;\n nolist) echo '{{\"error\":\"La lista no existe.\",\"kind\":\"config\"}}'; exit 1;;\n gone) echo '{{\"error\":\"icloud-glass: fallo inesperado (RemindersApiError).\",\"kind\":\"unknown\"}}'; exit 1;;\nempty) echo '{{}}'; exit 0;;\n config) echo '{{\"error\":\"falta\",\"kind\":\"config\"}}'; exit 1;;\n *) echo oops >&2; exit 1;;\n esac\nfi\necho '{{\"uid\":\"U-'$1'\"}}'\n"
             ),
         )
         .unwrap();
@@ -436,4 +436,73 @@ async fn changed_task_with_gone_reminder_gets_new_one() {
     assert!(r.errors.is_empty(), "{:?}", r.errors);
     assert_eq!(f.calls("todo-new"), 1);
     assert_eq!(app.db.caldav_rows().unwrap()[0].3, "U-todo-new");
+}
+
+#[tokio::test]
+async fn calendar_down_does_not_churn_reminders() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("churn");
+    f.fail("event-new", "config");
+    let app = f.app();
+    let due = web::now() + 86400 * 5;
+    app.db
+        .upsert_tasks(&[task_n(1, due), task_n(2, due)])
+        .unwrap();
+    apple::sync(&app).await;
+    apple::sync(&app).await;
+    assert_eq!((f.calls("todo-new"), f.calls("todo-done")), (2, 0));
+}
+
+#[tokio::test]
+async fn empty_todo_uid_is_failure() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("empty");
+    f.fail("todo-new", "empty");
+    let app = f.app();
+    app.db
+        .upsert_tasks(&[task_n(1, web::now() + 86400 * 5)])
+        .unwrap();
+    let r = apple::sync(&app).await;
+    assert_eq!(r.errors.len(), 1, "{:?}", r.errors);
+    assert_eq!(app.db.caldav_rows().unwrap()[0].3, "");
+}
+
+#[tokio::test]
+async fn stale_partial_failure_keeps_progress() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("partial");
+    f.fail("todo-done", "other");
+    let app = f.app();
+    app.db
+        .upsert_tasks(&[Task {
+            moodle_status: "submitted".into(),
+            ..task_n(1, web::now() + 86400 * 5)
+        }])
+        .unwrap();
+    app.db.set_caldav("assign:1", "h", "EV", "TD").unwrap();
+    apple::sync(&app).await;
+    let r = &app.db.caldav_rows().unwrap()[0];
+    assert_eq!((r.2.as_str(), r.3.as_str()), ("", "TD"));
+    apple::sync(&app).await;
+    assert_eq!(f.calls("event-delete"), 1);
+}
+
+#[tokio::test]
+async fn stale_event_fail_todo_done_once() {
+    let _g = ENV.lock().await;
+    let f = Fake::new("evfail");
+    f.fail("event-delete", "other");
+    let app = f.app();
+    app.db
+        .upsert_tasks(&[Task {
+            moodle_status: "submitted".into(),
+            ..task_n(1, web::now() + 86400 * 5)
+        }])
+        .unwrap();
+    app.db.set_caldav("assign:1", "h", "EV", "TD").unwrap();
+    apple::sync(&app).await;
+    apple::sync(&app).await;
+    let r = &app.db.caldav_rows().unwrap()[0];
+    assert_eq!((r.2.as_str(), r.3.as_str()), ("EV", ""));
+    assert_eq!(f.calls("todo-done"), 1);
 }

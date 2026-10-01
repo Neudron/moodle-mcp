@@ -358,27 +358,29 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
         ));
     }
     // Stale mirrors: delivered, submitted, past, discarded or gone.
-    for (id, _, ev, todo) in &rows {
+    for (id, old, ev, todo) in &rows {
         let t = tasks.iter().find(|t| &t.id == id);
         if t.is_some_and(|t| pending(t, app.db.local(id).is_ok_and(|l| l.status == "lliurat"), at))
         {
             continue;
         }
-        let mut ok = true;
+        let (mut ok, mut ev, mut todo) = (true, ev.as_str(), todo.as_str());
         if !ev.is_empty() {
             match cal_cli(&["event-delete", "--calendar", NAME, ev], &mut g, s).await {
-                Ok(_) => s.deleted += 1,
+                Ok(_) => (s.deleted, ev) = (s.deleted + 1, ""),
                 Err(_) => ok = false,
             }
         }
         if !todo.is_empty() {
             match todo_cli(app, &["todo-done", todo, "--json"], &mut g, s).await {
-                Ok(_) => s.done += 1,
+                Ok(_) => (s.done, todo) = (s.done + 1, ""),
                 Err(_) => ok = false,
             }
         }
         if ok {
             app.db.del_caldav(id)?;
+        } else {
+            app.db.set_caldav(id, old, ev, todo)?;
         }
     }
     for t in tasks.iter().filter(|t| {
@@ -394,16 +396,17 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
             .cloned()
             .unwrap_or_default();
         let h = format!("{}|{}|{}|{}", t.due, t.course, t.title, t.url);
-        let changed = old != h;
-        // Hash tracks the event only; a missing reminder uid is retried on its own.
-        if !changed && !todo.is_empty() {
+        // "!h" = event failed for h: retry the event, keep the reminder.
+        let ev_changed = old != h;
+        let todo_changed = old.trim_start_matches('!') != h;
+        if !ev_changed && !todo.is_empty() {
             continue;
         }
         let summary = clean(&format!("{}: {}", t.course, t.title));
         let url = clean(&t.url);
         let (start, due) = (iso(t.due - 3600), iso(t.due));
-        let mut ok = true;
-        if changed {
+        let (mut ok, mut retire_failed) = (true, false);
+        if ev_changed {
             let mut a = vec![
                 "event-new",
                 "--calendar",
@@ -445,16 +448,16 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
                 }
                 Err(_) => ok = false,
             }
-            // Reminders have no update call: retire the old one, create a new one.
-            if !todo.is_empty() {
-                match todo_cli(app, &["todo-done", &todo, "--json"], &mut g, s).await {
-                    Ok(_) => (todo, s.done) = (String::new(), s.done + 1),
-                    Err(_) => ok = false,
-                }
+        }
+        // Reminders have no update call: retire the old one, create a new one.
+        if todo_changed && !todo.is_empty() {
+            match todo_cli(app, &["todo-done", &todo, "--json"], &mut g, s).await {
+                Ok(_) => (todo, s.done) = (String::new(), s.done + 1),
+                Err(_) => (ok, retire_failed) = (false, true),
             }
         }
         if todo.is_empty() {
-            if let Ok(u) = todo_cli(
+            match todo_cli(
                 app,
                 &[
                     "todo-new",
@@ -473,13 +476,19 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
             )
             .await
             {
-                todo = u;
+                Ok(u) if !u.is_empty() => todo = u,
+                Ok(_) => s.fail(AppleErr::new(Kind::Other, "todo-new: no uid")),
+                Err(_) => {}
             }
         }
-        // Empty hash forces an event retry next run; uids are kept so retries update in place.
-        let keep = if changed { "" } else { &old };
-        app.db
-            .set_caldav(&t.id, if ok { &h } else { keep }, &ev, &todo)?;
+        // "!h" forces an event retry next run; uids are kept so retries update in place.
+        // Failed retire keeps the old hash so the old reminder is retried too.
+        let saved = match (ok, retire_failed) {
+            (true, _) => h,
+            (_, true) => old,
+            _ => format!("!{h}"),
+        };
+        app.db.set_caldav(&t.id, &saved, &ev, &todo)?;
     }
     Ok(())
 }
