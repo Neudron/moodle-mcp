@@ -20,7 +20,24 @@ fn hidden(p: &Path) -> bool {
     })
 }
 
+/// Browse/pick root: MOODLE_PICK_HOME (tests) else HOME, canonical.
+pub fn home() -> PathBuf {
+    static H: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    H.get_or_init(|| {
+        let h = std::env::var("MOODLE_PICK_HOME")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_default();
+        PathBuf::from(&h).canonicalize().unwrap_or_default()
+    })
+    .clone()
+}
+
 pub fn jail(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    jail_in(root, rel, &home())
+}
+
+/// Like `jail`, but a `submit/...` symlink may point at a non-hidden path under `home`.
+pub fn jail_in(root: &Path, rel: &str, home: &Path) -> Result<PathBuf, String> {
     let relp = Path::new(rel);
     if relp.is_absolute() || hidden(relp) {
         return Err("path not allowed".into());
@@ -30,9 +47,21 @@ pub fn jail(root: &Path, rel: &str) -> Result<PathBuf, String> {
         .join(relp)
         .canonicalize()
         .map_err(|_| "not found".to_string())?;
-    let inside = p
-        .strip_prefix(&root)
-        .map_err(|_| "path not allowed".to_string())?;
+    let Ok(inside) = p.strip_prefix(&root) else {
+        let in_submit = relp
+            .components()
+            .next()
+            .is_some_and(|c| c.as_os_str() == "submit");
+        return match home
+            .canonicalize()
+            .ok()
+            .as_deref()
+            .and_then(|h| p.strip_prefix(h).ok())
+        {
+            Some(in_home) if in_submit && !hidden(in_home) => Ok(p),
+            _ => Err("path not allowed".into()),
+        };
+    };
     if hidden(inside) {
         return Err("path not allowed".into());
     }
@@ -187,6 +216,41 @@ mod tests {
         std::os::unix::fs::symlink("/etc", r.join("out")).unwrap();
         std::os::unix::fs::symlink(r.join(".moodle"), r.join("sneaky")).unwrap();
         r
+    }
+
+    #[test]
+    fn jail_allows_submit_symlink_into_home_only() {
+        let r = root("symhome");
+        let home = r
+            .parent()
+            .unwrap()
+            .join(format!("home-{}", std::process::id()));
+        std::fs::create_dir_all(home.join("Docs")).unwrap();
+        std::fs::create_dir_all(home.join(".ssh")).unwrap();
+        std::fs::write(home.join("Docs/a.pdf"), "x").unwrap();
+        std::fs::write(home.join(".ssh/id"), "k").unwrap();
+        std::fs::create_dir_all(r.join("submit/M/T")).unwrap();
+        let ln = |n: &str, t: &Path| {
+            std::os::unix::fs::symlink(t, r.join("submit/M/T").join(n)).unwrap()
+        };
+        ln("a.pdf", &home.join("Docs/a.pdf"));
+        ln("id", &home.join(".ssh/id"));
+        ln("pw", Path::new("/etc/passwd"));
+        ln("tok", &r.join(".moodle/token"));
+        std::os::unix::fs::symlink(
+            home.join("Docs/a.pdf"),
+            r.join("Digitalització aplicada/a.pdf"),
+        )
+        .unwrap();
+        assert!(jail_in(&r, "submit/M/T/a.pdf", &home).is_ok());
+        for bad in [
+            "submit/M/T/id",
+            "submit/M/T/pw",
+            "submit/M/T/tok",
+            "Digitalització aplicada/a.pdf",
+        ] {
+            assert!(jail_in(&r, bad, &home).is_err(), "{bad}");
+        }
     }
 
     #[test]

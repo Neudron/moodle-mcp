@@ -54,7 +54,11 @@ fn verify_token(secret: &str, t: &str, check_exp: bool) -> Result<String, String
 }
 
 pub fn amin_copy(root: &Path, rel: &str) -> Result<String, String> {
-    let src = files::jail(root, rel)?;
+    amin_copy_in(root, rel, &files::home())
+}
+
+fn amin_copy_in(root: &Path, rel: &str, home: &Path) -> Result<String, String> {
+    let src = files::jail_in(root, rel, home)?;
     let stem = src
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -66,6 +70,9 @@ pub fn amin_copy(root: &Path, rel: &str) -> Result<String, String> {
             .to_string_lossy()
             .into_owned())
     };
+    if !src.starts_with(&croot) {
+        return Ok(rel.to_string()); // home pick via submit/ link: edit in place
+    }
     if stem.ends_with("_amin") {
         return rel_of(&src);
     }
@@ -307,5 +314,17 @@ mod tests {
             &val
         )
         .is_ok());
+    }
+
+    #[test]
+    fn amin_copy_leaves_home_pick_alone() {
+        let h = std::env::temp_dir().join(format!("mweb-amin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&h);
+        std::fs::create_dir_all(h.join("smx/submit/M/T")).unwrap();
+        std::fs::write(h.join("a.docx"), "x").unwrap();
+        std::os::unix::fs::symlink(h.join("a.docx"), h.join("smx/submit/M/T/a.docx")).unwrap();
+        let rel = "submit/M/T/a.docx";
+        assert_eq!(amin_copy_in(&h.join("smx"), rel, &h).unwrap(), rel);
+        assert!(!h.join("a_amin.docx").exists());
     }
 }

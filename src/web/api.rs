@@ -114,6 +114,8 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/tasks/{id}/upload", post(upload_files))
         .route("/api/tasks/{id}/submit", post(submit))
         .route("/api/submit-files", get(submit_files))
+        .route("/api/browse", get(browse))
+        .route("/api/tasks/{id}/pick", post(pick))
         .route("/api/courses", get(courses))
         .route("/api/courses/{short}", get(course))
         .route("/api/files", get(file_info))
@@ -389,7 +391,6 @@ async fn upload_files(
 ) -> R<Json<Value>> {
     let aid = assign_id(&id)?;
     let root = std::path::Path::new(&app.root);
-    let croot = root.canonicalize().map_err(anyhow::Error::from)?;
     let paths = b
         .files
         .iter()
@@ -399,12 +400,17 @@ async fn upload_files(
         })
         .collect::<Result<Vec<_>, _>>()?;
     // Teacher originals live in course folders: only _amin files (or anything under submit/) go up.
-    for p in &paths {
+    // A submit/ link outside root is a home pick (jail limits it to non-hidden home paths).
+    let croot = root.canonicalize().map_err(anyhow::Error::from)?;
+    for (f, p) in b.files.iter().zip(&paths) {
         let stem = p
             .file_stem()
             .map(|s| s.to_string_lossy())
             .unwrap_or_default();
-        if !stem.ends_with("_amin") && !p.starts_with(croot.join("submit")) {
+        if !stem.ends_with("_amin")
+            && !p.starts_with(croot.join("submit"))
+            && !(f.starts_with("submit/") && !p.starts_with(&croot))
+        {
             return Err(bad("només fitxers _amin o de submit/"));
         }
     }
@@ -433,6 +439,77 @@ async fn submit(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
         None
     };
     Ok(status_json(s, warning))
+}
+
+async fn browse(Query(q): Query<PathQ>) -> R<Json<Value>> {
+    let es = files::list(&files::home(), &q.path).map_err(forbid)?;
+    Ok(Json(json!({"rel": q.path, "entries": es})))
+}
+
+#[derive(Deserialize)]
+struct PickIn {
+    path: String,
+}
+/// Link a file picked from $HOME into the task's submit folder (symlink, never a copy).
+async fn pick(State(app): S, Path(id): Path<String>, Json(b): Json<PickIn>) -> R<Json<Local>> {
+    let p = files::jail(&files::home(), &b.path).map_err(forbid)?;
+    if !p.is_file() {
+        return Err(bad("no és un fitxer"));
+    }
+    let root = std::path::Path::new(&app.root);
+    let croot = root.canonicalize().map_err(anyhow::Error::from)?;
+    let t = app
+        .db
+        .task(&id)?
+        .ok_or(ApiErr(StatusCode::NOT_FOUND, "no existeix".into()))?;
+    let l = app.db.local(&id)?;
+    let rel = if let (true, Ok(r)) = (p.starts_with(croot.join("submit")), p.strip_prefix(&croot)) {
+        r.to_string_lossy().into_owned()
+    } else {
+        let stem = p
+            .file_stem()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_default();
+        if p.starts_with(&croot) && !stem.ends_with("_amin") {
+            return Err(bad(
+                "original del professor: obre'l per crear la còpia _amin",
+            ));
+        }
+        let mut dir = readme::submit_dir(&module_of(&l, &t.course), &t.title);
+        if l.status == "lliurat" {
+            dir = dir.replacen("submit/", "submit/_lliurat/", 1);
+        }
+        let abs = root.join(&dir);
+        std::fs::create_dir_all(&abs).map_err(anyhow::Error::from)?;
+        let ext = p
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
+        let mut n = 1;
+        loop {
+            let name = if n == 1 {
+                format!("{stem}{ext}")
+            } else {
+                format!("{stem}-{n}{ext}")
+            };
+            let ln = abs.join(&name);
+            match std::fs::symlink_metadata(&ln) {
+                Err(_) => {
+                    std::os::unix::fs::symlink(&p, &ln).map_err(anyhow::Error::from)?;
+                    break format!("{dir}/{name}");
+                }
+                Ok(_) if ln.canonicalize().is_ok_and(|c| c == p) => break format!("{dir}/{name}"),
+                Ok(_) => n += 1,
+            }
+        }
+    };
+    let l = app.db.update_local(&id, |l| {
+        if !l.files.contains(&rel) {
+            l.files.push(rel.clone())
+        }
+    })?;
+    readme::write(&app.db, &app.root)?;
+    Ok(Json(l))
 }
 
 async fn submit_files(State(app): S) -> R<Json<Vec<String>>> {
