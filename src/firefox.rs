@@ -147,6 +147,14 @@ pub fn default_profile(root: &Path) -> Result<PathBuf, FfError> {
     })
 }
 
+/// Firefox config dir: `MOODLE_FIREFOX_ROOT`, else `$HOME/.mozilla/firefox`.
+pub fn root() -> PathBuf {
+    std::env::var_os("MOODLE_FIREFOX_ROOT").map_or_else(
+        || Path::new(&std::env::var_os("HOME").unwrap_or_default()).join(".mozilla/firefox"),
+        PathBuf::from,
+    )
+}
+
 /// Moodle session cookie of the default profile under `root`.
 pub fn session_cookie(root: &Path) -> Result<(String, String), FfError> {
     let file = default_profile(root)?.join("sessionstore-backups/recovery.jsonlz4");

@@ -24,6 +24,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, MutexGuard};
 
 pub const SELECTOR: &str = "#intro, .activity-description, [role=main]";
+pub const LOGIN: &str = "Moodle demana iniciar sessió al navegador";
 pub const DEFAULT_CMD: &str = "npx -y open-browser-control";
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// The extension connection flaps: "not connected" replies are retried.
@@ -277,7 +278,7 @@ pub async fn shoot(cmd: &str, url: &str, dest: &Path) -> Result<()> {
             }
         };
         if page_url(&r).contains("/login/") {
-            bail!("Moodle demana iniciar sessió al navegador");
+            bail!(LOGIN);
         }
         let src = shot_path(&r).context("no screenshot_path in reply")?;
         if let Some(dir) = dest.parent() {
@@ -336,14 +337,20 @@ async fn make_shot(State(app): State<Arc<App>>, AxPath(id): AxPath<String>) -> R
     if !moodle_only(app.moodle.base(), &t.url) {
         return Err(bad("url fora de Moodle"));
     }
+    const HINT: &str =
+        "Firefox no té sessió de Moodle: inicia sessió a Moodle al Firefox i torna-ho a provar";
+    if crate::firefox::session_cookie(&crate::firefox::root()).is_err() {
+        return Err(ApiErr(StatusCode::CONFLICT, HINT.into()));
+    }
     let cmd = std::env::var("SHOT_CMD").unwrap_or_else(|_| DEFAULT_CMD.into());
     shoot(&cmd, &t.url, &shot_file(&app.root, &id))
         .await
         .map_err(|e| {
-            ApiErr(
-                StatusCode::BAD_GATEWAY,
-                crate::errors::redact_token(&e.to_string()),
-            )
+            let m = e.to_string();
+            if m.contains(LOGIN) {
+                return ApiErr(StatusCode::CONFLICT, HINT.into());
+            }
+            ApiErr(StatusCode::BAD_GATEWAY, crate::errors::redact_token(&m))
         })?;
     Ok(Json(json!({"ok": true})))
 }

@@ -1232,7 +1232,9 @@ async fn run_job(app: Arc<App>, job: i64) {
     if !CANCEL.load(SeqCst) {
         rescore(&app).await;
     }
-    if env::get("SCAN_SHOTS").as_deref() != Some("0") {
+    if env::get("SCAN_SHOTS").as_deref() != Some("0")
+        && crate::firefox::session_cookie(&crate::firefox::root()).is_ok()
+    {
         let cmd = env::get("SHOT_CMD").unwrap_or_else(|| shots::DEFAULT_CMD.into());
         for t in app.db.all_tasks().unwrap_or_default() {
             let dest = shots::shot_file(&app.root, &t.id);
@@ -1241,7 +1243,12 @@ async fn run_job(app: Arc<App>, job: i64) {
             }
             if t.kind == "assign" && !dest.exists() && shots::moodle_only(app.moodle.base(), &t.url)
             {
-                shots::shoot(&cmd, &t.url, &dest).await.ok(); // best effort; the lock is inside
+                // best effort; the lock is inside. A login page means no session: stop.
+                if let Err(e) = shots::shoot(&cmd, &t.url, &dest).await {
+                    if e.to_string().contains(shots::LOGIN) {
+                        break;
+                    }
+                }
             }
         }
     }

@@ -1,3 +1,5 @@
+#[path = "integration/ff.rs"]
+mod ff;
 use axum::{
     http::StatusCode,
     routing::{get, post},
@@ -510,12 +512,17 @@ async fn scan_screenshots_assign_tasks() {
         ),
     );
     std::env::remove_var("SCAN_SHOTS");
+    let ffroot = root.join("ff");
+    ff::firefox_session(&ffroot);
+    std::env::set_var("MOODLE_FIREFOX_ROOT", &ffroot);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let a = app(&root, port);
     let mut t = moodle_task();
     t.url = "http://127.0.0.1:9/mod/assign/view.php?id=1".into();
-    a.db.upsert_tasks(&[t]).unwrap();
+    let mut t2 = t.clone();
+    t2.id = "assign:2".into();
+    a.db.upsert_tasks(&[t, t2]).unwrap();
     tokio::spawn(web::serve_on(listener, a));
     let base = format!("http://127.0.0.1:{port}");
     let c = reqwest::Client::new();
@@ -529,4 +536,23 @@ async fn scan_screenshots_assign_tasks() {
     assert_eq!(r.status(), 200);
     wait_idle(&c, &base).await;
     assert!(root.join(".moodle/shots/assign_1.png").exists());
+
+    // login page: the loop stops at the first one
+    std::fs::remove_file(root.join(".moodle/shots/assign_1.png")).unwrap();
+    std::fs::remove_file(root.join("mcp.log")).unwrap();
+    std::env::set_var("FAKE_MCP_URL", "https://x/login/index.php");
+    c.post(format!("{base}/api/scan"))
+        .header("origin", &base)
+        .header("x-neu", "1")
+        .send()
+        .await
+        .unwrap();
+    wait_idle(&c, &base).await;
+    std::env::remove_var("FAKE_MCP_URL");
+    let n = std::fs::read_to_string(root.join("mcp.log"))
+        .unwrap()
+        .matches("browser_screenshot")
+        .count();
+    assert_eq!(n, 1);
+    std::env::remove_var("MOODLE_FIREFOX_ROOT");
 }

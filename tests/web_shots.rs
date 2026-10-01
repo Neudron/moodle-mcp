@@ -1,3 +1,5 @@
+#[path = "integration/ff.rs"]
+mod ff;
 #[path = "integration/mock.rs"]
 mod mock;
 
@@ -80,6 +82,28 @@ async fn shot_routes() {
         .await
         .unwrap();
     assert_eq!(r.status(), 403);
+
+    // no Firefox session: 409 with a hint, the browser is never started
+    let ffroot = root.join("ff");
+    std::fs::create_dir_all(&ffroot).unwrap();
+    std::env::set_var("MOODLE_FIREFOX_ROOT", &ffroot);
+    let r = post("/api/shot/assign:7").send().await.unwrap();
+    assert_eq!(r.status(), 409);
+    assert!(r
+        .text()
+        .await
+        .unwrap()
+        .contains("inicia sessió a Moodle al Firefox"));
+    assert!(!log.exists());
+    ff::firefox_session(&ffroot);
+
+    // session in Firefox but the page is a login: 409
+    std::env::set_var("FAKE_MCP_URL", "https://x/login/index.php");
+    assert_eq!(
+        post("/api/shot/assign:7").send().await.unwrap().status(),
+        409
+    );
+    std::env::remove_var("FAKE_MCP_URL");
 
     // happy path
     let r = post("/api/shot/assign:7").send().await.unwrap();

@@ -1093,15 +1093,9 @@ impl Moodle {
     /// Renew the WS token from the live Firefox Moodle session (paths from
     /// `MOODLE_FIREFOX_ROOT` / `MOODLE_TOKEN_FILE`, else the usual ones).
     pub async fn refresh_token(&self) -> Renew {
-        let root = std::env::var("MOODLE_FIREFOX_ROOT").unwrap_or_else(|_| {
-            format!(
-                "{}/.mozilla/firefox",
-                std::env::var("HOME").unwrap_or_default()
-            )
-        });
         let file = std::env::var("MOODLE_TOKEN_FILE")
             .unwrap_or_else(|_| format!("{}/.moodle/token", Self::moodle_root()));
-        self.refresh_token_at(Path::new(&root), Path::new(&file))
+        self.refresh_token_at(&crate::firefox::root(), Path::new(&file))
             .await
     }
 
