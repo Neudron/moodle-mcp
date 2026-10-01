@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const src = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const block = (n) => src.split(`// ${n}-helpers-start`)[1].split(`// ${n}-helpers-end`)[0];
-const { rankProposals, groupByDue, shouldSoftRoute } = new Function(`${block('triage')}; return { rankProposals, groupByDue, shouldSoftRoute };`)();
+const { rankProposals, groupByDue, shouldSoftRoute, filterFor } = new Function(`${block('triage')}; return { rankProposals, groupByDue, shouldSoftRoute, filterFor };`)();
 
 const p = (id, s) => ({ task: { id, ai_score: s } });
 test('rankProposals', () => {
@@ -44,4 +44,10 @@ test('shouldSoftRoute', () => {
   assert.equal(shouldSoftRoute(1, 0, 'BODY', 'tauler'), false);
   for (const tag of ['INPUT', 'TEXTAREA', 'SELECT']) assert.equal(shouldSoftRoute(1, 2, tag, 'tauler'), false);
   for (const v of ['edita', 'ide']) assert.equal(shouldSoftRoute(1, 2, 'BODY', v), false);
+});
+
+test('filterFor', () => {
+  assert.deepEqual(filterFor('llista', 'zzz', 'late'), { q: 'zzz', mode: 'late' });
+  assert.deepEqual(filterFor('agenda', 'zzz', 'late'), { q: '', mode: 'all' });
+  assert.deepEqual(filterFor('curs', 'x', 'all'), { q: '', mode: 'all' });
 });

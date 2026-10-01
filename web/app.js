@@ -306,15 +306,16 @@ views.tauler = async () => {
   const none = h('div', { hidden: true }, empty('Cap tasca coincideix', 'Prova un altre filtre o esborra la cerca.'));
   let mode = 'all';
   const apply = () => {
-    const q = input.value.trim().toLowerCase();
+    const q0 = input.value.trim().toLowerCase();
     let shown = 0;
     for (const b of blocks) {
+      const { q, mode: m } = b.key === 'ai' ? filterFor(all.length ? tabs.sel.tauler : 'llista', q0, mode) : { q: q0, mode };
       // 'Antigues' counts as overdue for the segmented filter.
-      const inMode = mode === 'all' || mode === b.key || (mode === 'late' && b.key === 'old');
+      const inMode = m === 'all' || m === b.key || (m === 'late' && b.key === 'old');
       let n = 0;
       for (const r of b.rows) { const ok = inMode && (!q || r.textContent.toLowerCase().includes(q)); r.hidden = !ok; if (ok) n++; }
       b.el.hidden = !n;
-      if (n && (q || mode !== 'all')) { if (b.el.tagName === 'DETAILS') b.el.open = true; if (b.fold) b.fold.open = true; }
+      if (n && (q || m !== 'all')) { if (b.el.tagName === 'DETAILS') b.el.open = true; if (b.fold) b.fold.open = true; }
       shown += n;
     }
     none.hidden = shown > 0;
@@ -340,7 +341,7 @@ views.tauler = async () => {
       { id: 'llista', label: 'Llista', render: () => h('div', {}, h('div', { class: 'v-tools' }, seg, h('label', { class: 'sr-only', for: 'filter' }, 'Filtra tasques'), input), sections, oldEl, none) },
       { id: 'agenda', label: 'Agenda', render: () => agendaView(pendingList, now) },
       { id: 'curs', label: 'Per curs', render: () => perCurs(pendingList) },
-    ], 'Vista del tauler', true) : [sections, oldEl, none],
+    ], 'Vista del tauler', true, () => apply()) : [sections, oldEl, none],
     propEl);
   if (input.value) apply(); // filter survives soft refreshes
   return out;
@@ -403,7 +404,7 @@ function lazyPreview(box, o) {
 }
 
 // WAI-ARIA tabs; panels render once on first select; active id survives soft refreshes in tabs.sel[key].
-function tabs(key, items, label = 'Seccions de la tasca', persist) {
+function tabs(key, items, label = 'Seccions de la tasca', persist, onPick) {
   tabs.sel ??= {};
   const btns = [], panels = [];
   const pick = (i, focus) => {
@@ -414,6 +415,7 @@ function tabs(key, items, label = 'Seccions de la tasca', persist) {
     });
     if (!panels[i].hasChildNodes()) panels[i].append(items[i].render());
     if (focus) btns[i].focus();
+    onPick?.(items[i].id);
   };
   items.forEach((it, i) => {
     btns.push(h('button', { type: 'button', role: 'tab', id: `tab-${key}-${it.id}`, 'aria-controls': `pn-${key}-${it.id}`, onclick: () => pick(i),
@@ -611,6 +613,8 @@ function groupByDue(tasks, now) {
   }
   return g;
 }
+// The Tauler filter only applies to the AI proposals while the Llista tab is showing.
+const filterFor = (tab, q, mode) => (tab === 'llista' ? { q, mode } : { q: '', mode: 'all' });
 // Refresh the view when a sync finished, unless the user is typing or editing.
 const shouldSoftRoute = (prev, cur, tag, view) => !!prev && !!cur && prev !== cur && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && view !== 'edita' && view !== 'ide';
 // triage-helpers-end
