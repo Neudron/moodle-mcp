@@ -281,19 +281,25 @@ fn junk(title: &str) -> bool {
 
 /// Same course and same normalised title (or one contains the other, both 8+ chars) as a Moodle task.
 /// `own` is the id prefix of the item being scanned: its own earlier rows never count as dups.
-pub fn is_dup(existing: &[Task], course: &str, title: &str, own: &str) -> bool {
+pub fn is_dup(existing: &[Task], course: &str, title: &str, own: &str, url: &str) -> bool {
     let k = key(title);
     existing.iter().any(|t| {
         if t.course != course {
             return false;
         }
         if t.source == "ai" {
-            // same exercise in another copy of the document (old .pdf, dated re-upload)
-            return !t.id.starts_with(own) && key(&t.title) == k;
+            // same source url: an edited re-scan of the same file
+            return t.url == url && !t.id.starts_with(own) && key(&t.title) == k;
         }
         let e = key(&t.title);
-        e == k || (e.len() >= 8 && k.len() >= 8 && (e.contains(&k) || k.contains(&e)))
+        let (s, l) = (e.len().min(k.len()), e.len().max(k.len()));
+        e == k || (s >= 8 && (e.contains(&k) || k.contains(&e)) && s * 10 >= l * 6)
     })
+}
+
+/// Prune key: the same title from another source document is a different exercise.
+fn prune_key(t: &Task) -> (String, String, String) {
+    (t.course.clone(), key(&t.title), t.url.clone())
 }
 
 fn esc(s: &str) -> String {
@@ -320,6 +326,7 @@ pub fn to_tasks(sha: &str, item: &Item, cands: &[Cand], existing: &[Task]) -> Ve
                     &item.course,
                     &c.title,
                     &format!("ai:{}:", &sha[..12]),
+                    &item.src,
                 )
         })
         .map(|(i, c)| {
@@ -1274,7 +1281,7 @@ async fn rescore(app: &App) {
     let mut seen = std::collections::HashSet::new();
     let mut todo = Vec::new();
     for t in old {
-        if !seen.insert((t.course.clone(), key(&t.title))) {
+        if !seen.insert(prune_key(&t)) {
             if !backup_once(app, &mut backed) {
                 return;
             }
@@ -1516,16 +1523,32 @@ mod tests {
     #[test]
     fn dedupe_against_moodle_tasks() {
         let ex = [moodle("A", "Entrega 1: Memòria del projecte")];
-        let d = |ex: &[Task], c: &str, t: &str| is_dup(ex, c, t, "ai:own:");
+        let d = |ex: &[Task], c: &str, t: &str| is_dup(ex, c, t, "ai:own:", "a.pdf");
         assert!(d(&ex, "A", "entrega 1 - memoria del projecte"));
         assert!(d(&ex, "A", "Entrega 1: Memòria del projecte (PDF)"));
         assert!(!d(&ex, "B", "Entrega 1: Memòria del projecte"));
         assert!(!d(&ex, "A", "Presentació oral"));
+        assert!(!d(
+            &[moodle("A", "Activitat")],
+            "A",
+            "Activitat final del projecte de la unitat"
+        ));
+        let (mut x, mut y) = (moodle("A", "Exercici 1"), moodle("A", "Exercici 1"));
+        (x.url, y.url) = ("a.pdf".into(), "b.pdf".into());
+        assert_ne!(prune_key(&x), prune_key(&y));
         assert!(!d(&[moodle("A", "Ex")], "A", "Ex 2")); // short titles: equality only
         let mut ai = moodle("A", "Presentació oral");
         ai.source = "ai".into();
         ai.id = "ai:other:0".into();
-        assert!(d(&[ai.clone()], "A", "Presentació oral")); // same exercise, other copy
+        ai.url = "a.pdf".into();
+        assert!(d(&[ai.clone()], "A", "Presentació oral")); // same exercise, same url
+        assert!(!is_dup(
+            &[ai.clone()],
+            "A",
+            "Presentació oral",
+            "ai:own:",
+            "b.pdf"
+        )); // other url
         assert!(!d(&[ai.clone()], "A", "Presentació oral (2)")); // AI rows: equality only
         ai.id = "ai:own:3".into();
         assert!(!d(&[ai], "A", "Presentació oral")); // own earlier rows never dedupe
