@@ -82,9 +82,6 @@ pub struct SyncFilters {
     /// Keep empty modules on disk instead of skipping them.
     #[serde(default)]
     pub keep_empty: bool,
-    /// Dry run: compute the plan and serialise it, download nothing.
-    #[serde(default)]
-    pub dry_run: bool,
 }
 
 /// One file the executor must download (or materialise, for externals).

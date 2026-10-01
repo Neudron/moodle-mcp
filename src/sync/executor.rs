@@ -3,7 +3,7 @@
 //! Binding for Tasks 4–5: `executor::run(plan, sem(8), governor) -> Report`.
 //! Concretely: [`run`] takes the [`Plan`][crate::sync::planner::Plan], a
 //! [`RunContext`], [`RunOptions`] (concurrency defaults to 8, clamped
-//! 1–32; optional `--max-mbps` byte cap) and the previous file map for
+//! 1–32) and the previous file map for
 //! reuse/move bookkeeping. It returns the full [`Report`] plus the new
 //! `url → FileEntry` map the caller stores.
 //!
@@ -21,7 +21,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     Arc,
 };
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::{Mutex, Semaphore};
 
@@ -42,15 +42,12 @@ const MAX_CONCURRENCY: usize = 32;
 pub struct RunOptions {
     /// File-task concurrency (clamped 1–32, default 8).
     pub concurrency: usize,
-    /// Global byte-rate cap in Mbit/s (`--max-mbps`). `None` = uncapped.
-    pub max_mbps: Option<f64>,
 }
 
 impl Default for RunOptions {
     fn default() -> Self {
         Self {
             concurrency: DEFAULT_CONCURRENCY,
-            max_mbps: None,
         }
     }
 }
@@ -59,13 +56,6 @@ impl RunOptions {
     #[must_use]
     pub fn concurrency_clamped(&self) -> usize {
         self.concurrency.clamp(MIN_CONCURRENCY, MAX_CONCURRENCY)
-    }
-
-    #[must_use]
-    pub fn max_bytes_per_sec(&self) -> Option<f64> {
-        self.max_mbps
-            .filter(|m| m.is_finite() && *m > 0.0)
-            .map(|m| m * 1_000_000.0 / 8.0)
     }
 }
 
@@ -76,49 +66,6 @@ pub struct RunContext {
     pub shortname: String,
     pub course_dir: PathBuf,
     pub root: PathBuf,
-}
-
-/// Global byte-rate cap shared by all file tasks of one run.
-struct ByteCap {
-    max_bps: Option<f64>,
-    state: Mutex<(Instant, u64)>,
-}
-
-impl ByteCap {
-    fn new(max_bps: Option<f64>) -> Self {
-        Self {
-            max_bps,
-            state: Mutex::new((Instant::now(), 0)),
-        }
-    }
-
-    async fn consume(&self, n: u64) {
-        let Some(max) = self.max_bps else {
-            return;
-        };
-        if max <= 0.0 || n == 0 {
-            return;
-        }
-        loop {
-            let wait = {
-                let mut guard = self.state.lock().await;
-                let now = Instant::now();
-                if now.duration_since(guard.0) >= Duration::from_secs(1) {
-                    *guard = (now, n.min(max as u64));
-                    None
-                } else if (guard.1 as f64) + (n as f64) <= max {
-                    guard.1 += n;
-                    None
-                } else {
-                    Some((guard.0 + Duration::from_secs(1)).saturating_duration_since(now))
-                }
-            };
-            match wait {
-                Some(d) => tokio::time::sleep(d).await,
-                None => return,
-            }
-        }
-    }
 }
 
 fn system_secs(time: SystemTime) -> i64 {
@@ -302,7 +249,6 @@ async fn download_one(
     dest_abs: PathBuf,
     dest_rel: String,
     sem: Arc<Semaphore>,
-    cap: Arc<ByteCap>,
     abort: Arc<AtomicBool>,
 ) -> TaskOutcome {
     // Hold the permit for the whole download (binding: sem(8)).
@@ -318,7 +264,6 @@ async fn download_one(
     let part = part_for(&dest_abs);
     match client.download_resumable(&file.url, &part).await {
         Ok(meta) => {
-            cap.consume(meta.size).await;
             if tokio::fs::rename(&part, &dest_abs).await.is_err() {
                 let _ = tokio::fs::remove_file(&part).await;
                 return TaskOutcome::Failed(format!("{}: cannot finalize download", file.filename));
@@ -441,7 +386,6 @@ pub async fn run(
 
     // Phase 3b — pluginfile downloads, 8-way over the shared governor.
     let sem = Arc::new(Semaphore::new(opts.concurrency_clamped()));
-    let cap = Arc::new(ByteCap::new(opts.max_bytes_per_sec()));
     let mut handles = Vec::new();
     for file in &plan.fetch {
         if file.is_external || abort.load(Ordering::SeqCst) {
@@ -456,7 +400,6 @@ pub async fn run(
             dest_abs,
             dest_rel,
             Arc::clone(&sem),
-            Arc::clone(&cap),
             Arc::clone(&abort),
         );
         handles.push(tokio::spawn(task));
@@ -496,7 +439,6 @@ pub async fn run(
             dest_abs,
             dest_rel,
             Arc::clone(&sem),
-            Arc::clone(&cap),
             Arc::clone(&abort),
         );
         fallback_tasks.push(tokio::spawn(task));
@@ -606,27 +548,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn run_options_clamp_and_cap() {
-        let low = RunOptions {
-            concurrency: 0,
-            max_mbps: None,
-        };
+    fn run_options_clamp() {
+        let low = RunOptions { concurrency: 0 };
         assert_eq!(low.concurrency_clamped(), 1);
-        let high = RunOptions {
-            concurrency: 99,
-            max_mbps: None,
-        };
+        let high = RunOptions { concurrency: 99 };
         assert_eq!(high.concurrency_clamped(), 32);
-        let capped = RunOptions {
-            concurrency: 8,
-            max_mbps: Some(8.0),
-        };
-        assert_eq!(capped.max_bytes_per_sec(), Some(1_000_000.0));
-        let bad = RunOptions {
-            concurrency: 8,
-            max_mbps: Some(f64::NAN),
-        };
-        assert_eq!(bad.max_bytes_per_sec(), None);
     }
 
     #[test]

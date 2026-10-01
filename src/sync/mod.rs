@@ -6,14 +6,10 @@
 //!
 //! Pipeline per course: `contents` (retry) → [`planner::plan`] (size
 //! pre-check + filters) → [`executor::run`] (Semaphore 8 over the single
-//! shared client governor, `.part` + rename, Mbps cap) → [`indexer`]
+//! shared client governor, `.part` + rename) → [`indexer`]
 //! (frontmatter `index.md`, per-module/section `meta.json`) → receipt
-//! `last-sync.json`. Stale entries drop out of state but are never deleted
-//! here — deletion is the two-step [`gc`] flow (`preview → trash → apply`).
+//! `last-sync.json`. Stale entries drop out of state but are never deleted.
 //!
-//! [`sync_course`] keeps the historic signature so `src/bin/*` are
-//! untouched; [`sync_course_with_options`] and [`plan_course`] carry the
-//! new filters/concurrency/dry-run surface for the CLI/MCP tasks.
 
 pub mod executor;
 pub mod gc;
@@ -22,15 +18,12 @@ pub mod planner;
 pub mod report;
 
 pub use executor::{run, RunContext, RunOptions, DEFAULT_CONCURRENCY};
-pub use gc::{
-    append_audit, apply_trash, iso_now, preview, repair, trash, unix_secs_now, unix_to_iso8601,
-    verify, write_receipt, GcCandidate, Receipt, RepairReport, VerifyMismatch,
-};
+pub use gc::{iso_now, unix_secs_now, unix_to_iso8601, write_receipt, Receipt};
 pub use indexer::{IndexRow, ModuleFileMeta};
 pub use planner::{ConflictStrategy, FileMove, Plan, PlannedFile, StaleEntry, SyncFilters};
 pub use report::{Report, SyncReport};
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -194,49 +187,6 @@ async fn write_readmes(layout: &[SectionLayout]) -> Result<()> {
     Ok(())
 }
 
-/// Dry-run helper for `--dry-run` JSON output: fetch + plan, no writes.
-pub async fn plan_course(
-    moodle: &Moodle,
-    state: &State,
-    course: &Course,
-    filters: &SyncFilters,
-) -> Result<Plan> {
-    let contents = fetch_contents(moodle, course.id).await?;
-    let dir_name = course_dir_name(course);
-    let previous = state.courses.get(&course.id.to_string());
-    let plan = match previous {
-        Some(cs) => planner::plan(&contents, filters, cs, &dir_name),
-        None => planner::plan(
-            &contents,
-            filters,
-            &crate::state::CourseState::default(),
-            &dir_name,
-        ),
-    };
-    Ok(plan)
-}
-
-/// Historic entry point (signature frozen for `src/bin/*`): full sync with
-/// default filters and concurrency 8.
-pub async fn sync_course(
-    moodle: &Moodle,
-    state: &mut State,
-    course: &Course,
-    root: &str,
-) -> Result<SyncReport> {
-    let report = sync_course_with_options(
-        moodle,
-        state,
-        course,
-        root,
-        &SyncFilters::default(),
-        &RunOptions::default(),
-        "sync",
-    )
-    .await?;
-    Ok(report.to_sync_report())
-}
-
 /// `sync_course`, but on an Auth failure renew the token once and retry.
 pub async fn sync_course_renewing(
     moodle: &Moodle,
@@ -257,16 +207,15 @@ pub async fn sync_course_renewing(
     }
 }
 
-/// Full sync with explicit filters, run options and audit actor.
-pub async fn sync_course_with_options(
+/// Full sync with default filters and concurrency 8.
+pub async fn sync_course(
     moodle: &Moodle,
     state: &mut State,
     course: &Course,
     root: &str,
-    filters: &SyncFilters,
-    opts: &RunOptions,
-    actor: &str,
-) -> Result<Report> {
+) -> Result<SyncReport> {
+    let filters = SyncFilters::default();
+    let opts = RunOptions::default();
     let started = std::time::Instant::now();
     let root_path = Path::new(root).to_path_buf();
     let dir_name = course_dir_name(course);
@@ -283,20 +232,10 @@ pub async fn sync_course_with_options(
         .cloned()
         .unwrap_or_default();
     cs.upsert(course);
-    let prev_synced_at = cs.synced_at.clone();
     // State v2 (Task 4): ISO8601 on write; v1 epoch values migrate on load.
     cs.synced_at = iso_now();
 
-    let plan = planner::plan(&contents, filters, &cs, &dir_name);
-    if filters.dry_run {
-        let mut report = Report::empty(course.id, &course.shortname);
-        report.files_skipped = plan.reuse.len() + plan.moves.len();
-        report.duration_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-        cs.synced_at = prev_synced_at; // dry runs leave state alone
-        state.courses.insert(course.id.to_string(), cs);
-        return Ok(report);
-    }
-
+    let plan = planner::plan(&contents, &filters, &cs, &dir_name);
     let layout = layout_sections(
         &contents,
         &course_dir,
@@ -321,7 +260,7 @@ pub async fn sync_course_with_options(
         course_dir: course_dir.clone(),
         root: root_path.clone(),
     };
-    let (mut report, new_files) = run(moodle, &plan, &ctx, opts, &old_files).await;
+    let (mut report, new_files) = run(moodle, &plan, &ctx, &opts, &old_files).await;
     // Commit state before fallible writes so downloaded files stay tracked.
     cs.files = new_files.clone();
     state.courses.insert(course.id.to_string(), cs);
@@ -341,9 +280,7 @@ pub async fn sync_course_with_options(
     };
     report.duration_ms = receipt.duration_ms;
     write_receipt(&course_dir, &receipt).await?;
-    let _ = actor;
-
-    Ok(report)
+    Ok(report.to_sync_report())
 }
 
 fn planned_lookup(plan: &Plan) -> HashMap<String, PlannedFile> {
@@ -364,8 +301,6 @@ async fn write_index_and_meta(
     new_files: &BTreeMap<String, crate::state::FileEntry>,
 ) -> Result<()> {
     let lookup = planned_lookup(plan);
-    let active: HashSet<String> = new_files.keys().cloned().collect();
-    let _ = active;
 
     let mut rows: Vec<IndexRow> = Vec::new();
     // (section folder, module folder) → file metas.

@@ -1,21 +1,17 @@
 //! Task 3 Step 3: sync engine end-to-end against the mock fixture.
 //!
 //! Full sync (tree + frontmatter index + meta.json + receipt), resume from a
-//! truncated `.part`, verify/repair, GC preview→trash→apply with audit,
-//! external `.url`+`.md` pointers tracked in state, filters + dry-run.
+//! truncated `.part`, external `.url`+`.md` pointers tracked in state, filters.
 
 #[path = "integration/mock.rs"]
 mod mock;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use mock::{MockMoodle, COURSE_ID, TOKEN};
 use moodle_mcp::moodle::{Course, ModuleFile, Moodle};
 use moodle_mcp::state::{CourseState, FileEntry, State};
-use moodle_mcp::sync::{
-    plan_course, preview, repair, sync_course, sync_course_with_options, trash, verify, RunContext,
-    RunOptions, SyncFilters,
-};
+use moodle_mcp::sync::{sync_course, RunContext, RunOptions, SyncFilters};
 
 fn client(m: &MockMoodle) -> Moodle {
     Moodle::new(m.base(), TOKEN)
@@ -140,85 +136,6 @@ async fn e2e_resume_truncated_part_and_missing_file() {
 }
 
 #[tokio::test]
-async fn e2e_verify_and_repair() {
-    let (_m, c, courses, root) = setup().await;
-    let course = course_of(&courses);
-    let mut state = State::default();
-    sync_course(&c, &mut state, course, &root)
-        .await
-        .expect("seed");
-    let root_path = std::path::Path::new(&root).to_path_buf();
-    let files = state.courses.get("101").expect("state").files.clone();
-
-    assert!(
-        verify(&root_path, &files).await.is_empty(),
-        "fresh sync must verify clean"
-    );
-
-    let entry = files.values().next().expect("entry");
-    let dest = root_path.join(&entry.path);
-    let raw = std::fs::read(&dest).expect("read");
-    std::fs::write(&dest, &raw[..raw.len() / 2]).expect("corrupt");
-    let mismatches = verify(&root_path, &files).await;
-    assert_eq!(mismatches.len(), 1);
-    assert_eq!(mismatches[0].reason, "size_mismatch");
-
-    let rep = repair(&c, &root_path, &mismatches, "test").await;
-    assert_eq!(rep.fixed, 1, "errors: {:?}", rep.errors);
-    assert_eq!(rep.failed, 0);
-    assert!(
-        verify(&root_path, &files).await.is_empty(),
-        "repaired tree must verify clean"
-    );
-}
-
-#[tokio::test]
-async fn e2e_gc_preview_trash_apply_with_audit() {
-    use moodle_mcp::sync::apply_trash;
-    let (_m, c, courses, root) = setup().await;
-    let course = course_of(&courses);
-    let mut state = State::default();
-    sync_course(&c, &mut state, course, &root)
-        .await
-        .expect("seed");
-    let root_path = std::path::Path::new(&root).to_path_buf();
-
-    // Inject a stale entry: real file on disk + state row, unknown URL.
-    let stale_rel = "MOCK101/RA01/001-Module 1.0/stale-note.txt";
-    std::fs::write(root_path.join(stale_rel), b"stale").expect("stale file");
-    let cs = state.courses.get_mut("101").expect("state");
-    cs.files.insert(
-        "http://127.0.0.1:9/webservice/pluginfile.php/9/stale.txt".to_string(),
-        FileEntry {
-            path: stale_rel.to_string(),
-            sha256: "deadbeef".to_string(),
-            size: 5,
-            ..Default::default()
-        },
-    );
-    let files = cs.files.clone();
-    let active: HashSet<String> = files
-        .keys()
-        .filter(|u| !u.contains("/9/stale.txt"))
-        .cloned()
-        .collect();
-    let candidates = preview(&files, &active);
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].path, stale_rel);
-
-    let trash_dir = trash(&candidates, &root_path, "test").await.expect("trash");
-    assert!(!root_path.join(stale_rel).exists(), "trashed away");
-    assert!(trash_dir.join(stale_rel).is_file(), "preserved under trash");
-    let audit = std::fs::read_to_string(root_path.join(".moodle/audit.jsonl")).expect("audit");
-    assert!(audit.contains("\"action\":\"trash\""), "{audit}");
-
-    apply_trash(&trash_dir, &root_path, "test")
-        .await
-        .expect("apply");
-    assert!(!trash_dir.exists());
-}
-
-#[tokio::test]
 async fn e2e_external_pointers_tracked_in_state() {
     let (m, c, courses, root) = setup().await;
     let course = course_of(&courses);
@@ -275,9 +192,8 @@ async fn e2e_external_pointers_tracked_in_state() {
 }
 
 #[tokio::test]
-async fn e2e_filters_and_dry_run() {
-    let (_m, c, courses, root) = setup().await;
-    let course = course_of(&courses);
+async fn e2e_filters() {
+    let (_m, c, _courses, _root) = setup().await;
     let contents = c.contents(COURSE_ID).await.expect("contents");
     let empty = State::default();
     let empty_cs = CourseState::default();
@@ -317,35 +233,6 @@ async fn e2e_filters_and_dry_run() {
             .len(),
         1
     );
-
-    let plan = plan_course(&c, &empty, course, &only)
-        .await
-        .expect("plan_course");
-    assert_eq!(plan.fetch.len(), 10);
-    assert!(plan.to_json().is_ok());
-
-    // Dry run downloads nothing and leaves the tree empty.
-    let mut state = State::default();
-    let dry = SyncFilters {
-        dry_run: true,
-        ..Default::default()
-    };
-    let r = sync_course_with_options(
-        &c,
-        &mut state,
-        course,
-        &root,
-        &dry,
-        &RunOptions::default(),
-        "test",
-    )
-    .await
-    .expect("dry run");
-    assert_eq!(r.files_new, 0);
-    assert!(r.errors.is_empty());
-    let course_dir = std::path::Path::new(&root).join("MOCK101");
-    let entries = std::fs::read_dir(&course_dir).expect("course dir").count();
-    assert_eq!(entries, 0, "dry run must not write files");
 }
 
 #[tokio::test]
