@@ -8,7 +8,9 @@
 //! pre-check + filters) → [`executor::run`] (Semaphore 8 over the single
 //! shared client governor, `.part` + rename) → [`indexer`]
 //! (frontmatter `index.md`, per-module/section `meta.json`) → receipt
-//! `last-sync.json`. Stale entries drop out of state but are never deleted.
+//! `last-sync.json`. Stale entries drop out of state; the file moves to
+//! `.moodle/trash/sync-<ts>/` only if its sha still matches (see
+//! [`trash_untouched`]), otherwise it stays.
 //!
 
 pub mod executor;
@@ -74,6 +76,31 @@ pub fn course_dir_name(root: &str, course: &Course) -> Result<String> {
         let _ = crate::web::files::write_atomic(&path, t);
     }
     Ok(dir)
+}
+
+/// Move `<root>/<rel>` to `.moodle/trash/sync-<ts>/<rel>` iff it exists and its
+/// sha256 equals `sha` (untouched). Empty parent dirs are pruned up to `root`.
+pub fn trash_untouched(root: &Path, rel: &str, sha: &str, ts: u64) -> bool {
+    use sha2::Digest as _;
+    let from = root.join(rel);
+    let same = !sha.is_empty()
+        && std::fs::read(&from).is_ok_and(|b| format!("{:x}", sha2::Sha256::digest(b)) == sha);
+    let to = root.join(format!(".moodle/trash/sync-{ts}/{rel}"));
+    let moved = same
+        && to
+            .parent()
+            .is_some_and(|d| std::fs::create_dir_all(d).is_ok())
+        && std::fs::rename(&from, &to).is_ok();
+    if moved {
+        let mut d = from.parent();
+        while let Some(p) = d.filter(|p| *p != root) {
+            if std::fs::remove_dir(p).is_err() {
+                break;
+            }
+            d = p.parent();
+        }
+    }
+    moved
 }
 
 async fn fetch_contents(moodle: &Moodle, course_id: i64) -> Result<Vec<CourseSection>> {
@@ -295,6 +322,15 @@ pub async fn sync_course(
     // Commit state before fallible writes so downloaded files stay tracked.
     cs.files = new_files.clone();
     state.courses.insert(course.id.to_string(), cs);
+
+    let ts = unix_secs_now();
+    report.files_removed = plan
+        .stale
+        .iter()
+        .filter(|s| !new_files.values().any(|e| e.path == s.path))
+        .filter_map(|s| old_files.get(&s.url))
+        .filter(|e| trash_untouched(&root_path, &e.path, &e.sha256, ts))
+        .count();
 
     write_index_and_meta(course, &layout, &plan, &new_files).await?;
     write_course_summary(&course_dir, course).await?;

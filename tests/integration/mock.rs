@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
     Arc,
 };
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
@@ -60,6 +60,8 @@ struct Shared {
     status: Option<&'static str>,
     files_down: Arc<AtomicBool>,
     insert_first: Arc<AtomicBool>,
+    drop_s1: Arc<AtomicBool>,
+    no_courses: Arc<AtomicU8>,
 }
 
 pub struct MockMoodle {
@@ -84,6 +86,8 @@ pub struct MockMoodle {
     hits: Arc<AtomicUsize>,
     files_down: Arc<AtomicBool>,
     insert_first: Arc<AtomicBool>,
+    drop_s1: Arc<AtomicBool>,
+    no_courses: Arc<AtomicU8>,
 }
 
 impl MockMoodle {
@@ -95,6 +99,8 @@ impl MockMoodle {
         let (site_info, courses, contents, files) = fixtures(&base);
         let files_down = Arc::new(AtomicBool::new(false));
         let insert_first = Arc::new(AtomicBool::new(false));
+        let drop_s1 = Arc::new(AtomicBool::new(false));
+        let no_courses = Arc::new(AtomicU8::new(0));
         let shared = Arc::new(Shared {
             site_info: site_info.clone(),
             courses: courses.clone(),
@@ -108,6 +114,8 @@ impl MockMoodle {
             status: config.status,
             files_down: Arc::clone(&files_down),
             insert_first: Arc::clone(&insert_first),
+            drop_s1: Arc::clone(&drop_s1),
+            no_courses: Arc::clone(&no_courses),
         });
         let hits = Arc::new(AtomicUsize::new(0));
         let hits_accept = Arc::clone(&hits);
@@ -134,6 +142,8 @@ impl MockMoodle {
             hits,
             files_down,
             insert_first,
+            drop_s1,
+            no_courses,
         }
     }
 
@@ -142,6 +152,18 @@ impl MockMoodle {
     #[allow(dead_code)]
     pub fn set_insert_first(&self, on: bool) {
         self.insert_first.store(on, Ordering::SeqCst);
+    }
+
+    /// While true, section 1 of `core_course_get_contents` has no modules.
+    #[allow(dead_code)]
+    pub fn set_drop_s1(&self, on: bool) {
+        self.drop_s1.store(on, Ordering::SeqCst);
+    }
+
+    /// `core_enrol_get_users_courses`: 0 = all, 1 = `[]`, 2 = only the second course.
+    #[allow(dead_code)]
+    pub fn set_courses(&self, mode: u8) {
+        self.no_courses.store(mode, Ordering::SeqCst);
     }
 
     /// While true, every pluginfile download answers HTTP 500.
@@ -464,10 +486,17 @@ fn route(
                 serde_json::to_vec(&shared.site_info).unwrap_or_default()
             }
             Some("core_enrol_get_users_courses") => {
-                serde_json::to_vec(&shared.courses).unwrap_or_default()
+                match shared.no_courses.load(Ordering::SeqCst) {
+                    1 => b"[]".to_vec(),
+                    2 => serde_json::to_vec(&[shared.courses[1].clone()]).unwrap_or_default(),
+                    _ => serde_json::to_vec(&shared.courses).unwrap_or_default(),
+                }
             }
             Some("core_course_get_contents") => {
                 let mut c = shared.contents.clone();
+                if shared.drop_s1.load(Ordering::SeqCst) {
+                    c[1]["modules"] = serde_json::json!([]);
+                }
                 if shared.insert_first.load(Ordering::SeqCst) {
                     if let Some(m) = c[1]["modules"].as_array_mut() {
                         m.insert(

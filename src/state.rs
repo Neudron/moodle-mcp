@@ -468,6 +468,18 @@ impl State {
         disk.write_snapshot(root, &dir, &path)
     }
 
+    /// Remove a course from the on-disk state (unenrolled).
+    pub fn drop_course(&self, root: &str, id: i64) -> Result<()> {
+        let dir = moodle_dir(root);
+        let path = state_path(root);
+        let lock = open_lock(root)?;
+        lock.lock_exclusive()
+            .context("locking state for write (another sync running?)")?;
+        let mut disk = parse_state(&path, &std::fs::read_to_string(&path)?, &dir)?;
+        disk.courses.remove(&id.to_string());
+        disk.write_snapshot(root, &dir, &path)
+    }
+
     fn write_snapshot(&self, root: &str, dir: &Path, path: &Path) -> Result<()> {
         let snapshot = State {
             schema_version: SCHEMA_VERSION.max(self.schema_version),

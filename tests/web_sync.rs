@@ -178,3 +178,61 @@ async fn failed_course_call_deletes_nothing() {
     assert!(db.task("assign:999").unwrap().is_some());
     assert!(db.task("assign:7").unwrap().is_some());
 }
+
+#[tokio::test]
+async fn sync_all_writes_result_and_clears_progress() {
+    let m = MockMoodle::healthy().await;
+    let c = Moodle::new(m.base(), TOKEN);
+    let db = Db::memory().unwrap();
+    let r = root("result");
+    sync_all(&c, &db, &r, true).await.unwrap();
+    m.set_drop_s1(true);
+    sync_all(&c, &db, &r, true).await.unwrap();
+    let res: serde_json::Value =
+        serde_json::from_str(&db.kv_get("sync_result").unwrap().unwrap()).unwrap();
+    assert_eq!(res["files_removed"], 20); // mock serves 10 s1 files to each of 2 courses
+    assert!(res["at"].is_number() && res["errors"].is_array());
+    assert!(db
+        .kv_get("sync_progress")
+        .unwrap()
+        .unwrap_or_default()
+        .is_empty());
+}
+
+#[tokio::test]
+async fn empty_course_list_trashes_nothing() {
+    let m = MockMoodle::healthy().await;
+    let c = Moodle::new(m.base(), TOKEN);
+    let db = Db::memory().unwrap();
+    let r = root("nocourses");
+    sync_all(&c, &db, &r, true).await.unwrap();
+    m.set_courses(1);
+    sync_all(&c, &db, &r, true).await.unwrap();
+    let st = moodle_mcp::state::State::load(&r).unwrap();
+    let f = &st.courses["101"].files.values().next().unwrap().path;
+    assert!(std::path::Path::new(&r).join(f).is_file());
+    assert!(!std::path::Path::new(&r).join(".moodle/trash").exists());
+}
+
+#[tokio::test]
+async fn unenrolled_course_files_are_trashed() {
+    let m = MockMoodle::healthy().await;
+    let c = Moodle::new(m.base(), TOKEN);
+    let db = Db::memory().unwrap();
+    let r = root("unenrol");
+    sync_all(&c, &db, &r, true).await.unwrap();
+    let f = moodle_mcp::state::State::load(&r).unwrap().courses["101"]
+        .files
+        .values()
+        .next()
+        .unwrap()
+        .path
+        .clone();
+    assert!(std::path::Path::new(&r).join(&f).is_file());
+    m.set_courses(2);
+    sync_all(&c, &db, &r, true).await.unwrap();
+    let st = moodle_mcp::state::State::load(&r).unwrap();
+    assert!(!st.courses.contains_key("101"));
+    assert!(!std::path::Path::new(&r).join(&f).exists());
+    assert!(std::path::Path::new(&r).join(".moodle/trash").is_dir());
+}

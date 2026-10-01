@@ -334,3 +334,65 @@ async fn e2e_inserted_module_keeps_folders() {
         .collect();
     assert_eq!(paths, now, "no moves, no -2 files");
 }
+
+fn s1_paths(state: &State) -> Vec<String> {
+    state.courses["101"]
+        .files
+        .values()
+        .map(|f| f.path.clone())
+        .filter(|p| p.contains("/RA01/"))
+        .collect()
+}
+
+#[tokio::test]
+async fn e2e_upstream_deleted_file_goes_to_trash() {
+    let (m, c, courses, root) = setup().await;
+    let course = course_of(&courses);
+    let mut state = State::default();
+    sync_course(&c, &mut state, course, &root)
+        .await
+        .expect("seed");
+    let gone = s1_paths(&state);
+    assert!(!gone.is_empty());
+    m.set_drop_s1(true);
+    let r = sync_course(&c, &mut state, course, &root)
+        .await
+        .expect("resync");
+    assert_eq!(r.files_removed, gone.len(), "errors: {:?}", r.errors);
+    let tracked = s1_paths(&state);
+    assert!(tracked.is_empty(), "{tracked:?}");
+    let trash = std::fs::read_dir(std::path::Path::new(&root).join(".moodle/trash"))
+        .expect("trash")
+        .next()
+        .expect("sync dir")
+        .expect("e")
+        .path();
+    assert!(trash
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with("sync-"));
+    for p in &gone {
+        assert!(!std::path::Path::new(&root).join(p).exists(), "{p}");
+        assert!(trash.join(p).is_file(), "{p}");
+    }
+}
+
+#[tokio::test]
+async fn e2e_edited_stale_file_is_kept() {
+    let (m, c, courses, root) = setup().await;
+    let course = course_of(&courses);
+    let mut state = State::default();
+    sync_course(&c, &mut state, course, &root)
+        .await
+        .expect("seed");
+    let gone = s1_paths(&state);
+    let edited = std::path::Path::new(&root).join(&gone[0]);
+    std::fs::write(&edited, b"my notes").unwrap();
+    m.set_drop_s1(true);
+    let r = sync_course(&c, &mut state, course, &root)
+        .await
+        .expect("resync");
+    assert_eq!(r.files_removed, gone.len() - 1);
+    assert_eq!(std::fs::read(&edited).unwrap(), b"my notes");
+}

@@ -113,11 +113,12 @@ impl MoodleMcp {
                     shortname,
                     files_new,
                     files_skipped,
+                    files_removed,
                     errors,
                 }) => {
                     out.push(json!({
                         "course_id": course_id, "shortname": shortname,
-                        "files_new": files_new, "files_skipped": files_skipped,
+                        "files_new": files_new, "files_skipped": files_skipped, "files_removed": files_removed,
                         "errors": errors,
                     }));
                 }

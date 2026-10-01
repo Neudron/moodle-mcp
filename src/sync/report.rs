@@ -18,6 +18,8 @@ pub struct SyncReport {
     pub shortname: String,
     pub files_new: usize,
     pub files_skipped: usize,
+    #[serde(default)]
+    pub files_removed: usize,
     pub errors: Vec<String>,
 }
 
@@ -28,6 +30,9 @@ pub struct Report {
     pub shortname: String,
     pub files_new: usize,
     pub files_skipped: usize,
+    /// Upstream-deleted untouched files moved to `.moodle/trash/`.
+    #[serde(default)]
+    pub files_removed: usize,
     /// New payload bytes downloaded (moves/reuses contribute 0).
     pub bytes_new: u64,
     /// Wall-clock time for plan + execute + index, in milliseconds.
@@ -46,6 +51,7 @@ impl Report {
             shortname: shortname.to_string(),
             files_new: 0,
             files_skipped: 0,
+            files_removed: 0,
             bytes_new: 0,
             duration_ms: 0,
             errors: Vec::new(),
@@ -60,6 +66,7 @@ impl Report {
             shortname: self.shortname.clone(),
             files_new: self.files_new,
             files_skipped: self.files_skipped,
+            files_removed: self.files_removed,
             errors: self.errors.clone(),
         }
     }

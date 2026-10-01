@@ -2,8 +2,9 @@
 use crate::errors::CoreError;
 use crate::moodle::{Course, Moodle};
 use crate::web::db::{Attachment, Db, Task};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::LazyLock;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -178,7 +179,24 @@ async fn ws(m: &Moodle, f: &str, p: &[(&str, String)]) -> Result<Value, CoreErro
     }
 }
 
+fn progress(db: &Db, phase: &str, i: usize, n: usize, course: &str) {
+    let v = json!({"phase": phase, "i": i, "n": n, "course": course});
+    let _ = db.kv_set("sync_progress", &v.to_string());
+}
+
+/// Sync tasks (and files); kv `sync_progress` runs during, `sync_result` is the summary.
 pub async fn sync_all(
+    m: &Moodle,
+    db: &Db,
+    root: &str,
+    files: bool,
+) -> Result<Vec<Event>, CoreError> {
+    let r = sync_all_inner(m, db, root, files).await;
+    let _ = db.kv_set("sync_progress", "");
+    r
+}
+
+async fn sync_all_inner(
     m: &Moodle,
     db: &Db,
     root: &str,
@@ -204,7 +222,8 @@ pub async fn sync_all(
     let base = m.base().to_string();
     let mut out = Vec::new();
     let mut bad: HashSet<i64> = HashSet::new();
-    for c in &courses {
+    for (i, c) in courses.iter().enumerate() {
+        progress(db, "tasks", i + 1, courses.len(), &c.shortname);
         let cid = c.id.to_string();
         let a = ws(
             m,
@@ -332,23 +351,64 @@ pub async fn sync_all(
         .map(|c| c.id)
         .filter(|id| !bad.contains(id))
         .collect();
+    let mut tasks_removed = 0;
     for t in old.values() {
         if ok.contains(&t.course_id) && !seen.contains(t.id.as_str()) {
             db.delete_task(&t.id).map_err(CoreError::Other)?;
+            tasks_removed += 1;
         }
     }
+    let (mut files_new, mut files_removed, mut errors) = (0, 0, Vec::<String>::new());
     if files {
         let mut state = crate::state::State::load(root).map_err(CoreError::Other)?;
         state.user_id = uid;
-        for c in &courses {
-            if let Err(e) = crate::sync::sync_course(m, &mut state, c, root).await {
-                tracing::warn!(course = c.id, error = %e, "file sync failed");
+        for (i, c) in courses.iter().enumerate() {
+            progress(db, "files", i + 1, courses.len(), &c.shortname);
+            match crate::sync::sync_course(m, &mut state, c, root).await {
+                Ok(r) => {
+                    files_new += r.files_new;
+                    files_removed += r.files_removed;
+                    errors.extend(r.errors.iter().map(|e| format!("{}: {e}", c.shortname)));
+                }
+                Err(e) => {
+                    tracing::warn!(course = c.id, error = %e, "file sync failed");
+                    errors.push(format!("{}: {e}", c.shortname));
+                }
             }
             if let Err(e) = state.save_course(root, c.id) {
                 tracing::warn!(course = c.id, error = %e, "state save failed");
             }
         }
+        // Unenrolled: trash their untouched files. Never when the list is empty
+        // (an empty answer is more likely a hiccup than "left every course").
+        let ts = crate::sync::unix_secs_now();
+        let enrolled: HashSet<String> = courses.iter().map(|c| c.id.to_string()).collect();
+        let gone: Vec<String> = state
+            .courses
+            .keys()
+            .filter(|k| !enrolled.contains(*k))
+            .cloned()
+            .collect();
+        for k in gone.iter().filter(|_| !courses.is_empty()) {
+            for e in state.courses[k].files.values() {
+                files_removed += usize::from(crate::sync::trash_untouched(
+                    Path::new(root),
+                    &e.path,
+                    &e.sha256,
+                    ts,
+                ));
+            }
+            match k.parse().map(|id| state.drop_course(root, id)) {
+                Ok(Ok(())) => {}
+                _ => errors.push(format!("drop course {k}: state not saved")),
+            }
+        }
     }
+    let result = json!({"at": chrono::Utc::now().timestamp(), "events": events.len(),
+        "tasks_removed": tasks_removed, "files_new": files_new,
+        "files_removed": files_removed, "errors": errors});
+    db.kv_set("sync_result", &result.to_string())
+        .map_err(CoreError::Other)?;
     db.kv_set("last_sync", &chrono::Utc::now().timestamp().to_string())
         .map_err(CoreError::Other)?;
     Ok(events)
