@@ -60,9 +60,45 @@ pub fn sanitize(name: &str) -> String {
     }
 }
 
+/// ASCII `a-z0-9-` slug, at most `max` bytes (cut at a dash), `"x"` when empty.
+#[must_use]
+pub fn slug(s: &str, max: usize) -> String {
+    let mut out = String::new();
+    for c in deunicode::deunicode(s).chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    if out.len() > max {
+        out.truncate(out[..=max].rfind('-').unwrap_or(max));
+    }
+    let out = out.trim_matches('-');
+    if out.is_empty() {
+        "x".into()
+    } else {
+        out.into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slug_rules() {
+        assert_eq!(
+            slug("RA Descripció PesNota HoresTotals RA1 Avalua siste", 40),
+            "ra-descripcio-pesnota-horestotals-ra1"
+        );
+        assert_eq!(slug("1.4.2 JVM, JRE i JDK", 40), "1-4-2-jvm-jre-i-jdk");
+        assert_eq!(
+            slug("Àrea de text i multimèdia", 40),
+            "area-de-text-i-multimedia"
+        );
+        assert_eq!(slug("¿¿", 40), "x");
+    }
 
     #[test]
     fn ra_variants() {

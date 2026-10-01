@@ -541,6 +541,27 @@ fn course_meta(md: &str, short: &str) -> (String, i64) {
     )
 }
 
+/// Top dir whose `index.md` frontmatter shortname is `short`.
+pub(crate) fn course_dir_of(root: &std::path::Path, short: &str) -> Option<String> {
+    files::list(root, "")
+        .ok()?
+        .into_iter()
+        .filter(|e| e.is_dir)
+        .find(|e| {
+            course_short_of(root, &e.name) == short && root.join(&e.rel).join("index.md").is_file()
+        })
+        .map(|e| e.rel)
+}
+
+/// Frontmatter shortname of the course in `dir`, else the dir name.
+pub(crate) fn course_short_of(root: &std::path::Path, dir: &str) -> String {
+    std::fs::read_to_string(root.join(dir).join("index.md"))
+        .ok()
+        .and_then(|md| frontmatter(&md, "shortname"))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| dir.to_string())
+}
+
 async fn courses(State(app): S) -> R<Json<Vec<Value>>> {
     let root = std::path::Path::new(&app.root);
     let mut out = Vec::new();
@@ -552,18 +573,21 @@ async fn courses(State(app): S) -> R<Json<Vec<Value>>> {
             continue;
         };
         let (title, id) = course_meta(&md, &e.name);
-        out.push(json!({"shortname": e.name, "title": title, "course_id": id}));
+        out.push(
+            json!({"shortname": course_short_of(root, &e.name), "title": title, "course_id": id}),
+        );
     }
     Ok(Json(out))
 }
 
 async fn course(State(app): S, Path(short): Path<String>) -> R<Json<Value>> {
     let root = std::path::Path::new(&app.root);
-    let md = std::fs::read_to_string(files::jail(root, &short).map_err(forbid)?.join("index.md"))
+    let dir = course_dir_of(root, &short).unwrap_or_else(|| short.clone());
+    let md = std::fs::read_to_string(files::jail(root, &dir).map_err(forbid)?.join("index.md"))
         .unwrap_or_default();
     let mut sections = Vec::new();
     let mut loose = Vec::new();
-    for s in files::list(root, &short).map_err(forbid)? {
+    for s in files::list(root, &dir).map_err(forbid)? {
         if !s.is_dir {
             loose.push(s);
             continue;
@@ -583,7 +607,7 @@ async fn course(State(app): S, Path(short): Path<String>) -> R<Json<Value>> {
         sections.push(json!({"name": s.name, "rel": s.rel, "modules": modules}));
     }
     if !loose.is_empty() {
-        sections.insert(0, json!({"name": "Fitxers", "rel": short, "modules": [{"name": "Fitxers", "rel": short, "files": loose}]}));
+        sections.insert(0, json!({"name": "Fitxers", "rel": dir, "modules": [{"name": "Fitxers", "rel": dir, "files": loose}]}));
     }
     let (title, id) = course_meta(&md, &short);
     Ok(Json(

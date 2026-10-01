@@ -61,7 +61,7 @@ async fn e2e_full_sync_writes_tree_and_index() {
     assert!(r.errors.is_empty());
     assert_eq!(r.files_skipped, 0);
 
-    let course_dir = std::path::Path::new(&root).join("MOCK101");
+    let course_dir = std::path::Path::new(&root).join("mock");
     assert!(course_dir.is_dir());
     for sec in ["00-intro", "RA01", "RA02", "RA03", "RA04", "RA05"] {
         assert!(course_dir.join(sec).is_dir(), "missing section {sec}");
@@ -72,7 +72,7 @@ async fn e2e_full_sync_writes_tree_and_index() {
     assert!(index.contains("course_id: 101"));
     assert!(index.contains("files: 50"));
     // Per-module meta (2 files) and section rollup (10 files).
-    let mod_meta = read_json(&course_dir.join("RA01/001-Module 1.0/meta.json"));
+    let mod_meta = read_json(&course_dir.join("RA01/001-module-1-0/meta.json"));
     assert_eq!(mod_meta["files"].as_array().map(Vec::len), Some(2));
     assert_eq!(mod_meta["id"], 2002); // fixture: 2000 + file counter after 2 files
     let sec_meta = read_json(&course_dir.join("RA01/meta.json"));
@@ -247,7 +247,7 @@ async fn e2e_error_keeps_course_state() {
     assert_eq!(before.len(), 50);
 
     // A regular file where a section dir must go makes ensure_layout fail.
-    let sec = std::path::Path::new(&root).join("MOCK101/RA05");
+    let sec = std::path::Path::new(&root).join("mock/RA05");
     std::fs::remove_dir_all(&sec).expect("rm section");
     std::fs::write(&sec, b"x").expect("blocker");
 
@@ -309,7 +309,7 @@ async fn e2e_inserted_module_keeps_folders() {
         v.sort();
         v
     };
-    let before = dirs("MOCK101/RA01");
+    let before = dirs("mock/RA01");
     let paths: Vec<String> = state.courses["101"]
         .files
         .values()
@@ -322,7 +322,7 @@ async fn e2e_inserted_module_keeps_folders() {
         .expect("resync");
     assert_eq!(r.files_new, 0, "errors: {:?}", r.errors);
     assert!(r.errors.is_empty());
-    let after = dirs("MOCK101/RA01");
+    let after = dirs("mock/RA01");
     assert_eq!(after.len(), before.len() + 1, "{after:?}");
     for d in &before {
         assert!(after.contains(d), "folder {d} lost: {after:?}");

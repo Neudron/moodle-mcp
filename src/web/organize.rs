@@ -549,7 +549,10 @@ impl Cx {
             .into_iter()
             .filter(|e| {
                 e.is_dir
-                    && !matches!(e.name.as_str(), "submit" | "_personal" | "moodle-mcp")
+                    && !matches!(
+                        e.name.as_str(),
+                        "submit" | "_personal" | "personal" | "moodle-mcp"
+                    )
                     && self.abs(&format!("{}/index.md", e.rel)).is_file()
             })
             .map(|e| e.rel)

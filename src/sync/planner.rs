@@ -162,10 +162,7 @@ pub fn section_folder_name(index: usize, name: &str, module_texts: &[&str]) -> S
 /// `001-name` module folder with collision suffixes (historic behaviour).
 #[must_use]
 pub fn module_folder(index: usize, name: &str, taken: &mut Vec<String>) -> String {
-    let mut base = ra::sanitize(name);
-    if base.len() > 60 {
-        base = base.chars().take(60).collect();
-    }
+    let base = ra::slug(name, 40);
     let mut candidate = format!("{:03}-{base}", index + 1);
     let mut n = 2;
     while taken.contains(&candidate) {

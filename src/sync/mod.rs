@@ -33,16 +33,47 @@ use crate::moodle::{Course, CourseSection, Moodle};
 use crate::ra;
 use crate::state::State;
 
-fn course_dir_name(course: &Course) -> String {
-    if course.shortname.is_empty() {
-        return format!("course-{}", course.id);
+/// Folder name from the course's full name: code prefix dropped, first word slugged.
+#[must_use]
+pub fn default_course_slug(fullname: &str) -> String {
+    static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"^(\s*[A-Za-z]{0,3}\d+[.:]?\s*)+").expect("static regex")
+    });
+    let rest = RE.replace(fullname, "");
+    let word = rest.split_whitespace().next().unwrap_or(fullname);
+    ra::slug(word, 40)
+}
+
+/// Dirs under the root that are not course folders.
+const RESERVED: [&str; 3] = ["submit", "personal", "moodle-mcp"];
+
+/// Course folder: `.moodle/folders.json` (`{"<id>":"<dir>"}`) wins; a missing
+/// entry gets the default slug (`-<id>` on collision) and is persisted.
+/// A corrupt map is an error, never overwritten.
+pub fn course_dir_name(root: &str, course: &Course) -> Result<String> {
+    let path = Path::new(root).join(".moodle/folders.json");
+    let mut map: BTreeMap<String, String> = match std::fs::read_to_string(&path) {
+        Ok(t) => serde_json::from_str(&t).context("parsing .moodle/folders.json")?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+        Err(e) => return Err(e).context("reading .moodle/folders.json"),
+    };
+    let key = course.id.to_string();
+    if let Some(v) = map
+        .get(&key)
+        .filter(|v| ra::slug(v, 40) == **v && !RESERVED.contains(&v.as_str()))
+    {
+        return Ok(v.clone());
     }
-    let clean = ra::sanitize(&course.shortname);
-    if clean.is_empty() {
-        format!("course-{}", course.id)
-    } else {
-        clean
+    let mut dir = default_course_slug(&course.fullname);
+    if RESERVED.contains(&dir.as_str()) || map.iter().any(|(k, v)| *k != key && *v == dir) {
+        dir = format!("{dir}-{}", course.id);
     }
+    map.insert(key, dir.clone());
+    if let Ok(t) = serde_json::to_vec_pretty(&map) {
+        let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
+        let _ = crate::web::files::write_atomic(&path, t);
+    }
+    Ok(dir)
 }
 
 async fn fetch_contents(moodle: &Moodle, course_id: i64) -> Result<Vec<CourseSection>> {
@@ -218,7 +249,7 @@ pub async fn sync_course(
     let opts = RunOptions::default();
     let started = std::time::Instant::now();
     let root_path = Path::new(root).to_path_buf();
-    let dir_name = course_dir_name(course);
+    let dir_name = course_dir_name(root, course)?;
     let course_dir = root_path.join(&dir_name);
     tokio::fs::create_dir_all(&course_dir)
         .await
@@ -414,9 +445,63 @@ mod tests {
         let layout = layout_sections(&contents, &dir, false, &BTreeMap::new(), &BTreeMap::new());
         ensure_layout(&layout, 20).await.unwrap();
         write_readmes(&layout).await.unwrap();
-        let readme = dir.join("RA03/001-Task/README.md");
+        let readme = dir.join("RA03/001-task/README.md");
         let ok = readme.exists();
         let _ = std::fs::remove_dir_all(&dir);
         assert!(ok, "{readme:?}");
+    }
+
+    #[test]
+    fn default_course_slugs() {
+        for (t, w) in [
+            ("0373.Llenguatges de marques", "llenguatges"),
+            ("MP03. Programació Estructurada", "programacio"),
+            ("M1665. Digitalització aplicada", "digitalitzacio"),
+            ("0484: Bases de dades", "bases"),
+            ("MP05 Entorns de desenvolupament", "entorns"),
+            ("Tutoria DAX1", "tutoria"),
+        ] {
+            assert_eq!(default_course_slug(t), w, "{t}");
+        }
+    }
+
+    #[test]
+    fn course_dir_name_uses_map_then_persists_default() {
+        let r = std::env::temp_dir().join(format!("smx-cdn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&r);
+        std::fs::create_dir_all(r.join(".moodle")).unwrap();
+        std::fs::write(r.join(".moodle/folders.json"), r#"{"7":"bbdd"}"#).unwrap();
+        let root = r.to_str().unwrap();
+        let c = |id, n: &str| Course {
+            id,
+            fullname: n.into(),
+            shortname: String::new(),
+            summary: String::new(),
+        };
+        assert_eq!(
+            course_dir_name(root, &c(7, "Bases de dades")).unwrap(),
+            "bbdd"
+        );
+        assert_eq!(
+            course_dir_name(root, &c(8, "Other Course")).unwrap(),
+            "other"
+        );
+        assert_eq!(
+            course_dir_name(root, &c(9, "Other Course")).unwrap(),
+            "other-9"
+        );
+        assert_eq!(
+            course_dir_name(root, &c(10, "Submit things")).unwrap(),
+            "submit-10"
+        );
+        let saved = std::fs::read_to_string(r.join(".moodle/folders.json")).unwrap();
+        assert!(saved.contains(r#""8": "other""#) && saved.contains(r#""9": "other-9""#));
+        std::fs::write(r.join(".moodle/folders.json"), "{oops").unwrap();
+        assert!(course_dir_name(root, &c(11, "Zed")).is_err());
+        assert_eq!(
+            std::fs::read(r.join(".moodle/folders.json")).unwrap(),
+            b"{oops"
+        );
+        let _ = std::fs::remove_dir_all(&r);
     }
 }

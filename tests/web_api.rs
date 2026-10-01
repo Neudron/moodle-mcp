@@ -183,6 +183,44 @@ async fn raw_serves_accented_path_and_refuses_dotfiles() {
 }
 
 #[tokio::test]
+async fn courses_use_frontmatter_shortname_for_renamed_dir() {
+    let (base, _app, _m, root) = start("shortdir").await;
+    std::fs::create_dir_all(root.join("bbdd/RA01")).unwrap();
+    std::fs::write(
+        root.join("bbdd/index.md"),
+        "---\nshortname: \"BBDD\"\n---\n",
+    )
+    .unwrap();
+    let c = reqwest::Client::new();
+    let v: serde_json::Value = c
+        .get(format!("{base}/api/courses"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(v
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|x| x["shortname"] == "BBDD"));
+    let v: serde_json::Value = c
+        .get(format!("{base}/api/courses/BBDD"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(v["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["name"] == "RA01"));
+}
+
+#[tokio::test]
 async fn moodle_file_sandboxes_only_html_svg_and_ignores_fragment_ext() {
     let (base, _app, m, _root) = start("mfile").await;
     let c = reqwest::Client::new();

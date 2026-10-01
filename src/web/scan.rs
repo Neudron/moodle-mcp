@@ -42,15 +42,7 @@ or deadline the student must do. Reply with ONLY this JSON and nothing else: \
 \"confidence\":number between 0 and 1}]}. If there are no tasks reply {\"tasks\":[]}.";
 
 /// Top-level folders that are not Moodle content (student's own or tooling).
-const SKIP_TOP: [&str; 7] = [
-    "submit",
-    "moodle-mcp",
-    "decks",
-    "marques",
-    "sistemas",
-    "_personal",
-    "_scan",
-];
+const SKIP_TOP: [&str; 5] = ["submit", "moodle-mcp", "_personal", "personal", "_scan"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
@@ -149,7 +141,7 @@ pub fn inventory(root: &Path, tasks: &[Task]) -> Vec<Item> {
         files::walk(root, &top.rel, &mut all);
         out.extend(all.into_iter().filter(|r| !is_own(r)).map(|src| Item {
             src,
-            course: top.name.clone(),
+            course: super::api::course_short_of(root, &top.name),
             kind: "file",
         }));
     }
@@ -1656,10 +1648,11 @@ mod tests {
         let _ = std::fs::remove_dir_all(&r);
         for d in [
             "CursA/RA01",
-            "2627_DAX_0373/lliuraments",
+            "marques/lliuraments",
             "submit/_lliurat",
             "_scan",
-            "decks",
+            "personal",
+            "_personal",
             ".moodle",
         ] {
             std::fs::create_dir_all(r.join(d)).unwrap();
@@ -1669,14 +1662,21 @@ mod tests {
             "CursA/RA01/b_amin.docx",
             "CursA/RA01/c.docx.bak",
             "CursA/RA01/l.url",
-            "2627_DAX_0373/lliuraments/old.docx",
+            "marques/lliuraments/old.docx",
+            "marques/index.md",
             "submit/_lliurat/x.docx",
             "_scan/t.docx",
-            "decks/d.pptx",
+            "personal/d.pptx",
+            "_personal/e.pptx",
             ".moodle/state.json",
         ] {
             std::fs::write(r.join(f), "x").unwrap();
         }
+        std::fs::write(
+            r.join("marques/index.md"),
+            "---\nshortname: \"2627_DAX_0373\"\n---\n",
+        )
+        .unwrap();
         let t = Task {
             id: "assign:1".into(),
             course: "CursA".into(),
@@ -1701,15 +1701,12 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                want(
-                    "2627_DAX_0373/lliuraments/old.docx",
-                    "2627_DAX_0373",
-                    "file"
-                ),
                 want("CursA/RA01/a.pdf", "CursA", "file"),
                 want("CursA/RA01/l.url", "CursA", "file"),
                 want("https://docs.google.com/document/d/AbC_1-x", "CursA", "url"),
                 want("https://m/pluginfile.php/1/e.pdf", "CursA", "intro"),
+                want("marques/index.md", "2627_DAX_0373", "file"),
+                want("marques/lliuraments/old.docx", "2627_DAX_0373", "file"),
             ]
         );
     }
