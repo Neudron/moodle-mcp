@@ -2,6 +2,7 @@
 //! Every call may fail (free tier, offline): `None` always means "carry on the old way".
 use crate::web::env;
 use serde_json::{json, Value};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 const URL: &str = "https://opencode.ai/zen/v1/systemone";
@@ -27,16 +28,14 @@ async fn post(url: &str, state: &str, questions: Value) -> Option<Value> {
         "state": state.chars().take(MAX_CHARS).collect::<String>(),
         "questions": questions,
     });
-    let r = reqwest::Client::builder()
-        .user_agent("moodle-web/0")
-        .timeout(Duration::from_secs(30))
-        .build()
-        .ok()?
-        .post(url)
-        .json(&body)
-        .send()
-        .await
-        .ok()?;
+    static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
+        reqwest::Client::builder()
+            .user_agent("moodle-web/0")
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("static client")
+    });
+    let r = HTTP.post(url).json(&body).send().await.ok()?;
     if !r.status().is_success() {
         return None;
     }

@@ -22,7 +22,7 @@ use std::{
     process::Stdio,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering::SeqCst},
-        Arc,
+        Arc, LazyLock,
     },
     time::Duration,
 };
@@ -120,11 +120,13 @@ pub fn is_own(rel: &str) -> bool {
 }
 
 pub fn google_parts(u: &str) -> Option<(String, String)> {
-    let re = regex::Regex::new(
-        r"^https://docs\.google\.com/(document|presentation|spreadsheets)/d/([\w-]+)",
-    )
-    .expect("static regex");
-    let c = re.captures(u)?;
+    static RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+            r"^https://docs\.google\.com/(document|presentation|spreadsheets)/d/([\w-]+)",
+        )
+        .expect("static regex")
+    });
+    let c = RE.captures(u)?;
     Some((c[1].to_string(), c[2].to_string()))
 }
 
@@ -151,10 +153,12 @@ pub fn inventory(root: &Path, tasks: &[Task]) -> Vec<Item> {
             kind: "file",
         }));
     }
-    let gre = regex::Regex::new(
-        r"https://docs\.google\.com/(?:document|presentation|spreadsheets)/d/[\w-]+",
-    )
-    .expect("static regex");
+    static GRE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+            r"https://docs\.google\.com/(?:document|presentation|spreadsheets)/d/[\w-]+",
+        )
+        .expect("static regex")
+    });
     for t in tasks.iter().filter(|t| t.source != "ai") {
         for a in &t.attachments {
             out.push(Item {
@@ -163,7 +167,7 @@ pub fn inventory(root: &Path, tasks: &[Task]) -> Vec<Item> {
                 kind: "intro",
             });
         }
-        for m in gre.find_iter(&t.body_html) {
+        for m in GRE.find_iter(&t.body_html) {
             out.push(Item {
                 src: m.as_str().into(),
                 course: t.course.clone(),
@@ -177,9 +181,10 @@ pub fn inventory(root: &Path, tasks: &[Task]) -> Vec<Item> {
 }
 
 pub fn strip_html(h: &str) -> String {
-    let re =
-        regex::Regex::new(r"(?is)<(script|style)[^>]*>.*?</(script|style)>").expect("static regex");
-    crate::html2md::html_to_md(&re.replace_all(h, ""))
+    static RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?is)<(script|style)[^>]*>.*?</(script|style)>").expect("static regex")
+    });
+    crate::html2md::html_to_md(&RE.replace_all(h, ""))
 }
 
 /// Text of an `opencode run --format json` stream: all `text` events joined.
@@ -575,12 +580,14 @@ async fn convert(app: &App, p: &Path, ext: &str, to: &str) -> anyhow::Result<Vec
 
 /// Public export first. Redirects are NOT followed: a 30x means Google wants a login.
 pub async fn google_public(url: &str) -> Option<String> {
-    let http = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(30))
-        .build()
-        .ok()?;
-    let mut r = http.get(url).send().await.ok()?;
+    static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(30))
+            .build()
+            .expect("static client")
+    });
+    let mut r = HTTP.get(url).send().await.ok()?;
     let ct = r.headers().get("content-type")?.to_str().ok()?.to_string();
     if !r.status().is_success() || !(ct.starts_with("text/plain") || ct.starts_with("text/csv")) {
         return None;
@@ -607,9 +614,10 @@ pub fn view_url(kind: &str, id: &str) -> String {
 }
 
 pub fn drive_id(u: &str) -> Option<String> {
-    let re =
-        regex::Regex::new(r"^https://drive\.google\.com/file/d/([\w-]+)").expect("static regex");
-    Some(re.captures(u)?[1].to_string())
+    static RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"^https://drive\.google\.com/file/d/([\w-]+)").expect("static regex")
+    });
+    Some(RE.captures(u)?[1].to_string())
 }
 
 fn google_host(h: &str) -> bool {
@@ -695,25 +703,33 @@ impl reqwest::dns::Resolve for PublicDns {
 async fn web_get(url: &str) -> anyhow::Result<(String, String, Vec<u8>)> {
     let start = reqwest::Url::parse(url).map_err(|_| anyhow!("enllaç no vàlid"))?;
     ensure!(public_url(&start), "enllaç no permès");
-    let g = start.host_str().is_some_and(google_host);
-    let http = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64) moodle-web")
-        .timeout(Duration::from_secs(30))
-        .dns_resolver(Arc::new(PublicDns))
-        .redirect(reqwest::redirect::Policy::custom(move |a| {
-            let h = a.url().host_str().unwrap_or("");
-            if a.previous().len() < 5
-                && public_url(a.url())
-                && h != "accounts.google.com"
-                && (!g || google_host(h))
-            {
-                a.follow()
-            } else {
-                a.stop()
-            }
-        }))
-        .build()?;
-    let mut r = http.get(start).send().await?;
+    static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
+        reqwest::Client::builder()
+            .user_agent("Mozilla/5.0 (X11; Linux x86_64) moodle-web")
+            .timeout(Duration::from_secs(30))
+            .dns_resolver(Arc::new(PublicDns))
+            .redirect(reqwest::redirect::Policy::custom(|a| {
+                let h = a.url().host_str().unwrap_or("");
+                // the first previous URL is the start link: a Google start stays on Google
+                let g = a
+                    .previous()
+                    .first()
+                    .and_then(|u| u.host_str())
+                    .is_some_and(google_host);
+                if a.previous().len() < 5
+                    && public_url(a.url())
+                    && h != "accounts.google.com"
+                    && (!g || google_host(h))
+                {
+                    a.follow()
+                } else {
+                    a.stop()
+                }
+            }))
+            .build()
+            .expect("static client")
+    });
+    let mut r = HTTP.get(start).send().await?;
     ensure!(r.status().is_success(), "HTTP {}", r.status());
     let hdr = |k| {
         r.headers()

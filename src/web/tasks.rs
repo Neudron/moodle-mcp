@@ -4,6 +4,7 @@ use crate::moodle::{Course, Moodle};
 use crate::web::db::{Attachment, Db, Task};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -154,9 +155,11 @@ pub fn pct(s: &str) -> String {
 
 pub fn proxy_urls(html: &str) -> String {
     // ponytail: regex over HTML attributes; fine for Moodle-generated markup.
-    let re = regex::Regex::new(r#"(["'])(https?://[^"']*pluginfile\.php[^"']*)(["'])"#)
-        .expect("static regex");
-    re.replace_all(html, |c: &regex::Captures| {
+    static RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r#"(["'])(https?://[^"']*pluginfile\.php[^"']*)(["'])"#)
+            .expect("static regex")
+    });
+    RE.replace_all(html, |c: &regex::Captures| {
         let url = c[2].replace("&amp;", "&");
         format!("{}/api/moodle-file?url={}{}", &c[1], pct(&url), &c[3])
     })

@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 
 type S = State<Arc<App>>;
@@ -136,11 +136,14 @@ pub async fn convert(app: &App, bytes: &[u8], ext: &str, output: &str) -> Result
     let (token, auth) = (sign(&body), sign(&json!({ "payload": &body })));
     body["token"] = token.into();
     let gw = |e: reqwest::Error| ApiErr(StatusCode::BAD_GATEWAY, e.without_url().to_string());
-    let http = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(gw)?;
-    let r: Value = http
+    static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .pool_max_idle_per_host(0) // rare calls; no pooled conns to die with a test runtime
+            .build()
+            .expect("static client")
+    });
+    let r: Value = HTTP
         .post(format!("{}/ConvertService.ashx", oo_base()))
         .bearer_auth(auth)
         .header("Accept", "application/json")
@@ -167,7 +170,7 @@ pub async fn convert(app: &App, bytes: &[u8], ext: &str, output: &str) -> Result
         .ok_or_else(|| fail("sense resultat".into()))?;
     // DS reports its own public host: keep only the path, re-anchored on ONLYOFFICE_URL.
     let path = file_url.splitn(4, '/').nth(3).unwrap_or("");
-    let out = http
+    let out = HTTP
         .get(format!("{}/{path}", oo_base()))
         .send()
         .await
