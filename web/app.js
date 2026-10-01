@@ -312,7 +312,7 @@ views.tauler = async () => {
   const out = h('section', { class: 'v-tauler' },
     h('h1', {}, pending === 0 ? 'Tot al dia' : `Tens ${pending} ${pending === 1 ? 'tasca pendent' : 'tasques pendents'}`),
     next ? h('a', { class: 'next', href: `#/tasca/${enc(next.task.id)}` },
-      h('span', { class: 'eyebrow' }, 'La propera'), h('span', { class: 'nt' }, next.task.title),
+      h('span', { class: 'lbl' }, 'La propera'), h('span', { class: 'nt' }, next.task.title),
       h('span', { class: 'nm' }, cname(next.task.course), ' · ', when(next.task.due))) : null,
     total ? h('div', { class: 'sub' }, bar(doneN, total, 'Tasques lliurades', '', `${doneN} de ${total} lliurades`)) : null,
     all.length ? h('div', { class: 'v-tools' }, seg, h('label', { class: 'sr-only', for: 'filter' }, 'Filtra tasques'), input) : null,
@@ -419,7 +419,7 @@ views.tasca = async (id) => {
   const NEWTAB = h('span', { class: 'sr-only' }, ' (obre en una pestanya nova)');
 
   const rail = h('section', { class: 'rail', 'aria-labelledby': 'rail-t' },
-    h('h2', { class: 'eyebrow', id: 'rail-t' }, 'Detalls'),
+    h('h2', { id: 'rail-t' }, 'Detalls'),
     h('dl', { class: 'kv' },
       h('div', {}, h('dt', {}, 'Venciment'), h('dd', {}, when(t.due))),
       t.cutoff ? h('div', {}, h('dt', {}, 'Tancament'), h('dd', {}, when(t.cutoff))) : null,
@@ -460,8 +460,8 @@ views.tasca = async (id) => {
     } }, 'Fes captura');
     showShot();
     return h('div', { class: 'v-pane' }, h('div', { class: 'field-row' }, snap), slot,
-      attRows.length ? [h('h2', { class: 'eyebrow' }, 'Adjunts del professor'), h('div', { class: 'list' }, attRows)] : null,
-      fb ? [h('h2', { class: 'eyebrow' }, 'Retroacció'), fb] : null);
+      attRows.length ? [h('h2', {}, 'Adjunts del professor'), h('div', { class: 'list' }, attRows)] : null,
+      fb ? [h('h2', {}, 'Retroacció'), fb] : null);
   };
   const feina = () => h('div', { class: 'v-pane' },
     l.files.length ? l.files.map((f) => {
@@ -489,7 +489,7 @@ views.tasca = async (id) => {
     h('a', { class: 'btn ghost', href: '#/tauler' }, ic('arrow-l'), 'Tauler'),
     h('h1', {}, t.title),
     h('div', { class: 'meta' },
-      h('a', { class: 'chip', href: `#/curs/${enc(t.course)}` }, h('span', { class: 'dot', style: { '--h': hue(t.course) } }), cname(t.course)),
+      h('a', { class: 'chip cn', style: { '--h': hue(t.course) }, href: `#/curs/${enc(t.course)}` }, h('span', { class: 'dot', style: { '--h': hue(t.course) } }), cname(t.course)),
       dueChip(tv, true), badges),
     h('div', { class: 'split' }, h('div', { class: 'grid' }, main, rail)));
 };
@@ -641,7 +641,7 @@ $('#sync').addEventListener('click', async (e) => {
 });
 const curTheme = () => document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
 // Sandboxed iframes bake the theme colours into srcdoc, so a theme change re-renders the view.
-function themeChanged() { $('#theme-use').setAttribute('href', curTheme() === 'light' ? '#i-sun' : '#i-moon'); $('#theme').setAttribute('aria-pressed', String(curTheme() === 'dark')); window.monaco?.editor.setTheme(curTheme() === 'light' ? 'vs' : 'vs-dark'); if (route.cur && route.cur !== 'edita' && route.cur !== 'ide') route({ soft: true }); } // never tear down an open editor
+function themeChanged() { document.querySelectorAll('meta[name=theme-color]').forEach((m) => { m.media = ''; m.content = curTheme() === 'light' ? '#F3F0EA' : '#0C0C0F'; }); $('#theme-use').setAttribute('href', curTheme() === 'light' ? '#i-sun' : '#i-moon'); $('#theme').setAttribute('aria-pressed', String(curTheme() === 'dark')); window.monaco?.editor.setTheme(curTheme() === 'light' ? 'vs' : 'vs-dark'); if (route.cur && route.cur !== 'edita' && route.cur !== 'ide') route({ soft: true }); } // never tear down an open editor
 $('#theme').addEventListener('click', () => {
   const next = curTheme() === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = next;
