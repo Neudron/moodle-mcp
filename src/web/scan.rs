@@ -413,13 +413,33 @@ pub fn ws(app: &App) -> PathBuf {
     Path::new(&app.root).join(".moodle/scan/ws")
 }
 
-/// Run a child with a timeout; the child dies with the future. Only a stderr snippet in errors.
-async fn exec(mut c: Command) -> anyhow::Result<String> {
+/// Run a child with a timeout; the whole process group dies on timeout. Only a stderr snippet in errors.
+async fn exec(c: Command) -> anyhow::Result<String> {
     let secs = env::get("SCAN_TIMEOUT_SECS")
         .and_then(|v| v.parse().ok())
         .unwrap_or(240);
-    c.stdin(Stdio::null()).kill_on_drop(true);
-    let out = tokio::time::timeout(Duration::from_secs(secs), c.output()).await??;
+    exec_t(c, secs).await
+}
+
+async fn exec_t(mut c: Command, secs: u64) -> anyhow::Result<String> {
+    c.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .process_group(0);
+    let child = c.spawn()?;
+    let pgid = child.id();
+    let Ok(out) = tokio::time::timeout(Duration::from_secs(secs), child.wait_with_output()).await
+    else {
+        // The pgid outlives the leader while any member runs, so this still reaches grandchildren.
+        if let Some(p) = pgid {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &format!("-{p}")])
+                .status();
+        }
+        anyhow::bail!("timeout after {secs}s");
+    };
+    let out = out?;
     ensure!(
         out.status.success(),
         "{}: {}",
@@ -1761,6 +1781,26 @@ mod tests {
         ] {
             assert!(!ok(u), "{u}");
         }
+    }
+
+    #[tokio::test]
+    async fn exec_timeout_kills_group() {
+        let pf = std::env::temp_dir().join(format!("grandchild-{}", std::process::id()));
+        let mut c = Command::new("sh");
+        c.arg("-c")
+            .arg(format!("sleep 60 & echo $! > {}; wait", pf.display()));
+        assert!(exec_t(c, 1).await.is_err());
+        let pid = std::fs::read_to_string(&pf).unwrap().trim().to_string();
+        let _ = std::fs::remove_file(&pf);
+        for _ in 0..50 {
+            // a killed child may linger as a zombie until reaped; treat that as gone
+            let st = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+            if st.is_empty() || st.contains(") Z") {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("grandchild {pid} survived");
     }
 
     #[tokio::test]
