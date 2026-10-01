@@ -352,3 +352,60 @@ async fn huge_retry_after_returns_ratelimited_immediately() {
     );
     assert!(t.elapsed() < std::time::Duration::from_secs(5));
 }
+
+/// M10: a 206 whose Content-Range start != the requested offset must not be
+/// appended; the stale part restarts from 0 and the hash is of the real body.
+#[tokio::test]
+async fn resume_with_wrong_content_range_restarts_from_zero() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let body: Vec<u8> = (0..20_000u32).map(|i| (i % 253) as u8).collect();
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", l.local_addr().expect("addr"));
+    let b = body.clone();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = l.accept().await else {
+                break;
+            };
+            let b = b.clone();
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                let k = s.read(&mut buf).await.unwrap_or(0);
+                let ranged = String::from_utf8_lossy(&buf[..k])
+                    .to_lowercase()
+                    .contains("range: bytes=");
+                let head = if ranged {
+                    format!(
+                        "206 Partial Content\r\nContent-Range: bytes 0-{}/{}\r\n",
+                        b.len() - 1,
+                        b.len()
+                    )
+                } else {
+                    "200 OK\r\n".into()
+                };
+                let _ = s
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {head}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                            b.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await;
+                let _ = s.write_all(&b).await;
+            });
+        }
+    });
+    let part = std::env::temp_dir().join(format!("moodle-mcp-t18-{}.part", std::process::id()));
+    std::fs::write(&part, vec![7u8; 5_000]).expect("seed stale part");
+    let meta = Moodle::new(&base, TOKEN)
+        .download_resumable(&format!("{base}/webservice/pluginfile.php/1/x.bin"), &part)
+        .await
+        .expect("must restart and complete");
+    assert_eq!(std::fs::read(&part).expect("part"), body);
+    assert_eq!(meta.size, body.len() as u64);
+    assert_eq!(meta.sha256, format!("{:x}", sha2::Sha256::digest(&body)));
+    let _ = std::fs::remove_file(&part);
+}

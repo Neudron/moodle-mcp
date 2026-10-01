@@ -709,6 +709,24 @@ impl Moodle {
         } else {
             None
         };
+        // 206 starting somewhere other than our offset: appending would corrupt.
+        if partial && resume_from > 0 {
+            let start = resp
+                .headers()
+                .get(reqwest::header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                .and_then(parse_content_range_start);
+            if start != Some(resume_from) {
+                let _ = tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .open(part)
+                    .await;
+                return Attempt::retryable(CoreError::Net(
+                    "resume Content-Range mismatch, restarting".into(),
+                ));
+            }
+        }
         // Server ignored Range: the prefix is stale, restart the file.
         let from_scratch = !partial && resume_from > 0;
         let mut opts = tokio::fs::OpenOptions::new();
@@ -795,21 +813,42 @@ impl Moodle {
                 )));
             }
         }
-        // Checksum-after-download, always (plan #1018).
-        let bytes = match tokio::fs::read(part).await {
-            Ok(b) => b,
-            Err(e) => {
-                return Attempt::Abort(CoreError::Other(anyhow::anyhow!(
-                    "reading part {}: {e}",
-                    part.display()
-                )));
+        // Checksum-after-download, always (plan #1018): stream, no full read.
+        let (sha256, size) = {
+            use sha2::Digest as _;
+            use tokio::io::AsyncReadExt as _;
+            let mut f = match tokio::fs::File::open(part).await {
+                Ok(f) => f,
+                Err(e) => {
+                    return Attempt::Abort(CoreError::Other(anyhow::anyhow!(
+                        "reading part {}: {e}",
+                        part.display()
+                    )));
+                }
+            };
+            let mut h = sha2::Sha256::new();
+            let mut buf = vec![0u8; 64 * 1024];
+            let mut size = 0u64;
+            loop {
+                match f.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        h.update(&buf[..n]);
+                        size += n as u64;
+                    }
+                    Err(e) => {
+                        return Attempt::Abort(CoreError::Other(anyhow::anyhow!(
+                            "reading part {}: {e}",
+                            part.display()
+                        )));
+                    }
+                }
             }
+            (format!("{:x}", h.finalize()), size)
         };
-        use sha2::Digest as _;
-        let sha256 = format!("{:x}", sha2::Sha256::digest(&bytes));
         Attempt::Done(FileMeta {
             sha256,
-            size: bytes.len() as u64,
+            size,
             timemodified: last_modified
                 .as_deref()
                 .and_then(parse_http_date)
@@ -914,6 +953,19 @@ fn redirect_target(
             Ok(Some(next))
         }
     }
+}
+
+/// Parse `Content-Range: bytes <first>-<last>/<total>` first byte.
+fn parse_content_range_start(header: &str) -> Option<u64> {
+    header
+        .trim()
+        .strip_prefix("bytes")?
+        .trim()
+        .split('-')
+        .next()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Parse `Content-Range: bytes <first>-<last>/<total>` total length.
