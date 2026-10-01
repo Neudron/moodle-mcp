@@ -458,7 +458,7 @@ impl Cx {
             .db
             .all_tasks()?
             .into_iter()
-            .filter(|t| t.kind != "post")
+            .filter(|t| t.kind != "post" && (t.source != "ai" || t.ai_confirmed == Some(true)))
         {
             let l = self.app.db.local(&t.id)?;
             let (exact, ov) = affinity(&t, name);

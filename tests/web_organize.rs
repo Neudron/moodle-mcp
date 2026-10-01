@@ -628,3 +628,23 @@ async fn delivered_sync_skips_same_sha_under_other_name() {
     }
     assert_eq!(listing(&r, d), ["renamed.pptx", "s1-m0-0_amin.pdf"]);
 }
+
+#[tokio::test]
+async fn unconfirmed_ai_task_does_not_claim_loose_file() {
+    for (confirmed, moved) in [(None, false), (Some(true), true)] {
+        let r = root(if moved { "ai_yes" } else { "ai_no" });
+        let app = app_at(&r, "http://127.0.0.1:9");
+        put(&r, "C1/index.md", "---\ntitle: C1\n---\n");
+        put(&r, "C1/RA1/Zeta Quokka_amin.txt", "mine");
+        let mut t = task("ai:1", "C1", "Zeta Quokka");
+        t.source = "ai".into();
+        t.ai_confirmed = confirmed;
+        app.db.upsert_tasks(&[t]).unwrap();
+        app.db
+            .set_local(&local("ai:1", "Mod A", "per revisar", &[]))
+            .unwrap();
+        organize::run(&app).await.unwrap();
+        let to = "submit/Mod A/Zeta Quokka/Zeta Quokka_amin.txt";
+        assert_eq!(r.join(to).exists(), moved, "{confirmed:?}");
+    }
+}
