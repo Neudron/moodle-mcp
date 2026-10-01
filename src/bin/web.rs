@@ -52,6 +52,7 @@ async fn main() -> Result<()> {
             if !r.errors.is_empty() {
                 tracing::warn!(errors = ?r.errors, "apple sync");
             }
+            web::scan::rescore_idle(&bg).await;
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(30 * 60)) => {}
                 _ = bg_stop.wait_for(|s| *s) => break,

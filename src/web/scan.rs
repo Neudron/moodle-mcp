@@ -72,7 +72,25 @@ pub struct Cand {
 }
 
 const GATE_Q: &str = "Does this document ask the student to do or hand in an assignment, exercise, exam or activity (a task with a deliverable or deadline)?";
-const VERIFY_Q: &str = "Is this a real task the student must do or hand in (a concrete assignment, exercise, exam or activity with a deliverable or deadline), not just an example, theory or explanation?";
+/// Version of the verify prompt; `rescore` redoes unconfirmed rows scored with an older one.
+pub const JEV_V: u8 = 2;
+const VERIFY_QS: [(&str, &str); 3] = [
+    ("task", "Is this an assignment, project or activity the student must hand in or present for the current course?"),
+    ("quiz", "Is this only one question inside a quiz, test, exam, diagnostic test or questionnaire?"),
+    ("notes", "Is this an example, explanation, solved exercise, template, form or old exam used as study material?"),
+];
+
+/// Real task = task and neither a lone quiz question nor study material.
+fn combine(task: f64, quiz: f64, notes: f64) -> f64 {
+    task * (1.0 - quiz.max(notes))
+}
+
+/// Jev's verdict on `state`, prefixed with where it comes from.
+async fn score(course: &str, src: &str, state: &str) -> Option<f64> {
+    let st = format!("Curs: {course}\nFont: {src}\n{state}");
+    let v = jev::nouls(&st, &VERIFY_QS).await?;
+    Some(combine(v[0], v[1], v[2]))
+}
 
 fn keep_min() -> f64 {
     jev::thr("JEV_KEEP", 0.5)
@@ -321,6 +339,7 @@ pub fn to_tasks(sha: &str, item: &Item, cands: &[Cand], existing: &[Task]) -> Ve
                 due: c.due,
                 source: "ai".into(),
                 ai_score: c.score,
+                ai_v: if c.score.is_some() { JEV_V } else { 0 },
                 ..Default::default()
             }
         })
@@ -336,7 +355,7 @@ fn excerpt(doc: &str, quote: &str) -> String {
 }
 
 /// Jev's verdict on each candidate; `None` scores (Jev down) are kept.
-pub async fn verify(mut cands: Vec<Cand>, doc: &str) -> Vec<Cand> {
+pub async fn verify(mut cands: Vec<Cand>, doc: &str, it: &Item) -> Vec<Cand> {
     for c in &mut cands {
         let st = format!(
             "{}\n{}\nEvidence: {}\n\nDocument excerpt:\n{}",
@@ -345,7 +364,7 @@ pub async fn verify(mut cands: Vec<Cand>, doc: &str) -> Vec<Cand> {
             c.evidence,
             excerpt(doc, &c.evidence)
         );
-        c.score = jev::noul(&st, VERIFY_Q).await;
+        c.score = score(&it.course, &it.src, &st).await;
         if c.score.is_none() {
             break; // Jev is down or slow: keep the old behaviour for the rest
         }
@@ -946,7 +965,7 @@ async fn classify_store(app: &App, sha: &str, it: &Item, text: &str) -> anyhow::
             return Ok(format!("Jev: sense tasques (p={p:.2})"));
         }
     }
-    let cands = verify(classify(app, sha, text).await?, text).await;
+    let cands = verify(classify(app, sha, text).await?, text, it).await;
     let existing = app.db.all_tasks()?;
     app.db
         .upsert_ai_tasks(&to_tasks(sha, it, &cands, &existing))?;
@@ -1157,46 +1176,89 @@ async fn process(app: &App, job: i64, it: &Item) {
         .ok();
 }
 
-/// Jev scores the unconfirmed AI proposals that have no score yet; rejected ones are deleted
-/// (the db is copied to `.moodle/trash` first, once). Confirmed and Moodle tasks are never touched.
+/// Copy the db to `.moodle/trash` once per pass before the first deletion.
+fn backup_once(app: &App, backed: &mut bool) -> bool {
+    if !*backed {
+        let d = Path::new(&app.root).join(".moodle/trash");
+        let to = d.join(format!("web.db.pre-jev-{}", crate::web::now()));
+        if std::fs::create_dir_all(&d).is_err() || app.db.backup(&to).is_err() {
+            return false;
+        }
+        *backed = true;
+    }
+    true
+}
+
+/// Delete `id` unless the student answered meanwhile.
+fn drop_unconfirmed(app: &App, id: &str) {
+    if app
+        .db
+        .task(id)
+        .ok()
+        .flatten()
+        .is_some_and(|t| t.ai_confirmed.is_none())
+    {
+        app.db.delete_task(id).ok();
+    }
+}
+
+/// Background pass: skipped while a scan runs.
+pub async fn rescore_idle(app: &App) {
+    if !RUNNING.load(SeqCst) {
+        CANCEL.store(false, SeqCst);
+        rescore(app).await;
+    }
+}
+
+/// Unconfirmed AI proposals: exact duplicates (course + title) are pruned keeping the best score,
+/// then Jev scores those with `ai_v < JEV_V`; rejected ones are deleted (db copied to
+/// `.moodle/trash` first, once). Confirmed and Moodle tasks are never touched. A Jev failure stops
+/// the pass; the next one resumes with the rows still on an old version.
 async fn rescore(app: &App) {
-    let old: Vec<Task> = app
+    let mut old: Vec<Task> = app
         .db
         .all_tasks()
         .unwrap_or_default()
         .into_iter()
-        .filter(|t| t.source == "ai" && t.ai_confirmed.is_none() && t.ai_score.is_none())
+        .filter(|t| t.source == "ai" && t.ai_confirmed.is_none())
         .collect();
     let mut backed = false;
+    old.sort_by(|a, b| {
+        b.ai_score
+            .partial_cmp(&a.ai_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut seen = std::collections::HashSet::new();
+    let mut todo = Vec::new();
     for t in old {
+        if !seen.insert((t.course.clone(), key(&t.title))) {
+            if !backup_once(app, &mut backed) {
+                return;
+            }
+            drop_unconfirmed(app, &t.id);
+        } else if t.ai_v < JEV_V {
+            todo.push(t);
+        }
+    }
+    for t in todo {
         if CANCEL.load(SeqCst) {
             return;
         }
-        let st = format!("{}\n{}", t.title, strip_html(&t.body_html));
-        let Some(p) = jev::noul(&st, VERIFY_Q).await else {
-            return; // Jev is down: the next run tries again
+        let Some(p) = score(
+            &t.course,
+            &t.url,
+            &format!("{}\n{}", t.title, strip_html(&t.body_html)),
+        )
+        .await
+        else {
+            return; // Jev is down: the next run resumes here
         };
         if p >= keep_min() {
             app.db.set_ai_score(&t.id, p).ok();
-            continue;
-        }
-        if !backed {
-            let d = Path::new(&app.root).join(".moodle/trash");
-            let to = d.join(format!("web.db.pre-jev-{}", crate::web::now()));
-            if std::fs::create_dir_all(&d).is_err() || app.db.backup(&to).is_err() {
-                return;
-            }
-            backed = true;
-        }
-        // the student may have answered while Jev thought
-        if app
-            .db
-            .task(&t.id)
-            .ok()
-            .flatten()
-            .is_some_and(|t| t.ai_confirmed.is_none())
-        {
-            app.db.delete_task(&t.id).ok();
+        } else if backup_once(app, &mut backed) {
+            drop_unconfirmed(app, &t.id);
+        } else {
+            return;
         }
     }
 }
@@ -1708,6 +1770,7 @@ mod tests {
 
     #[tokio::test]
     async fn jev_gate_verify_and_rescore_degrade_gracefully() {
+        let _g = jev::mock::ENV.lock().await;
         let root = std::env::temp_dir().join(format!("scanjev-{}", uniq()));
         let app = App::new(
             crate::web::db::Db::memory().unwrap(),
@@ -1745,10 +1808,10 @@ mod tests {
         assert!(note.starts_with("Jev: sense tasques (p=0.02"), "{note}");
         assert_eq!(app.db.cache_get(&sha).unwrap().as_deref(), Some("[]"));
         // verify: low-scored candidates are not proposed, the score is kept
-        let v = verify(vec![cand("Bona tasca"), cand("NOPE tasca")], "doc").await;
-        assert_eq!((v[0].score, v[1].score), (Some(0.9), Some(0.02)));
+        let v = verify(vec![cand("Bona tasca"), cand("NOPE tasca")], "doc", &it).await;
+        assert!((v[0].score.unwrap() - 0.855).abs() < 1e-9 && v[1].score.unwrap() < 0.05);
         let t = to_tasks(&sha, &it, &v, &[]);
-        assert_eq!((t.len(), t[0].ai_score), (1, Some(0.9)));
+        assert_eq!((t.len(), t[0].ai_v), (1, JEV_V));
         // rescore: only unconfirmed AI rows below the threshold go, after a db backup
         let moodle = Task {
             id: "assign:1".into(),
@@ -1761,6 +1824,7 @@ mod tests {
                 ai(0, "NOPE vella", None),
                 ai(1, "Bona vella", None),
                 ai(2, "NOPE confirmada", Some(true)),
+                ai(4, "Bona vella", None), // exact dup of ai:x:1
                 moodle,
             ])
             .unwrap();
@@ -1773,7 +1837,9 @@ mod tests {
             .map(|t| t.id)
             .collect();
         assert_eq!(ids, ["ai:x:1", "ai:x:2", "assign:1"]);
-        assert_eq!(app.db.task("ai:x:1").unwrap().unwrap().ai_score, Some(0.9));
+        let kept = app.db.task("ai:x:1").unwrap().unwrap();
+        assert_eq!((kept.ai_v, kept.ai_score.is_some()), (JEV_V, true));
+        assert!(app.db.task("ai:x:2").unwrap().unwrap().ai_v == 0);
         assert_eq!(
             std::fs::read_dir(root.join(".moodle/trash"))
                 .unwrap()
@@ -1782,7 +1848,7 @@ mod tests {
         );
         // Jev down: no score, candidates kept, rescore leaves rows alone
         std::env::set_var("JEV_URL", "http://127.0.0.1:1");
-        let v = verify(vec![cand("NOPE tasca")], "doc").await;
+        let v = verify(vec![cand("NOPE tasca")], "doc", &it).await;
         assert_eq!(v[0].score, None);
         assert_eq!(to_tasks(&sha, &it, &v, &[]).len(), 1);
         app.db.upsert_tasks(&[ai(3, "NOPE nova", None)]).unwrap();
@@ -1790,6 +1856,44 @@ mod tests {
         assert!(app.db.task("ai:x:3").unwrap().is_some());
         std::env::remove_var("JEV_URL");
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn combine_needs_a_task_that_is_not_quiz_or_notes() {
+        assert!(combine(0.9, 0.9, 0.1) < 0.5);
+        assert!(combine(0.9, 0.1, 0.9) < 0.5);
+        assert!(combine(0.9, 0.05, 0.1) >= 0.5);
+    }
+
+    #[tokio::test]
+    async fn rescore_resumes_rows_on_an_old_prompt_version() {
+        let _g = jev::mock::ENV.lock().await;
+        let app = App::new(
+            crate::web::db::Db::memory().unwrap(),
+            crate::moodle::Moodle::new("http://127.0.0.1:1", "t"),
+            std::env::temp_dir()
+                .join(format!("scanv-{}", uniq()))
+                .to_str()
+                .unwrap(),
+            0,
+        );
+        let ai = |i: u8, v: u8| Task {
+            id: format!("ai:v:{i}"),
+            course: "A".into(),
+            source: "ai".into(),
+            title: format!("Tasca {i}"),
+            ai_score: Some(0.7),
+            ai_v: v,
+            ..Default::default()
+        };
+        app.db.upsert_tasks(&[ai(0, 0), ai(1, JEV_V)]).unwrap();
+        std::env::set_var("JEV_URL", "http://127.0.0.1:1");
+        rescore(&app).await; // Jev down: nothing changes
+        assert_eq!(app.db.task("ai:v:0").unwrap().unwrap().ai_v, 0);
+        std::env::set_var("JEV_URL", jev::mock::serve().await);
+        rescore(&app).await;
+        assert_eq!(app.db.task("ai:v:0").unwrap().unwrap().ai_v, JEV_V);
+        std::env::remove_var("JEV_URL");
     }
 
     #[tokio::test]

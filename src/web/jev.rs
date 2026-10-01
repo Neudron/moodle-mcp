@@ -44,9 +44,20 @@ async fn post(url: &str, state: &str, questions: Value) -> Option<Value> {
     Some(v["answers"].take())
 }
 
+/// How strongly each `(key, instruction)` holds for `state`, 0..1, in one request.
+/// `None` when Jev fails or leaves any key unanswered.
+pub async fn nouls(state: &str, qs: &[(&str, &str)]) -> Option<Vec<f64>> {
+    let q: serde_json::Map<String, Value> = qs
+        .iter()
+        .map(|(k, i)| (k.to_string(), json!({"type": "noul", "instructions": i})))
+        .collect();
+    let a = ask(state, Value::Object(q)).await?;
+    qs.iter().map(|(k, _)| a[*k]["noul"].as_f64()).collect()
+}
+
 /// How strongly `instr` holds for `state`, 0..1.
 pub async fn noul(state: &str, instr: &str) -> Option<f64> {
-    ask(state, json!({"q": {"type": "noul", "instructions": instr}})).await?["q"]["noul"].as_f64()
+    nouls(state, &[("q", instr)]).await?.pop()
 }
 
 #[cfg(test)]
@@ -54,22 +65,29 @@ pub mod mock {
     use axum::{routing::post, Json, Router};
     use serde_json::{json, Value};
 
-    /// Local Jev: the noul is 0.02 when the state contains "NOPE", else 0.9.
+    /// Tests that set `JEV_URL` hold this.
+    pub static ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    /// Local Jev: the noul is 0.02 when the state contains "NOPE", else 0.05 for the keys
+    /// `quiz` and `notes` and 0.9 for any other.
     pub async fn serve() -> String {
         let app = Router::new()
             .route(
                 "/",
                 post(|Json(b): Json<Value>| async move {
-                    let p = if b["state"].as_str().unwrap_or("").contains("NOPE") {
-                        0.02
-                    } else {
-                        0.9
-                    };
+                    let nope = b["state"].as_str().unwrap_or("").contains("NOPE");
                     let a: serde_json::Map<String, Value> = b["questions"]
                         .as_object()
                         .unwrap()
                         .keys()
-                        .map(|k| (k.clone(), json!({"type": "noul", "noul": p})))
+                        .map(|k| {
+                            let p = match (nope, k.as_str()) {
+                                (true, _) => 0.02,
+                                (_, "quiz" | "notes") => 0.05,
+                                _ => 0.9,
+                            };
+                            (k.clone(), json!({"type": "noul", "noul": p}))
+                        })
                         .collect();
                     Json(json!({"answers": a}))
                 }),
@@ -100,5 +118,19 @@ mod tests {
         );
         assert!(post(&format!("{u}/err"), "x", q.clone()).await.is_none());
         assert!(post("http://127.0.0.1:1/", "x", q).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn nouls_answers_every_key_in_order() {
+        let _g = mock::ENV.lock().await;
+        let u = mock::serve().await;
+        let qs = [("task", "a"), ("quiz", "b"), ("notes", "c")];
+        std::env::set_var("JEV_URL", &u);
+        assert_eq!(nouls("hola", &qs).await, Some(vec![0.9, 0.05, 0.05]));
+        assert_eq!(nouls("NOPE", &qs).await, Some(vec![0.02; 3]));
+        assert_eq!(noul("hola", "a").await, Some(0.9));
+        std::env::set_var("JEV_URL", format!("{u}/err"));
+        assert_eq!(nouls("x", &qs).await, None);
+        std::env::remove_var("JEV_URL");
     }
 }

@@ -42,6 +42,8 @@ pub struct Task {
     pub ai_confirmed: Option<bool>,
     /// Jev's 0..1 verdict that this AI proposal is a real task.
     pub ai_score: Option<f64>,
+    /// Version of the Jev prompt that produced `ai_score` (0 = old single question).
+    pub ai_v: u8,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -184,7 +186,9 @@ impl Db {
             let mut t = t.clone();
             if let Some(old) = self.task(&t.id)? {
                 t.ai_confirmed = old.ai_confirmed;
-                t.ai_score = t.ai_score.or(old.ai_score);
+                if t.ai_score.is_none() {
+                    (t.ai_score, t.ai_v) = (old.ai_score, old.ai_v);
+                }
             }
             merged.push(t);
         }
@@ -229,7 +233,7 @@ impl Db {
 
     pub fn set_ai_score(&self, id: &str, p: f64) -> Result<()> {
         if let Some(mut t) = self.task(id)? {
-            t.ai_score = Some(p);
+            (t.ai_score, t.ai_v) = (Some(p), crate::web::scan::JEV_V);
             self.upsert_tasks(&[t])?;
         }
         Ok(())
