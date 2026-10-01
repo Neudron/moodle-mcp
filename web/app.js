@@ -73,6 +73,7 @@ const enc = encodeURIComponent;
 
 // intro-helpers-start
 const hasText = (html) => !!html && (/<(img|video|iframe|object)\b/i.test(html) || html.replace(/<[^>]*>|&nbsp;|\s/g, '') !== '');
+const enunciatMode = (shot, hasIntro) => shot === 'ready' ? 'shot' : shot === 'pending' ? 'wait' : hasIntro ? 'text' : 'link';
 // intro-helpers-end
 function sandboxed(html, label) {
   if (!html || !html.trim()) return h('p', { class: 'dim' }, 'Sense descripció a Moodle.');
@@ -486,24 +487,21 @@ views.tasca = async (id) => {
   const enunciat = () => {
     const slot = h('div', { class: 'v-shotbox' });
     const shot = h('div');
-    const note = h('div', { class: 'notice', role: 'status', hidden: true });
-    const showText = () => shot.replaceChildren(h('p', { class: 'dim' }, 'Sense captura.'));
-    const showShot = () => { const img = h('img', { class: 'v-shot', src: shotUrl(), alt: "Captura de l'enunciat (el text és a sota)" }); img.onerror = showText; shot.replaceChildren(img); };
-    slot.append(shot, hasText(t.body_html) ? intro : empty('Moodle no publica cap text per a aquesta tasca', 'Mira els adjunts o obre-la a Moodle.'));
-    const retry = h('button', { type: 'button', onclick: () => run() }, 'Torna-ho a provar');
-    const msg = h('p');
-    note.append(msg, h('div', { class: 'field-row' }, h('a', { class: 'btn ghost', href: t.url, target: '_blank', rel: 'noopener' }, 'Obre Moodle', NEWTAB.cloneNode(true)), retry));
-    const snap = h('button', { type: 'button', onclick: () => run(snap) }, 'Fes captura');
-    const run = async (from = retry) => {
-      const bs = [snap, retry];
-      bs.forEach((b) => { b.setAttribute('aria-busy', 'true'); b.disabled = true; });
-      try { await api(`/api/shot/${enc(id)}`, { method: 'POST' }); note.hidden = true; showShot(); toast('Captura feta'); }
-      catch (e) { if (e.status === 409) { msg.textContent = e.message; note.hidden = false; } else toast(e.message, true); }
-      bs.forEach((b) => { b.removeAttribute('aria-busy'); b.disabled = false; });
-      (note.hidden ? snap : from).focus();
+    const mode = enunciatMode(tv.shot, hasText(t.body_html));
+    const link = () => h('a', { class: 'btn ghost', href: t.url, target: '_blank', rel: 'noopener' }, "Obre l'enunciat a Moodle", NEWTAB.cloneNode(true));
+    const showShot = () => shot.replaceChildren(h('img', { class: 'v-shot', src: shotUrl(), alt: "Captura de l'enunciat (el text és a sota)" }));
+    const giveUp = () => shot.replaceChildren(hasText(t.body_html) ? h('p', { class: 'dim' }, 'Sense captura.') : link());
+    const wait = (left) => {
+      const img = new Image();
+      img.onload = showShot;
+      img.onerror = () => { if (left > 0 && slot.isConnected) setTimeout(() => wait(left - 1), 15000); else giveUp(); };
+      img.src = shotUrl();
     };
-    showShot();
-    return h('div', { class: 'v-pane' }, h('div', { class: 'field-row' }, snap), note, slot,
+    if (mode === 'shot') { showShot(); shot.firstChild.onerror = giveUp; }
+    else if (mode === 'wait') { shot.replaceChildren(h('p', { class: 'dim', role: 'status' }, 'Capturant…')); wait(4); }
+    else if (mode === 'link') shot.replaceChildren(link());
+    slot.append(shot, hasText(t.body_html) ? intro : empty('Moodle no publica cap text per a aquesta tasca', 'Mira els adjunts o obre-la a Moodle.'));
+    return h('div', { class: 'v-pane' }, slot,
       attRows.length ? [h('h2', {}, 'Adjunts del professor'), h('div', { class: 'list' }, attRows)] : null,
       fb ? [h('h2', {}, 'Retroacció'), fb] : null);
   };

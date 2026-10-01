@@ -33,3 +33,13 @@ test('hasText', () => {
   assert.equal(hasText('<p>Hola</p>'), true);
   assert.equal(hasText('<p><img src=x></p>'), true);
 });
+
+const { enunciatMode } = new Function(`${block('intro')}; return { enunciatMode };`)();
+test('enunciatMode', () => {
+  assert.equal(enunciatMode('ready', true), 'shot');
+  assert.equal(enunciatMode('ready', false), 'shot');
+  assert.equal(enunciatMode('pending', true), 'wait');
+  assert.equal(enunciatMode('none', true), 'text');
+  assert.equal(enunciatMode('none', false), 'link');
+  assert.equal(enunciatMode(undefined, false), 'link');
+});

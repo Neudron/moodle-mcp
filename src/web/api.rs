@@ -244,7 +244,10 @@ async fn one_task(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
     if l.status == "lliurat" {
         dir = dir.replacen("submit/", "submit/_lliurat/", 1);
     }
-    Ok(Json(json!({"task": t, "local": l, "submit_dir": dir})))
+    let shot = crate::web::shots::ensure(&app, &t);
+    Ok(Json(
+        json!({"task": t, "local": l, "submit_dir": dir, "shot": shot}),
+    ))
 }
 
 #[derive(Deserialize)]

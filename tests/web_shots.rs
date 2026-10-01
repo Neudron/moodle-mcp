@@ -34,110 +34,88 @@ async fn shot_routes() {
         .await
         .unwrap();
     app.db
-        .upsert_tasks(&[Task {
-            id: "assign:evil".into(),
-            kind: "assign".into(),
-            url: "http://evil.example/mod/assign/view.php?id=1".into(),
-            ..Default::default()
-        }])
+        .upsert_tasks(&[
+            Task {
+                id: "assign:evil".into(),
+                kind: "assign".into(),
+                url: "http://evil.example/mod/assign/view.php?id=1".into(),
+                ..Default::default()
+            },
+            Task {
+                id: "assign:auto".into(),
+                kind: "assign".into(),
+                url: format!("{}/mod/assign/view.php?id=1", m.base()),
+                ..Default::default()
+            },
+        ])
         .unwrap();
     tokio::spawn(web::serve_on(listener, Arc::clone(&app)));
     let base = format!("http://127.0.0.1:{port}");
     let c = reqwest::Client::new();
-    let post = |p: &str| {
-        c.post(format!("{base}{p}"))
-            .header("origin", &base)
-            .header("x-neu", "1")
+    let shot = |id: &str| {
+        let (c, u) = (c.clone(), format!("{base}/api/tasks/{id}"));
+        async move {
+            c.get(u)
+                .send()
+                .await
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap()["shot"]
+                .clone()
+        }
     };
 
-    // no shot yet
+    // the manual button is gone
     let r = c
-        .get(format!("{base}/api/shot/assign:7"))
+        .post(format!("{base}/api/shot/assign:7"))
+        .header("origin", &base)
+        .header("x-neu", "1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 405);
+    // nothing yet
+    let r = c
+        .get(format!("{base}/api/shot/assign:auto"))
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 404);
 
-    // unknown task, foreign host: never spawn
     let log = root.join("log");
     let png = root.join("fake.png");
     std::env::set_var(
         "SHOT_CMD",
         format!("sh {FAKE} {} {}", png.display(), log.display()),
     );
-    assert_eq!(
-        post("/api/shot/assign:nope").send().await.unwrap().status(),
-        404
-    );
-    assert_eq!(
-        post("/api/shot/assign:evil").send().await.unwrap().status(),
-        400
-    );
-    assert!(!log.exists(), "foreign URL must not reach the browser");
-
-    // POST needs the mutation headers
-    let r = c
-        .post(format!("{base}/api/shot/assign:7"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 403);
-
-    // no Firefox session: 409 with a hint, the browser is never started
+    // foreign host: never spawn
+    assert_eq!(shot("assign:evil").await, "none");
+    // no Firefox session: never spawn
     let ffroot = root.join("ff");
     std::fs::create_dir_all(&ffroot).unwrap();
     std::env::set_var("MOODLE_FIREFOX_ROOT", &ffroot);
-    let r = post("/api/shot/assign:7").send().await.unwrap();
-    assert_eq!(r.status(), 409);
-    assert!(r
-        .text()
-        .await
-        .unwrap()
-        .contains("inicia sessió a Moodle al Firefox"));
+    assert_eq!(shot("assign:auto").await, "none");
     assert!(!log.exists());
+
+    // session: capture starts by itself
     ff::firefox_session(&ffroot);
-
-    // session in Firefox but the page is a login: 409
-    std::env::set_var(
-        "SHOT_CMD",
-        format!(
-            "env FAKE_MCP_URL=https://x/login/index.php sh {FAKE} {} {}",
-            png.display(),
-            log.display()
-        ),
-    );
-    assert_eq!(
-        post("/api/shot/assign:7").send().await.unwrap().status(),
-        409
-    );
-    std::env::set_var(
-        "SHOT_CMD",
-        format!("sh {FAKE} {} {}", png.display(), log.display()),
-    );
-
-    // happy path
-    let r = post("/api/shot/assign:7").send().await.unwrap();
-    assert_eq!(r.status(), 200);
-    assert!(root.join(".moodle/shots/assign_7.png").exists());
-    let r = c
-        .get(format!("{base}/api/shot/assign:7"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 200);
-    assert_eq!(r.headers()["content-type"], "image/png");
-    assert!(r.bytes().await.unwrap().starts_with(b"\x89PNG"));
-
-    // broken command -> 502, previous shot still served
-    std::env::set_var("SHOT_CMD", "/nonexistent/mcp-bin");
-    assert_eq!(
-        post("/api/shot/assign:7").send().await.unwrap().status(),
-        502
-    );
-    let r = c
-        .get(format!("{base}/api/shot/assign:7"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(r.status(), 200);
+    assert_eq!(shot("assign:auto").await, "pending");
+    let mut ok = false;
+    for _ in 0..50 {
+        let r = c
+            .get(format!("{base}/api/shot/assign:auto"))
+            .send()
+            .await
+            .unwrap();
+        if r.status() == 200 {
+            assert_eq!(r.headers()["content-type"], "image/png");
+            assert!(r.bytes().await.unwrap().starts_with(b"\x89PNG"));
+            ok = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(ok, "shot not produced within 5s");
+    assert_eq!(shot("assign:auto").await, "ready");
 }

@@ -2,7 +2,7 @@
 //! Spawns `SHOT_CMD` (default `npx -y open-browser-control@0.2.0`), which drives
 //! the user's Firefox; one browser means one shared session behind a lock.
 use crate::web::{
-    api::{bad, ApiErr, R},
+    api::{ApiErr, R},
     App,
 };
 use anyhow::{bail, Context, Result};
@@ -11,7 +11,7 @@ use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
-    Json, Router,
+    Router,
 };
 use serde_json::{json, Value};
 use std::path::Path;
@@ -347,7 +347,69 @@ pub fn shot_file(root: &str, id: &str) -> PathBuf {
 }
 
 pub fn router() -> Router<Arc<App>> {
-    Router::new().route("/api/shot/{id}", get(get_shot).post(make_shot))
+    Router::new().route("/api/shot/{id}", get(get_shot))
+}
+
+/// Captures in flight or queued, by task id.
+static BUSY: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+/// One capture at a time: the browser is shared.
+static SERIAL: Mutex<()> = Mutex::const_new(());
+const RETRY_SECS: i64 = 6 * 3600;
+
+/// Shot state of a task: "ready", "pending" (capture running or just started) or "none".
+/// Starts a background capture when the task qualifies and was not tried in the last 6h.
+pub fn ensure(app: &Arc<App>, t: &crate::web::db::Task) -> &'static str {
+    let file = shot_file(&app.root, &t.id);
+    if file.exists() {
+        return "ready";
+    }
+    if BUSY.lock().unwrap().contains(&t.id) {
+        return "pending";
+    }
+    let key = format!("shot_try:{}", t.id);
+    let recent = app
+        .db
+        .kv_get(&key)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .is_some_and(|at| crate::web::now() - at < RETRY_SECS);
+    if !matches!(t.kind.as_str(), "assign" | "quiz")
+        || !moodle_only(app.moodle.base(), &t.url)
+        || recent
+        || crate::firefox::session_cookie(&crate::firefox::root(), None).is_err()
+    {
+        return "none";
+    }
+    let _ = app.db.kv_set(&key, &crate::web::now().to_string());
+    BUSY.lock().unwrap().push(t.id.clone());
+    let (app, id, url) = (Arc::clone(app), t.id.clone(), t.url.clone());
+    tokio::spawn(async move {
+        let _g = SERIAL.lock().await;
+        if let Err(e) = shoot(&cmd(), &url, &shot_file(&app.root, &id)).await {
+            let _ = app.db.log_error(
+                "shot",
+                "capture",
+                &crate::errors::redact_token(&format!("{id}: {e}")),
+            );
+        }
+        BUSY.lock().unwrap().retain(|x| *x != id);
+    });
+    "pending"
+}
+
+/// Start captures for up to `n` tasks that lack one (the 30-min pass).
+pub fn backfill(app: &Arc<App>, n: usize) {
+    let Ok(all) = app.db.all_tasks() else { return };
+    let mut started = 0;
+    for t in all {
+        if started >= n {
+            break;
+        }
+        if ensure(app, &t) == "pending" {
+            started += 1;
+        }
+    }
 }
 
 async fn get_shot(State(app): State<Arc<App>>, AxPath(id): AxPath<String>) -> R<Response> {
@@ -363,32 +425,6 @@ async fn get_shot(State(app): State<Arc<App>>, AxPath(id): AxPath<String>) -> R<
         bytes,
     )
         .into_response())
-}
-
-async fn make_shot(State(app): State<Arc<App>>, AxPath(id): AxPath<String>) -> R<Json<Value>> {
-    let t = app
-        .db
-        .task(&id)?
-        .ok_or_else(|| ApiErr(StatusCode::NOT_FOUND, "no such task".into()))?;
-    if !moodle_only(app.moodle.base(), &t.url) {
-        return Err(bad("url fora de Moodle"));
-    }
-    const HINT: &str =
-        "Firefox no té sessió de Moodle: inicia sessió a Moodle al Firefox i torna-ho a provar";
-    if crate::firefox::session_cookie(&crate::firefox::root(), None).is_err() {
-        return Err(ApiErr(StatusCode::CONFLICT, HINT.into()));
-    }
-    let cmd = cmd();
-    shoot(&cmd, &t.url, &shot_file(&app.root, &id))
-        .await
-        .map_err(|e| {
-            let m = e.to_string();
-            if m.contains(LOGIN) {
-                return ApiErr(StatusCode::CONFLICT, HINT.into());
-            }
-            ApiErr(StatusCode::BAD_GATEWAY, crate::errors::redact_token(&m))
-        })?;
-    Ok(Json(json!({"ok": true})))
 }
 
 #[cfg(test)]

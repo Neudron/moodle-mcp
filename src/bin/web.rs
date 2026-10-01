@@ -65,6 +65,7 @@ async fn main() -> Result<()> {
                     tracing::warn!(errors = ?r.errors, "apple sync");
                 }
                 web::scan::rescore_idle(&pass).await;
+                web::shots::backfill(&pass, 5);
             })
             .await
             {
