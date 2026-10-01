@@ -3,7 +3,7 @@ use crate::errors::CoreError;
 use crate::moodle::{Course, Moodle};
 use crate::web::db::{Attachment, Db, Task};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -197,6 +197,7 @@ pub async fn sync_all(
     .map_err(|e| CoreError::Invalid(e.to_string()))?;
     let base = m.base().to_string();
     let mut out = Vec::new();
+    let mut bad: HashSet<i64> = HashSet::new();
     for c in &courses {
         let cid = c.id.to_string();
         let a = ws(
@@ -205,6 +206,9 @@ pub async fn sync_all(
             &[("courseids[0]", cid.clone())],
         )
         .await?;
+        if a.is_null() {
+            bad.insert(c.id);
+        }
         for course in a["courses"].as_array().into_iter().flatten() {
             for asg in course["assignments"].as_array().into_iter().flatten() {
                 let st = ws(
@@ -213,6 +217,9 @@ pub async fn sync_all(
                     &[("assignid", asg["id"].to_string())],
                 )
                 .await?;
+                if st.is_null() {
+                    bad.insert(c.id);
+                }
                 let mut t = from_assign(c, asg, &st, &base);
                 if st.is_null() {
                     // transient failure: keep cached status/grade/feedback/delivered files
@@ -239,6 +246,9 @@ pub async fn sync_all(
             &[("courseids[0]", cid.clone())],
         )
         .await?;
+        if q.is_null() {
+            bad.insert(c.id);
+        }
         for quiz in q["quizzes"].as_array().into_iter().flatten() {
             let at = ws(
                 m,
@@ -246,6 +256,9 @@ pub async fn sync_all(
                 &[("quizid", quiz["id"].to_string()), ("status", "all".into())],
             )
             .await?;
+            if at.is_null() {
+                bad.insert(c.id);
+            }
             let mut t = from_quiz(c, quiz, &at, &base);
             if at.is_null() {
                 if let Some(o) = db.task(&t.id).map_err(CoreError::Other)? {
@@ -260,6 +273,9 @@ pub async fn sync_all(
             &[("courseids[0]", cid.clone())],
         )
         .await?;
+        if f.is_null() {
+            bad.insert(c.id);
+        }
         for forum in f.as_array().into_iter().flatten() {
             let d = ws(
                 m,
@@ -267,6 +283,9 @@ pub async fn sync_all(
                 &[("forumid", forum["id"].to_string())],
             )
             .await?;
+            if d.is_null() {
+                bad.insert(c.id);
+            }
             for disc in d["discussions"].as_array().into_iter().flatten() {
                 out.push(from_discussion(c, disc, &base));
             }
@@ -277,6 +296,9 @@ pub async fn sync_all(
             &[("courseid", cid.clone()), ("userid", uid.to_string())],
         )
         .await?;
+        if g.is_null() {
+            bad.insert(c.id);
+        }
         if !g["usergrades"][0].is_null() {
             // Keep the name here: courses with no tasks have nowhere else to get it from.
             let mut ug = g["usergrades"][0].clone();
@@ -297,6 +319,18 @@ pub async fn sync_all(
         diff(&old, &out)
     };
     db.upsert_tasks(&out).map_err(CoreError::Other)?;
+    // Gone from Moodle: drop, but only for courses whose calls all succeeded.
+    let seen: HashSet<&str> = out.iter().map(|t| t.id.as_str()).collect();
+    let ok: HashSet<i64> = courses
+        .iter()
+        .map(|c| c.id)
+        .filter(|id| !bad.contains(id))
+        .collect();
+    for t in old.values() {
+        if ok.contains(&t.course_id) && !seen.contains(t.id.as_str()) {
+            db.delete_task(&t.id).map_err(CoreError::Other)?;
+        }
+    }
     if files {
         let mut state = crate::state::State::load(root).map_err(CoreError::Other)?;
         state.user_id = uid;

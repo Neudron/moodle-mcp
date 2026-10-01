@@ -133,3 +133,48 @@ async fn transient_status_failure_keeps_submission_files() {
         .unwrap();
     assert_eq!(db.task("assign:7").unwrap().unwrap().submission_files, want);
 }
+
+fn ghost(id: &str, course_id: i64) -> moodle_mcp::web::db::Task {
+    moodle_mcp::web::db::Task {
+        id: id.into(),
+        course_id,
+        source: "moodle".into(),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn task_removed_on_moodle_is_deleted() {
+    let m = MockMoodle::healthy().await;
+    let c = Moodle::new(m.base(), TOKEN);
+    let db = Db::memory().unwrap();
+    let r = root("gone");
+    sync_all(&c, &db, &r, false).await.unwrap();
+    let cid = db.task("assign:7").unwrap().unwrap().course_id;
+    db.upsert_tasks(&[ghost("assign:999", cid)]).unwrap();
+    sync_all(&c, &db, &r, false).await.unwrap();
+    assert!(db.task("assign:999").unwrap().is_none());
+    assert!(db.task("assign:7").unwrap().is_some());
+}
+
+#[tokio::test]
+async fn failed_course_call_deletes_nothing() {
+    let ok = MockMoodle::healthy().await;
+    let db = Db::memory().unwrap();
+    let r = root("gonefail");
+    sync_all(&Moodle::new(ok.base(), TOKEN), &db, &r, false)
+        .await
+        .unwrap();
+    let cid = db.task("assign:7").unwrap().unwrap().course_id;
+    db.upsert_tasks(&[ghost("assign:999", cid)]).unwrap();
+    let bad = MockMoodle::start(MockConfig {
+        fail_fn: Some("mod_assign_get_assignments"),
+        ..Default::default()
+    })
+    .await;
+    sync_all(&Moodle::new(bad.base(), TOKEN), &db, &r, false)
+        .await
+        .unwrap();
+    assert!(db.task("assign:999").unwrap().is_some());
+    assert!(db.task("assign:7").unwrap().is_some());
+}
