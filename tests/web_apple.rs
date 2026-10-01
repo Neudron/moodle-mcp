@@ -225,6 +225,8 @@ async fn mirrors_lifecycle() {
         "CR/LF stripped"
     );
     assert!(l.contains("--alarm-minutes 4320 --alarm-minutes 1440 --alarm-minutes 180"));
+    assert!(l.contains("--uid moodle-"), "{l}");
+    assert!(l.contains("@moodle-web"), "{l}");
     assert_eq!(l.lines().count(), 2);
 
     apple::sync(&app).await;
@@ -233,7 +235,10 @@ async fn mirrors_lifecycle() {
     app.db.upsert_tasks(&[task(due + 3600, "")]).unwrap();
     let r = apple::sync(&app).await;
     assert_eq!((r.created, r.updated), (0, 1));
-    assert!(lines().contains("--uid U-event-new"), "same uid reused");
+    assert!(
+        lines().matches("--uid moodle-").count() == 2,
+        "same uid reused"
+    );
 
     app.db
         .upsert_tasks(&[task(due + 3600, "submitted")])
@@ -505,4 +510,41 @@ async fn stale_event_fail_todo_done_once() {
     let r = &app.db.caldav_rows().unwrap()[0];
     assert_eq!((r.2.as_str(), r.3.as_str()), ("EV", ""));
     assert_eq!(f.calls("todo-done"), 1);
+}
+
+#[tokio::test]
+async fn legacy_uid_is_kept_on_update() {
+    let _g = ENV.lock().await;
+    let dir = std::env::temp_dir().join(format!("mweb-apple-legacy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("log");
+    let sh = dir.join("fake.sh");
+    std::fs::write(
+        &sh,
+        format!(
+            "#!/bin/sh\necho \"$@\" >> {}\necho '{{\"uid\":\"U-'$1'\"}}'\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::env::set_var("ICLOUD_GLASS_CMD", &sh);
+    std::env::set_var("ICLOUD_GLASS_STATE", dir.join("state"));
+    let app = web::App::new(
+        Db::memory().unwrap(),
+        Moodle::new("http://x", "t"),
+        dir.to_str().unwrap(),
+        0,
+    );
+    let due = web::now() + 86400 * 5;
+    app.db.upsert_tasks(&[task(due, "")]).unwrap();
+    app.db
+        .set_caldav("assign:1", "old-hash", "U-legacy", "")
+        .unwrap();
+    apple::sync(&app).await;
+    let l = std::fs::read_to_string(&log).unwrap();
+    let ev = l.lines().find(|x| x.starts_with("event-new")).unwrap();
+    assert!(ev.contains("--uid U-legacy"), "{ev}");
+    assert!(!ev.contains("--uid moodle-"), "{ev}");
 }

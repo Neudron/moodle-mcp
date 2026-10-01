@@ -429,9 +429,12 @@ async fn run(app: &App, s: &mut Summary) -> anyhow::Result<()> {
                 "180",
             ];
             let had_ev = !ev.is_empty();
-            if had_ev {
-                a.extend(["--uid", &ev]);
-            }
+            let uid = if had_ev {
+                ev.clone()
+            } else {
+                format!("moodle-{}@moodle-web", t.id)
+            };
+            a.extend(["--uid", &uid]);
             match cal_cli(&a, &mut g, s).await {
                 Ok(u) if !u.is_empty() => {
                     ev = u;
