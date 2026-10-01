@@ -763,7 +763,7 @@ async fn local_copy(app: &App, id: &str, url: &str, want: &str) -> anyhow::Resul
     if let Some(p) = fresh {
         return Ok(p);
     }
-    let cmd = env::get("SHOT_CMD").unwrap_or_else(|| shots::DEFAULT_CMD.into());
+    let cmd = shots::cmd();
     let got = shots::download(&cmd, url, &downloads_dir(), want).await?;
     let ext = ext_of(&got.to_string_lossy());
     let dest = dir.join(format!(
@@ -810,7 +810,7 @@ pub async fn browser_text(url: &str) -> anyhow::Result<String> {
             .any(|p| url.starts_with(p)),
         "el navegador només obre enllaços de Google"
     );
-    let cmd = env::get("SHOT_CMD").unwrap_or_else(|| shots::DEFAULT_CMD.into());
+    let cmd = shots::cmd();
     Ok(strip_html(&shots::page_dom(&cmd, url).await?))
 }
 
@@ -1385,7 +1385,7 @@ async fn run_job(app: Arc<App>, job: i64, _g: Running) {
     if env::get("SCAN_SHOTS").as_deref() != Some("0")
         && crate::firefox::session_cookie(&crate::firefox::root(), None).is_ok()
     {
-        let cmd = env::get("SHOT_CMD").unwrap_or_else(|| shots::DEFAULT_CMD.into());
+        let cmd = shots::cmd();
         for t in app.db.all_tasks().unwrap_or_default() {
             let dest = shots::shot_file(&app.root, &t.id);
             if CANCEL.load(SeqCst) {

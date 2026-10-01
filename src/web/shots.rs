@@ -1,5 +1,5 @@
 //! Enunciat screenshots through a hand-rolled MCP stdio client (no LLM).
-//! Spawns `SHOT_CMD` (default `npx -y open-browser-control`), which drives
+//! Spawns `SHOT_CMD` (default `npx -y open-browser-control@0.2.0`), which drives
 //! the user's Firefox; one browser means one shared session behind a lock.
 use crate::web::{
     api::{bad, ApiErr, R},
@@ -25,7 +25,12 @@ use tokio::sync::{Mutex, MutexGuard};
 
 pub const SELECTOR: &str = "#intro, .activity-description, [role=main]";
 pub const LOGIN: &str = "Moodle demana iniciar sessió al navegador";
-pub const DEFAULT_CMD: &str = "npx -y open-browser-control";
+const DEFAULT_CMD: &str = "npx -y open-browser-control@0.2.0";
+
+/// Screenshot MCP command: `SHOT_CMD` or the pinned default.
+pub fn cmd() -> String {
+    crate::web::env::get("SHOT_CMD").unwrap_or_else(|| DEFAULT_CMD.into())
+}
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// The extension connection flaps: "not connected" replies are retried.
 const ATTEMPTS: u32 = 5;
@@ -373,7 +378,7 @@ async fn make_shot(State(app): State<Arc<App>>, AxPath(id): AxPath<String>) -> R
     if crate::firefox::session_cookie(&crate::firefox::root(), None).is_err() {
         return Err(ApiErr(StatusCode::CONFLICT, HINT.into()));
     }
-    let cmd = std::env::var("SHOT_CMD").unwrap_or_else(|_| DEFAULT_CMD.into());
+    let cmd = cmd();
     shoot(&cmd, &t.url, &shot_file(&app.root, &id))
         .await
         .map_err(|e| {
@@ -388,6 +393,13 @@ async fn make_shot(State(app): State<Arc<App>>, AxPath(id): AxPath<String>) -> R
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn default_cmd_is_pinned() {
+        if std::env::var("SHOT_CMD").is_err() {
+            assert!(super::cmd().contains("open-browser-control@"));
+        }
+    }
+
     use super::*;
 
     const FAKE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_mcp.sh");
