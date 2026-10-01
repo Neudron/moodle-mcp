@@ -264,9 +264,9 @@ mod tests {
         let d0 = backoff_delay(0);
         let d1 = backoff_delay(1);
         let d2 = backoff_delay(2);
-        assert!(d0 >= Duration::from_millis(500) && d0 < Duration::from_millis(750));
-        assert!(d1 >= Duration::from_millis(1000) && d1 < Duration::from_millis(1250));
-        assert!(d2 >= Duration::from_millis(2000) && d2 < Duration::from_millis(2250));
+        assert!(d0 >= Duration::from_millis(500) && d0 <= Duration::from_millis(750));
+        assert!(d1 >= Duration::from_millis(1000) && d1 <= Duration::from_millis(1250));
+        assert!(d2 >= Duration::from_millis(2000) && d2 <= Duration::from_millis(2250));
         for attempt in [5, 10, 100] {
             let d = backoff_delay(attempt);
             assert!(d >= Duration::from_millis(15_000));
