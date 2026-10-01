@@ -188,27 +188,31 @@ async function scanPoll() {
   clearInterval(SCAN.timer); SCAN.timer = 0;
   if (was !== 'running') return;
   const c = p.counts || {};
-  setText($('#live'), p.state === 'done' ? `Escaneig acabat: ${p.proposed} proposades, ${c.needs_review || 0} per revisar, ${c.error || 0} errors` : p.state === 'cancelled' ? 'Escaneig cancel·lat' : "Escaneig interromput");
+  setText($('#live'), p.state === 'done' ? `Escaneig acabat: ${p.proposed} proposades, ${c.broken || 0} enllaços trencats, ${c.needs_review || 0} per revisar, ${c.error || 0} errors` : p.state === 'cancelled' ? 'Escaneig cancel·lat' : "Escaneig interromput");
   if (route.cur === 'tauler') route({ soft: true });
 }
 function scanControl() {
-  const SL = { needs_review: 'Per revisar', error: 'Error', broken: 'Enllaç trencat' };
   const go = h('button', { type: 'button', class: 'primary', onclick: async () => {
     if (SCAN.p?.state === 'running') return;
     try { await api('/api/scan', { method: 'POST' }); } catch (e) { if (e.status === 409) toast('Ja hi ha un escaneig en marxa'); else return toast(e.message, true); }
     scanPoll();
   } }, ic('search'), 'Escaneja Moodle amb IA');
   const stop = h('button', { type: 'button', class: 'ghost', hidden: true, onclick: async () => { try { await api('/api/scan/cancel', { method: 'POST' }); } catch (e) { toast(e.message, true); } scanPoll(); } }, 'Cancel·la');
-  const prog = h('div', { class: 'v-scan-p' }), list = h('ul', { class: 'v-scan-l' });
-  const det = h('details', { hidden: true }, h('summary', {}, 'Elements per revisar'), list);
-  const node = h('section', { class: 'v-scan', 'aria-label': 'Escaneig amb IA' }, h('div', { class: 'field-row' }, go, stop), prog, det);
+  const prog = h('div', { class: 'v-scan-p' });
+  const mk = () => { const ul = h('ul', { class: 'v-scan-l' }), sum = h('summary'); return { ul, sum, d: h('details', { hidden: true }, sum, ul) }; };
+  const bro = mk(), rev = mk();
+  const node = h('section', { class: 'v-scan', 'aria-label': 'Escaneig amb IA' }, h('div', { class: 'field-row' }, go, stop), prog, bro.d, rev.d);
   node.render = (p) => {
     const run = p.state === 'running', { finished, total } = scanTotals(p);
     go.setAttribute('aria-disabled', String(run)); stop.hidden = !run;
     prog.replaceChildren(...(run ? [bar(finished, total, "Progrés de l'escaneig", '', `${finished} de ${total} fitxers`)]
       : p.state === 'idle' || p.state === 'done' ? [] : [h('p', { class: 'dim' }, `${{ done: 'Acabat', cancelled: 'Cancel·lat', interrupted: 'Interromput' }[p.state] || p.state}: ${p.proposed || 0} proposades`)]));
-    list.replaceChildren(...(p.items || []).map((i) => h('li', {}, h('b', {}, SL[i.status] || i.status), ` ${i.course} · `, h('span', { class: 'mono' }, i.src), i.error ? ` · ${i.error}` : '')));
-    det.hidden = !(p.items || []).length;
+    const li = (i) => h('li', { title: i.src }, /^https?:/.test(i.src) ? h('b', {}, i.name) : h('a', { href: `#/fitxers/${enc(i.src)}` }, h('b', {}, i.name)),
+      ` ${cname(i.course)}`, i.n > 1 ? ` ×${i.n}` : '', i.error ? ` · ${i.error}` : '');
+    const items = p.items || [], b = items.filter((i) => i.status === 'broken'), r = items.filter((i) => i.status !== 'broken');
+    for (const [x, rows, t] of [[bro, b, 'Enllaços trencats'], [rev, r, 'Per revisar']]) {
+      x.sum.textContent = `${t} (${rows.length})`; x.ul.replaceChildren(...rows.map(li)); x.d.hidden = !rows.length;
+    }
   };
   SCAN.nodes.add(node);
   if (SCAN.p) node.render(SCAN.p);

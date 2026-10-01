@@ -607,16 +607,67 @@ impl Db {
             counts.insert(k, n.into());
         }
         let mut it = c.prepare(
-            "SELECT src,course,status,error FROM scan_item WHERE job=?1 AND status IN ('needs_review','error','broken') ORDER BY src LIMIT 200",
+            "SELECT src,course,status,error FROM scan_item WHERE job=?1 AND status IN ('needs_review','error','broken') ORDER BY src LIMIT 500",
         )?;
-        let items = it
+        let rows = it
             .query_map([id], |r| {
-                Ok(
-                    json!({"src": r.get::<_, String>(0)?, "course": r.get::<_, String>(1)?,
-                          "status": r.get::<_, String>(2)?, "error": r.get::<_, String>(3)?}),
-                )
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
+        // .url rows: one per (status, error, name): "G.url" and "G-2.url" are the same Moodle link.
+        let mut groups: Vec<(String, String, String, String, String, i64)> = Vec::new();
+        for (src, course, status, error) in rows {
+            let file = src.rsplit('/').next().unwrap_or(&src);
+            let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
+            // Only .url rows merge; real files keep their own row.
+            let is_url = file.to_lowercase().ends_with(".url");
+            let name = match stem.rsplit_once('-') {
+                Some((h, d))
+                    if is_url
+                        && !h.is_empty()
+                        && !d.is_empty()
+                        && d.bytes().all(|b| b.is_ascii_digit()) =>
+                {
+                    h
+                }
+                _ => stem,
+            }
+            .to_string();
+            if !is_url {
+                groups.push((src, course, status, error, name, 1));
+                continue;
+            }
+            match groups
+                .iter_mut()
+                .find(|g| (&g.2, &g.3, &g.4) == (&status, &error, &name))
+            {
+                Some(g) => {
+                    g.5 += 1;
+                    if src.len() < g.0.len() {
+                        (g.0, g.1) = (src, course);
+                    }
+                }
+                None => groups.push((src, course, status, error, name, 1)),
+            }
+        }
+        let rank = |s: &str| {
+            ["broken", "needs_review"]
+                .iter()
+                .position(|x| *x == s)
+                .unwrap_or(2)
+        };
+        groups.sort_by(|a, b| (rank(&a.2), &a.0).cmp(&(rank(&b.2), &b.0)));
+        let items: Vec<_> = groups
+            .into_iter()
+            .map(|(src, course, status, error, name, n)| {
+                json!({"src": src, "course": course, "status": status, "error": error, "name": name, "n": n})
+            })
+            .collect();
         Ok(Some(
             json!({"job": id, "state": state, "started": started, "finished": finished,
                    "counts": counts, "items": items}),

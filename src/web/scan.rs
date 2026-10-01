@@ -111,6 +111,19 @@ pub fn is_own(rel: &str) -> bool {
     crate::web::files::has_owner(stem) || n.ends_with(".bak") || n.ends_with(".tmp")
 }
 
+/// Compiler/IDE output (Eclipse `bin/`, `target/`, ...) is not coursework.
+pub fn is_build_output(rel: &str) -> bool {
+    let mut it = rel.rsplit('/');
+    let name = it.next().unwrap_or(rel);
+    matches!(name.rsplit_once('.'), Some((_, "class" | "o" | "pyc")))
+        || it.any(|s| {
+            matches!(
+                s,
+                "bin" | "out" | "target" | "build" | ".gradle" | "node_modules"
+            )
+        })
+}
+
 pub fn google_parts(u: &str) -> Option<(String, String)> {
     static RE: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(
@@ -139,11 +152,15 @@ pub fn inventory(root: &Path, tasks: &[Task]) -> Vec<Item> {
     {
         let mut all = Vec::new();
         files::walk(root, &top.rel, &mut all);
-        out.extend(all.into_iter().filter(|r| !is_own(r)).map(|src| Item {
-            src,
-            course: super::api::course_short_of(root, &top.name),
-            kind: "file",
-        }));
+        out.extend(
+            all.into_iter()
+                .filter(|r| !is_own(r) && !is_build_output(r))
+                .map(|src| Item {
+                    src,
+                    course: super::api::course_short_of(root, &top.name),
+                    kind: "file",
+                }),
+        );
     }
     static GRE: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(
@@ -1643,11 +1660,22 @@ mod tests {
     }
 
     #[test]
+    fn build_output_detected() {
+        assert!(is_build_output("programacio/bin/prova01.class"));
+        assert!(is_build_output("p/node_modules/x/a.js"));
+        assert!(is_build_output("p/a.pyc"));
+        assert!(!is_build_output("bbdd/RA01/x.pdf"));
+        assert!(!is_build_output("programacio/src/Main.java"));
+        assert!(!is_build_output("p/binary/a.txt"));
+    }
+
+    #[test]
     fn inventory_walks_all_courses_and_skips_personal_dirs() {
         let r = std::env::temp_dir().join(format!("mweb-inv-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&r);
         for d in [
             "CursA/RA01",
+            "CursA/bin",
             "marques/lliuraments",
             "submit/_lliurat",
             "_scan",
@@ -1662,6 +1690,7 @@ mod tests {
             "CursA/RA01/b_amin.docx",
             "CursA/RA01/c.docx.bak",
             "CursA/RA01/l.url",
+            "CursA/bin/A.class",
             "marques/lliuraments/old.docx",
             "marques/index.md",
             "submit/_lliurat/x.docx",

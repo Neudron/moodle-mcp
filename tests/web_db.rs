@@ -177,3 +177,37 @@ fn db_files_are_private() {
         assert_eq!(m, 0o600, "{f:?}");
     }
 }
+
+#[test]
+fn scan_progress_dedupes_broken_links() {
+    let db = Db::memory().unwrap();
+    let j = db.scan_new_job(1).unwrap();
+    for s in [
+        "t/010-G/G.url",
+        "t/010-G/G-2.url",
+        "t/014-G/G.url",
+        "t/a.class",
+        "t/P-1.odg",
+        "t/P-2.odg",
+    ] {
+        db.scan_add_item(j, s, "t", "link").unwrap();
+    }
+    for s in ["t/010-G/G.url", "t/010-G/G-2.url", "t/014-G/G.url"] {
+        db.scan_item_done(j, s, "", "broken", "TLS", 2).unwrap();
+    }
+    db.scan_item_done(j, "t/a.class", "", "needs_review", "x", 2)
+        .unwrap();
+    for s in ["t/P-1.odg", "t/P-2.odg"] {
+        db.scan_item_done(j, s, "", "needs_review", "x", 2).unwrap();
+    }
+    let p = db.scan_progress().unwrap().unwrap();
+    let it = p["items"].as_array().unwrap();
+    assert_eq!(it.len(), 4);
+    assert_eq!(it.iter().filter(|i| i["n"] == 1).count(), 3);
+    assert_eq!(
+        (it[0]["name"].as_str(), it[0]["n"].as_i64()),
+        (Some("G"), Some(3))
+    );
+    assert_eq!(it[0]["src"], "t/010-G/G.url");
+    assert_eq!(it[1]["status"], "needs_review");
+}
