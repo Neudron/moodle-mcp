@@ -50,6 +50,7 @@ pub async fn guard_mw(State(app): S, req: Request, next: Next) -> Response {
         g("origin"),
         g("x-neu"),
         app.port,
+        g("sec-fetch-site"),
     ) {
         Ok(()) => {
             // Clickjacking: other sites may not frame the app; our own iframes (PDF, HTML preview) still work.
@@ -58,6 +59,10 @@ pub async fn guard_mw(State(app): S, req: Request, next: Next) -> Response {
             h.insert(
                 header::X_FRAME_OPTIONS,
                 header::HeaderValue::from_static("SAMEORIGIN"),
+            );
+            h.insert(
+                header::HeaderName::from_static("cross-origin-resource-policy"),
+                header::HeaderValue::from_static("same-origin"),
             );
             h.append(
                 header::CONTENT_SECURITY_POLICY,

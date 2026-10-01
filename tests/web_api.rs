@@ -69,6 +69,37 @@ async fn guard_blocks_bad_requests() {
 }
 
 #[tokio::test]
+async fn guard_blocks_cross_site_and_sets_corp() {
+    let (base, ..) = start("guardxs").await;
+    let c = reqwest::Client::new();
+    let get = |v: Option<&'static str>| {
+        let r = c.get(format!("{base}/api/raw"));
+        match v {
+            Some(v) => r.header("sec-fetch-site", v),
+            None => r,
+        }
+    };
+    let r = get(Some("cross-site")).send().await.unwrap();
+    assert_eq!(r.status(), 403);
+    for v in [Some("same-origin"), Some("none"), None] {
+        let r = get(v).send().await.unwrap();
+        assert_ne!(r.status(), 403, "{v:?}");
+        assert_eq!(
+            r.headers()["cross-origin-resource-policy"],
+            "same-origin",
+            "{v:?}"
+        );
+    }
+    let r = c
+        .post(format!("{base}/oo/callback"))
+        .header("sec-fetch-site", "cross-site")
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(r.status(), 403, "/oo exempt");
+}
+
+#[tokio::test]
 async fn sync_then_tasks_and_status() {
     let (base, _app, _m, _root) = start("sync").await;
     let c = reqwest::Client::new();
