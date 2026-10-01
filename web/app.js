@@ -147,14 +147,14 @@ function card(tv, hideCourse, quick) {
   const t = tv.task, done = isDone(tv);
   // Badges only when they differ from the default 'Sense enviar'.
   const badges = [
-    t.moodle_status !== 'new' && h('span', { class: 'badge' + (t.moodle_status === 'submitted' ? ' ok' : '') }, MSTATUS[t.moodle_status] || t.moodle_status),
+    t.moodle_status && t.moodle_status !== 'new' && h('span', { class: 'badge' + (t.moodle_status === 'submitted' ? ' ok' : '') }, MSTATUS[t.moodle_status] || t.moodle_status),
     tv.local.status && h('span', { class: 'badge ' + (['revisat OK', 'lliurat'].includes(tv.local.status) ? 'ok' : 'warn') }, LSTATUS[tv.local.status] || tv.local.status),
     t.source === 'ai' && aiBadge(),
   ];
   const row = h('a', { class: 'row' + (done ? ' done' : left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
     h('span', { class: 'dot', style: { '--h': hue(t.course) } }),
     h('span', { class: 't', title: t.title }, t.title),
-    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hue(t.course) } }, cname(t.course)), t.kind === 'assign' ? null : h('span', {}, KIND[t.kind] || t.kind), badges),
+    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hue(t.course) } }, cname(t.course)), t.kind === 'assign' || t.kind === 'ai' ? null : h('span', {}, KIND[t.kind] || t.kind), badges),
     dueChip(tv));
   if (!quick || done) return row;
   // Not inside the <a>: a button in a link is invalid. Commit is deferred so the undo toast is real.
@@ -378,7 +378,7 @@ async function preview(el, o) {
   let node;
   try {
     if (k === 'img') node = h('img', { class: 'v-img', src, alt: name });
-    else if (k === 'pdf') node = h('iframe', { class: 'sheet v-frame', src, title: `PDF: ${name}` });
+    else if (k === 'pdf') node = h('iframe', { class: 'sheet v-frame', src: src + '#pagemode=none', title: `PDF: ${name}` });
     else if (k === 'html') node = h('iframe', { class: 'sheet v-frame', src, sandbox: '', referrerpolicy: 'no-referrer', title: `Previsualització: ${name}` });
     else if (k === 'video') node = h('video', { class: 'v-img', src, controls: true, 'aria-label': name });
     else if (k === 'audio') node = h('audio', { src, controls: true, 'aria-label': name });
@@ -465,7 +465,7 @@ views.tasca = async (id) => {
     extras.flat(Infinity).some(Boolean) ? h('div', { class: 'v-deliver' }, h('h2', { class: 'sr-only' }, 'Entrega'), extras) : null);
 
   const badges = [
-    l.status && h('span', { class: 'badge ' + (['revisat OK', 'lliurat'].includes(l.status) ? 'ok' : 'warn') }, LSTATUS[l.status] || l.status),
+    l.status && !isDone(tv) && h('span', { class: 'badge ' + (['revisat OK', 'lliurat'].includes(l.status) ? 'ok' : 'warn') }, LSTATUS[l.status] || l.status),
     t.source === 'ai' && aiBadge()];
 
   const intro = sandboxed(t.body_html, `Enunciat: ${t.title}`);
@@ -724,11 +724,11 @@ addEventListener('hashchange', async () => {
 // Never bound to an action button (Puja/Envia/Desa/Sincronitza).
 const GO = { t: 'tauler', c: 'calendari', f: 'fitxers', n: 'notes', o: 'forums', z: 'organitza' };
 const keysOn = () => { try { return localStorage.getItem('keys') !== 'off'; } catch (e) { return true; } };
-const KEYS = [['j / k', 'fila següent / anterior'], ['g t', 'Tauler'], ['g c', 'Calendari'], ['g f', 'Fitxers'], ['g n', 'Notes'], ['g o', 'Fòrums'], ['g z', 'Organitza'], ['/ o Ctrl+K', 'cerca i salta'], ['Esc', 'tanca / esborra el filtre']];
+const KEYS = [['j|k', 'fila següent / anterior'], ['g t', 'Tauler'], ['g c', 'Calendari'], ['g f', 'Fitxers'], ['g n', 'Notes'], ['g o', 'Fòrums'], ['g z', 'Organitza'], ['/|o|Ctrl+K', 'cerca i salta'], ['Esc', 'tanca / esborra el filtre']];
 function showKeys() {
   const on = h('input', { type: 'checkbox', checked: keysOn(), onchange: (e) => { try { localStorage.setItem('keys', e.target.checked ? 'on' : 'off'); } catch (x) { /* ignore */ } } });
   confirmDialog('Dreceres de teclat', h('div', {},
-    h('dl', { class: 'keys' }, KEYS.flatMap(([k, d]) => [h('dt', {}, h('kbd', {}, k)), h('dd', {}, d)])),
+    h('dl', { class: 'keys' }, KEYS.flatMap(([k, d]) => [h('dt', {}, k.split('|').flatMap((alt, i) => [i ? ' o ' : '', ...alt.split(' ').map((x) => h('kbd', {}, x))])), h('dd', {}, d)])),
     h('label', {}, on, 'Activa les dreceres d\'una tecla')), 'Tanca', true);
 }
 document.addEventListener('keydown', (e) => {
@@ -808,7 +808,8 @@ views.curs = async (short) => {
   const tasks = (await tasksOnce()).filter((tv) => tv.task.course === short && tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
   const nDone = tasks.filter(isDone).length;
   const tasksCol = tasks.length
-    ? h('div', {}, h('h2', {}, 'Tasques'), h('div', { class: 'cards' }, tasks.map((tv) => card(tv, true))))
+    ? h('div', {}, h('h2', {}, 'Tasques'), h('div', { class: 'cards' }, tasks.filter((tv) => !isDone(tv)).map((tv) => card(tv, true))),
+      nDone ? h('details', { class: 'done-tasks' }, h('summary', {}, `Lliurades (${nDone})`), h('div', { class: 'cards' }, tasks.filter(isDone).map((tv) => card(tv, true)))) : null)
     : h('div', {}, h('h2', {}, 'Tasques'), h('p', { class: 'dim' }, 'Cap tasca en aquest curs.'));
   // Sections with no visible files are dropped (no empty accordions).
   const secs = c.sections.map((s) => ({ name: s.name, mods: s.modules.map((m) => [m, m.files.filter((f) => !f.is_dir && !NOISE.has(f.name))]).filter(([, fs]) => fs.length) })).filter((s) => s.mods.length);
@@ -934,12 +935,13 @@ views.notes = async () => {
   const gs = await api('/api/grades');
   if (!gs.length) return h('section', { class: 'v-notes' }, h('h1', {}, 'Notes'), empty('Encara no hi ha notes', 'Sincronitza per carregar-les.'));
   const pct = (s) => { const n = parseFloat(String(s ?? '').replace(',', '.')); return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : null; };
-  const nm = (g) => cname(g.course) || `Curs ${g.course_id}`;
+  const nm = (g) => (cname(g.course) || `Curs ${g.course_id}`).replace(/\.(?=\p{L})/u, '. ');
   const shown = (g) => (g.items || []).filter((i) => i.itemname);
   const dash = (v) => (!v || /^\s*[-–—]\s*$/.test(String(v)) ? '–' : v);
   const marked = (g) => shown(g).some((i) => dash(i.gradeformatted) !== '–' || dash(i.percentageformatted) !== '–');
   const blank = gs.filter((g) => !marked(g));
-  return h('section', { class: 'v-notes' }, h('h1', {}, 'Notes'), gs.filter(marked).map((g) => {
+  const none = blank.length === gs.length;
+  return h('section', { class: 'v-notes' }, h('h1', {}, 'Notes'), none ? empty('Encara no hi ha notes', 'Cap curs té qualificacions.') : null, gs.filter(marked).map((g) => {
     const name = nm(g), items = shown(g);
     const ps = items.map((i) => pct(i.percentageformatted)).filter((n) => n != null);
     const avg = ps.length ? Math.round(ps.reduce((a, b) => a + b, 0) / ps.length) : null;
@@ -1143,7 +1145,7 @@ views.ide = async (...parts) => {
     h('div', { class: 'v-idesplit' + (live ? ' live' : '') }, box, frame));
   wrap.addEventListener('mounted', async () => {
     let m = null;
-    try { await Promise.all([loadMonaco(), lang === 'markdown' && loadJs(MARKED)]); m = window.monaco; }
+    try { if (lang === 'markdown') await loadJs(MARKED); /* before Monaco's AMD loader, or marked registers as an AMD module */ await loadMonaco(); m = window.monaco; }
     catch (e) { /* CDN down: plain textarea below keeps the file editable */ }
     if (!wrap.isConnected) return;
     let onchange = () => {};

@@ -243,18 +243,18 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 /* calendar */
 .cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden}
 .cal .r{display:contents}
-.cal .dim{background:var(--sunk);padding:var(--s1);min-width:0;font-size:14px;font-weight:600;text-transform:capitalize}
-.cal .d{min-height:120px;background:var(--raised);padding:var(--s1);min-width:0;overflow:hidden}
+.cal .dim{background:var(--sunk);padding:var(--s1) 9px;min-width:0;font-size:14px;font-weight:600;text-transform:capitalize}
+.cal .d{min-height:120px;background:var(--raised);padding:var(--s1) 2px;min-width:0;overflow:hidden}
 .cal .d.out{background:var(--sunk)}
 .cal .d:focus-visible{outline-offset:-2px}
 .cal .d:nth-child(n+6):not(.out){background:color-mix(in oklab,var(--raised) 92%,var(--dim))}
 .cal .d.out{color:var(--dim)}
 .cal .d strong{font:600 14px var(--sans);font-variant-numeric:tabular-nums;display:inline-grid;place-items:center;min-width:28px;height:28px}
 .cal .d.today strong{background:var(--accent);color:var(--accent-ink);border-radius:50%}
-.cal .d a{display:flex;align-items:flex-start;gap:0;min-width:0;min-height:44px;padding:var(--s1) 4px;font-size:14px;line-height:1.3;color:var(--text);text-decoration:none}
-.cal .d a .ic{width:16px;height:16px;margin:calc((1.3em - 16px)/2) 4px calc((1.3em - 16px)/2) 0}
+.cal .d a{display:flex;align-items:flex-start;gap:0;min-width:0;min-height:44px;padding:var(--s1) 2px;font-size:14px;line-height:1.3;color:var(--text);text-decoration:none}
+.cal .d a .ic{width:16px;height:16px;margin:calc((1.3em - 16px)/2) 2px calc((1.3em - 16px)/2) 0}
 .cal .d a .dot{margin:calc((1.3em - 10px)/2) 7px calc((1.3em - 10px)/2) 3px}
-.cal .d a .et{min-width:0;overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
+.cal .d a .et{min-width:0;overflow-wrap:break-word;hyphens:auto;overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical}
 .cal .d a:focus-visible,.cal .d .more:focus-visible{outline-offset:-2px}
 .cal .d a:hover{background:var(--hover)}
 
@@ -381,7 +381,7 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 .v-idesplit.live{grid-template-columns:1fr 1fr}
 .v-idebox{min-width:0;min-height:0}
 .v-idepv{width:100%;height:100%;border:0;border-left:1px solid var(--line);background:var(--paper)}
-@media (max-width:899px){.v-ide{height:calc(100dvh - 64px - var(--banner-h) - var(--side-h) - env(safe-area-inset-bottom))}.v-idesplit.live{grid-template-columns:1fr;grid-template-rows:1fr 1fr}.v-idepv{border-left:0;border-top:1px solid var(--line)}}
+@media (max-width:899px){.v-ide{height:calc(100dvh - 64px - var(--banner-h) - var(--side-h) - env(safe-area-inset-bottom))}.v-idesplit.live{grid-template-columns:1fr;grid-template-rows:3fr 2fr}.v-idepv{border-left:0;border-top:1px solid var(--line)}}
 /* calendari */
 .v-cal .cal-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--s2);margin-bottom:var(--s2)}
 .v-cal .cal-head h1{margin:0}
@@ -449,7 +449,7 @@ small{font-size:16px}
 /* command palette */
 dialog.pal{padding:var(--s2);max-width:min(560px,calc(100vw - 32px));margin-top:12vh}
 .pal input{width:100%;min-height:44px}
-.pal ul{list-style:none;padding:0;margin:var(--s1) 0 0;max-height:50vh;overflow:auto;font:inherit;background:none}
+.pal ul{list-style:none;padding:0;scrollbar-gutter:stable;margin:var(--s1) 0 0;max-height:50vh;overflow:auto;font:inherit;background:none}
 .pal li{display:flex;justify-content:space-between;gap:var(--s2);align-items:center;min-height:44px;padding:0 var(--s2);border-radius:var(--r-md);cursor:pointer;border:2px solid transparent}
 .pal li small{color:var(--dim);flex:none;font-size:14px}
 .pal li[aria-selected="true"]{background:var(--hover);border-color:var(--accent)}
@@ -494,13 +494,15 @@ h2.grp{font-size:16px;color:var(--text)}
 .v-forums .fpost iframe.sheet{min-height:12rem;height:auto;max-height:70vh}
 .v-forums .fm{font-family:var(--sans)}
 .v-curs h3{font-weight:500}
+.v-curs details ul.list+h3{border-top:1px solid var(--line);padding-top:var(--s1)}
+.v-curs .done-tasks{margin-top:var(--s2)}
 .pal input{border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;font-size:18px}
 .pal input:focus-visible{outline:0;border-bottom-color:var(--accent);box-shadow:0 1px 0 var(--accent)}
 .pal li{border:0}
 .pal li[aria-selected="true"]{background:color-mix(in oklab,var(--accent) 14%,var(--raised));box-shadow:inset 3px 0 0 var(--accent)}
 .v-editbar{height:56px;border-bottom:1px solid var(--line)}
 .v-tasca .meta .cn{max-width:44ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.v-pane>.field-row{flex-direction:row}
+.v-pane>.field-row,.v-item .field-row{flex-direction:row}
 
 /* round 2: calmer, Notion-like */
 main[data-view=tauler]{max-width:800px}
