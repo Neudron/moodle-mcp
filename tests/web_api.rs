@@ -102,6 +102,29 @@ async fn guard_blocks_cross_site_and_sets_corp() {
 }
 
 #[tokio::test]
+async fn old_open_task_is_stale() {
+    let (base, app, _m, _root) = start("stale").await;
+    let c = reqwest::Client::new();
+    post(&c, &base, "/api/sync").send().await.unwrap();
+    app.db.update_task("assign:7", |t| t.due = 86400).unwrap();
+    let tasks: serde_json::Value = c
+        .get(format!("{base}/api/tasks"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let t = tasks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["task"]["id"] == "assign:7")
+        .unwrap();
+    assert_eq!(t["stale"], true);
+}
+
+#[tokio::test]
 async fn sync_then_tasks_and_status() {
     let (base, _app, _m, _root) = start("sync").await;
     let c = reqwest::Client::new();

@@ -54,11 +54,12 @@ function left(ts) {
   if (d <= 1) return { t: 'Demà', s: 'soon' };
   return { t: `En ${d} dies`, s: d < 7 ? 'week' : 'later' };
 }
-const GLYPH = { late: 'warn', soon: 'clock', done: 'check' };
+const GLYPH = { late: 'warn', soon: 'clock', stale: 'clock', done: 'check' };
 // Urgency chip: icon + text + colour, never colour alone.
 function dueChip(tv, big) {
-  const l = isDone(tv) ? { t: 'Lliurada', s: 'done' } : left(tv.task.due);
-  return h('span', { class: `due ${l.s}${big ? ' lg' : ''}`, title: tv.task.due ? when(tv.task.due) : null }, GLYPH[l.s] ? ic(GLYPH[l.s]) : null, l.t, tv.task.due ? h('span', { class: 'sr-only' }, ` (${when(tv.task.due)})`) : null);
+  const l = isDone(tv) ? { t: 'Lliurada', s: 'done' } : isStale(tv) ? { t: 'Data antiga', s: 'stale' } : left(tv.task.due);
+  const title = l.s === 'stale' ? "Venciment de fa més de 300 dies: probablement la data de l'any passat" : tv.task.due ? when(tv.task.due) : null;
+  return h('span', { class: `due ${l.s}${big ? ' lg' : ''}`, title }, GLYPH[l.s] ? ic(GLYPH[l.s]) : null, l.t, tv.task.due ? h('span', { class: 'sr-only' }, ` (${when(tv.task.due)})`) : null);
 }
 function hue(s) { let x = 0; for (const c of s || '') x = (x * 31 + c.codePointAt(0)) % 360; return x; }
 const isDone = (tv) => tv.local.status === 'lliurat' || tv.task.moodle_status === 'submitted';
@@ -155,7 +156,7 @@ function card(tv, hideCourse, quick) {
     tv.local.status && h('span', { class: 'badge ' + (['revisat OK', 'lliurat'].includes(tv.local.status) ? 'ok' : 'warn') }, LSTATUS[tv.local.status] || tv.local.status),
     t.source === 'ai' && aiBadge(),
   ];
-  const row = h('a', { class: 'row' + (done ? ' done' : left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
+  const row = h('a', { class: 'row' + (done ? ' done' : !isStale(tv) && left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
     h('span', { class: 'dot', style: { '--h': hue(t.course) } }),
     h('span', { class: 't', title: t.title }, t.title),
     h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hue(t.course) } }, cname(t.course)), t.kind === 'assign' || t.kind === 'ai' ? null : h('span', {}, KIND[t.kind] || t.kind), badges),
@@ -262,12 +263,11 @@ views.tauler = async () => {
   const tasks = (await tasksOnce()).filter((tv) => tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
   const props = tasks.filter((tv) => tv.task.source === 'ai' && tv.task.ai_confirmed == null), all = tasks.filter((tv) => !props.includes(tv));
   const now = Date.now() / 1000;
-  // Overdue by more than 60 days = last school year's leftovers: collapsed, not counted as pending.
-  const stale = (tv) => !isDone(tv) && tv.task.due && tv.task.due < now - 60 * 86400;
-  const pendingList = all.filter((tv) => !isDone(tv) && !stale(tv));
+  // Server flags deadlines >300 days overdue (last year's dates): own fold, not counted as pending.
+  const pendingList = all.filter((tv) => !isDone(tv) && !isStale(tv));
   if (!all.length && !props.length) return h('section', { class: 'v-tauler' }, h('h1', {}, 'Tauler'), scanControl(), empty('Encara no hi ha tasques', 'Sincronitza per carregar-les.'));
   const pending = pendingList.length;
-  const old = all.filter(stale);
+  const old = all.filter(isStale);
   const doneN = all.filter(isDone).length, total = all.length - old.length;
   const next = pendingList.filter((tv) => tv.task.due >= now).sort((a, b) => a.task.due - b.task.due)[0];
   const by = groupByDue(pendingList, now), doneList = all.filter(isDone).reverse();
@@ -290,7 +290,7 @@ views.tauler = async () => {
   const sections = [['late', 'Vençudes'], ['today', 'Avui'], ['week', 'Aquesta setmana'], ['later', 'Més tard']]
     .map(([key, name]) => (by[key].length ? grp(key, name, by[key]) : null));
   if (doneList.length) sections.push(fold('done', 'Lliurades', doneList, doneList.length <= 5));
-  const oldEl = old.length ? fold('old', 'Antigues sense enviar', old, false) : null;
+  const oldEl = old.length ? fold('old', "Data de l'any passat", old, false) : null;
 
   // AI proposals: top ranked first, the rest folded, searchable like real tasks.
   let propEl = null;
@@ -318,8 +318,7 @@ views.tauler = async () => {
     let shown = 0;
     for (const b of blocks) {
       const { q, mode: m } = b.key === 'ai' ? filterFor(all.length ? tabs.sel.tauler : 'llista', q0, mode) : { q: q0, mode };
-      // 'Antigues' counts as overdue for the segmented filter.
-      const inMode = m === 'all' || m === b.key || (m === 'late' && b.key === 'old');
+      const inMode = m === 'all' || m === b.key;
       let n = 0;
       for (const r of b.rows) { const ok = inMode && (!q || r.textContent.toLowerCase().includes(q)); r.hidden = !ok; if (ok) n++; }
       b.el.hidden = !n;
@@ -330,7 +329,7 @@ views.tauler = async () => {
     setText(status, `${shown} ${shown === 1 ? 'tasca' : 'tasques'}`);
   };
   const input = h('input', { id: 'filter', type: 'search', 'aria-label': 'Filtra tasques', placeholder: 'Filtra tasques  ( / )', title: 'Drecera: / enfoca, Esc esborra', value: views.tauler.q || '', oninput: () => { views.tauler.q = input.value; apply(); } });
-  const FILTERS = [['all', 'Totes'], ['late', 'Vençudes'], ['today', 'Avui'], ['week', 'Aquesta setmana'], ['later', 'Més tard'], ['done', 'Lliurades']];
+  const FILTERS = [['all', 'Totes'], ['late', 'Vençudes'], ['today', 'Avui'], ['week', 'Aquesta setmana'], ['later', 'Més tard'], ['done', 'Lliurades'], ...(old.length ? [['old', 'Any passat']] : [])];
   const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Filtre per estat' }, FILTERS.map(([k, label]) =>
     h('button', { type: 'button', 'aria-pressed': String(k === mode), onclick: (e) => {
       mode = k; seg.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', b === e.currentTarget)); apply();
@@ -690,6 +689,7 @@ function groupByDue(tasks, now) {
 const filterFor = (tab, q, mode) => (tab === 'llista' ? { q, mode } : { q: '', mode: 'all' });
 // Refresh the view when a sync finished, unless the user is typing or editing.
 const shouldSoftRoute = (prev, cur, tag, view) => !!prev && !!cur && prev !== cur && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && view !== 'edita' && view !== 'ide';
+const isStale = (tv) => tv.stale === true;
 // triage-helpers-end
 // agenda-helpers-start
 // Pending tasks -> [{day:'late'|'YYYY-MM-DD', items}]: overdue first, then each due day inside the window. Undated skipped.
@@ -996,9 +996,9 @@ views.calendari = async (ym) => {
   const long = new Intl.DateTimeFormat('ca-ES', { weekday: 'long', day: 'numeric', month: 'long' });
   const ev = (tv, extra) => h('a', {
     href: `#/tasca/${enc(tv.task.id)}`, title: tv.task.title,
-    class: (isDone(tv) ? 'done ' : left(tv.task.due).s === 'late' ? 'late ' : '') + (extra ? 'x' : ''),
-  }, isDone(tv) ? ic('check') : left(tv.task.due).s === 'late' ? ic('warn') : h('span', { class: 'dot', style: { '--h': hue(tv.task.course) } }),
-    h('span', { class: 'et' }, isDone(tv) ? h('span', { class: 'sr-only' }, 'Lliurada: ') : left(tv.task.due).s === 'late' ? h('span', { class: 'sr-only' }, 'Endarrerida: ') : null, tv.task.title));
+    class: (isDone(tv) ? 'done ' : isStale(tv) ? 'stale ' : left(tv.task.due).s === 'late' ? 'late ' : '') + (extra ? 'x' : ''),
+  }, isDone(tv) ? ic('check') : isStale(tv) ? ic('clock') : left(tv.task.due).s === 'late' ? ic('warn') : h('span', { class: 'dot', style: { '--h': hue(tv.task.course) } }),
+    h('span', { class: 'et' }, isDone(tv) ? h('span', { class: 'sr-only' }, 'Lliurada: ') : isStale(tv) ? h('span', { class: 'sr-only' }, 'Data antiga: ') : left(tv.task.due).s === 'late' ? h('span', { class: 'sr-only' }, 'Endarrerida: ') : null, tv.task.title));
   const cells = [];
   for (let i = 0; i < 42; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);

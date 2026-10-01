@@ -3,9 +3,10 @@
   --page:#0C0C0F;--raised:#141418;--sunk:#101013;--hover:#1C1C22;
   --line:#26262D;--line-strong:#3E3E4A;--ctl:#70707E;--text:#ECE8E1;--dim:#A4A1AD;
   --accent:#B892FF;--accent-ink:#0C0C0F;--accent-soft:color-mix(in oklab,var(--accent) 16%,transparent);
-  --late:#FF8A9A;--soon:#FFCF7A;--ok:#7FD8A6;
+  --late:#FF8A9A;--soon:#FFCF7A;--stale:#FFA25E;--ok:#7FD8A6;
   --late-bg:color-mix(in oklab,var(--late) 12%,transparent);
   --soon-bg:color-mix(in oklab,var(--soon) 12%,transparent);
+  --stale-bg:color-mix(in oklab,var(--stale) 12%,transparent);
   --ok-bg:color-mix(in oklab,var(--ok) 12%,transparent);
   --shadow-pop:0 16px 48px rgb(0 0 0/.55),0 0 0 1px var(--line-strong);
   --sheet-bg:#17171C;--cs:65% 62%;--ct:70% 76%;color-scheme:dark;
@@ -19,14 +20,14 @@
 :root[data-theme=light]{
   --page:#F3F0EA;--raised:#FBF9F5;--sunk:#ECE8E0;--hover:#F0ECE4;
   --line:#DDD7CC;--line-strong:#B5AD9E;--ctl:#7A7264;--text:#17141F;--dim:#5E5870;
-  --accent:#5E33BE;--accent-ink:#FFFFFF;--late:#B3243B;--soon:#7A4E00;--ok:#1A6E42;
+  --accent:#5E33BE;--accent-ink:#FFFFFF;--late:#B3243B;--soon:#7A4E00;--stale:#9A4A00;--ok:#1A6E42;
   --shadow-pop:0 16px 40px rgb(20 16 30/.18),0 0 0 1px var(--line-strong);
   --sheet-bg:#FFFFFF;--field:#FFFFFF;--cs:60% 30%;--ct:60% 24%;color-scheme:light;
 }
 @media (prefers-color-scheme:light){:root:not([data-theme=dark]){
   --page:#F3F0EA;--raised:#FBF9F5;--sunk:#ECE8E0;--hover:#F0ECE4;
   --line:#DDD7CC;--line-strong:#B5AD9E;--ctl:#7A7264;--text:#17141F;--dim:#5E5870;
-  --accent:#5E33BE;--accent-ink:#FFFFFF;--late:#B3243B;--soon:#7A4E00;--ok:#1A6E42;
+  --accent:#5E33BE;--accent-ink:#FFFFFF;--late:#B3243B;--soon:#7A4E00;--stale:#9A4A00;--ok:#1A6E42;
   --shadow-pop:0 16px 40px rgb(20 16 30/.18),0 0 0 1px var(--line-strong);
   --sheet-bg:#FFFFFF;--field:#FFFFFF;--cs:60% 30%;--ct:60% 24%;color-scheme:light}}
 
@@ -130,6 +131,8 @@ label{font-weight:600}
 .due,.badge{display:inline-flex;align-items:center;gap:4px;min-height:24px;padding:0 var(--s1);border-radius:999px;font-size:14px;font-weight:600;line-height:1.4;white-space:nowrap;color:var(--dim)}
 .due.late{background:var(--late-bg);color:var(--late)}
 .due.soon{background:var(--soon-bg);color:var(--soon)}
+.due.stale{background:var(--stale-bg);color:var(--stale)}
+.g-old>summary h2,.g-old>summary{color:var(--stale)}
 .due.week{color:var(--text)}
 .due.done,.badge.ok{color:var(--ok)}
 .badge{background:var(--sunk);font-weight:500}
@@ -393,6 +396,7 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 .v-cal .d .wd{display:none}
 .v-cal .d a{border-radius:var(--r-sm)}
 .v-cal .d a.late{background:var(--late-bg);color:var(--late)}
+.v-cal .d a.stale{background:var(--stale-bg);color:var(--stale)}
 .v-cal .d a.done{color:var(--dim)}
 .v-cal .d a.x{display:none}
 .v-cal .d.open a.x{display:flex}
@@ -481,6 +485,8 @@ h2.grp{font-size:16px;color:var(--text)}
 @media (max-width:899px){.rowq>button .ic+*{display:none}.rowq>button{padding:0}}
 .v-cal .d a.late{background:none;color:var(--text)}
 .v-cal .d a.late .ic{color:var(--late)}
+.v-cal .d a.stale{background:none;color:var(--text)}
+.v-cal .d a.stale .ic{color:var(--stale)}
 .cal .d a{align-items:center}
 .cal .d a+a{box-shadow:0 -1px 0 var(--line)}
 .cal .d strong{font-size:16px}

@@ -15,7 +15,7 @@ for (const [name, b] of [['dark', dark], ['light', light]]) {
   const get = (n) => tok(b, n) || tok(dark, n);
   const bgs = ['page', 'raised', 'sunk', 'hover'].map((n) => rgb(get(n)));
   test(`${name}: text tokens 4.5:1`, () => {
-    for (const t of ['text', 'dim', 'accent', 'late', 'soon', 'ok']) for (const bg of bgs) assert.ok(ratio(rgb(get(t)), bg) >= 4.5, `${name} ${t} ${ratio(rgb(get(t)), bg).toFixed(2)}`);
+    for (const t of ['text', 'dim', 'accent', 'late', 'soon', 'stale', 'ok']) for (const bg of bgs) assert.ok(ratio(rgb(get(t)), bg) >= 4.5, `${name} ${t} ${ratio(rgb(get(t)), bg).toFixed(2)}`);
   });
   test(`${name}: course hue text 4.5:1, dot 3:1`, () => {
     for (let h = 0; h < 360; h++) for (const bg of bgs) {

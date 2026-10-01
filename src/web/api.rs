@@ -193,6 +193,21 @@ pub fn module_of(l: &Local, course: &str) -> String {
     }
 }
 
+/// Due more than 300 days ago and still open: almost surely last year's date.
+pub fn stale(t: &crate::web::db::Task, l: &Local, now: i64) -> bool {
+    t.kind != "post"
+        && t.due > 0
+        && t.due < now - 300 * 86400
+        && l.status != "lliurat"
+        && t.moodle_status != "submitted"
+}
+
+fn now_secs() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 async fn list_tasks(State(app): S, h: HeaderMap) -> R<Response> {
     let etag = format!("\"t{:x}\"", app.db.version());
     if h.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == Some(etag.as_str()) {
@@ -204,6 +219,7 @@ async fn list_tasks(State(app): S, h: HeaderMap) -> R<Response> {
         .into_iter()
         .map(|l| (l.task_id.clone(), l))
         .collect();
+    let now = now_secs();
     let out: Vec<Value> = app
         .db
         .all_tasks()?
@@ -223,7 +239,7 @@ async fn list_tasks(State(app): S, h: HeaderMap) -> R<Response> {
             if let Some(ev) = ev {
                 tv["evidence"] = ev.into();
             }
-            json!({"task": tv, "local": l})
+            json!({"task": tv, "local": l, "stale": stale(&t, &l, now)})
         })
         .collect();
     Ok(cached(
@@ -248,7 +264,7 @@ async fn one_task(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
     }
     let shot = crate::web::shots::ensure(&app, &t);
     Ok(Json(
-        json!({"task": t, "local": l, "submit_dir": dir, "shot": shot}),
+        json!({"task": t, "local": l, "stale": stale(&t, &l, now_secs()), "submit_dir": dir, "shot": shot}),
     ))
 }
 
@@ -1040,6 +1056,36 @@ async fn open_local(State(app): S, Json(b): Json<PathQ>) -> R<Json<Value>> {
         let _ = ch.wait().await;
     });
     Ok(Json(json!({})))
+}
+
+#[cfg(test)]
+mod stale_tests {
+    use super::stale;
+    use crate::web::db::{Local, Task};
+
+    #[test]
+    fn stale_rule() {
+        let now = 1_000_000_000;
+        let t = |d: i64| Task {
+            due: now - d * 86400,
+            ..Default::default()
+        };
+        let l = Local::default();
+        assert!(stale(&t(301), &l, now));
+        assert!(!stale(&t(299), &l, now));
+        assert!(!stale(&t(0), &l, now) && !stale(&Task::default(), &l, now));
+        let mut s = t(301);
+        s.moodle_status = "submitted".into();
+        assert!(!stale(&s, &l, now));
+        let done = Local {
+            status: "lliurat".into(),
+            ..Default::default()
+        };
+        assert!(!stale(&t(301), &done, now));
+        let mut p = t(301);
+        p.kind = "post".into();
+        assert!(!stale(&p, &l, now));
+    }
 }
 
 #[cfg(test)]

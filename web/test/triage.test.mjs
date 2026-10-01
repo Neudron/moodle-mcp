@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const src = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const block = (n) => src.split(`// ${n}-helpers-start`)[1].split(`// ${n}-helpers-end`)[0];
-const { rankProposals, groupByDue, shouldSoftRoute, filterFor } = new Function(`${block('triage')}; return { rankProposals, groupByDue, shouldSoftRoute, filterFor };`)();
+const { rankProposals, groupByDue, shouldSoftRoute, filterFor, isStale } = new Function(`${block('triage')}; return { rankProposals, groupByDue, shouldSoftRoute, filterFor, isStale };`)();
 
 const p = (id, s) => ({ task: { id, ai_score: s } });
 test('rankProposals', () => {
@@ -51,3 +51,5 @@ test('filterFor', () => {
   assert.deepEqual(filterFor('agenda', 'zzz', 'late'), { q: '', mode: 'all' });
   assert.deepEqual(filterFor('curs', 'x', 'all'), { q: '', mode: 'all' });
 });
+
+test('isStale', () => { assert.equal(isStale({ stale: true }), true); assert.equal(isStale({}), false); });
