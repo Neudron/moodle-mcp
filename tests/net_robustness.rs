@@ -236,3 +236,119 @@ async fn contents_retries_flaky_500() {
         .await
         .expect("contents retries");
 }
+
+/// Raw one-shot-per-connection server. `cuts` = how many initial requests
+/// get their body cut after `step` bytes (full Content-Length promised).
+async fn raw_server(
+    body: Vec<u8>,
+    cuts: usize,
+    step: usize,
+    status_line: &'static str,
+    extra: &'static str,
+) -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", l.local_addr().expect("addr"));
+    let n = Arc::new(AtomicUsize::new(0));
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = l.accept().await else {
+                break;
+            };
+            let (body, n) = (body.clone(), Arc::clone(&n));
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 4096];
+                let k = s.read(&mut buf).await.unwrap_or(0);
+                let req = String::from_utf8_lossy(&buf[..k]).to_lowercase();
+                let start = req
+                    .split("range: bytes=")
+                    .nth(1)
+                    .and_then(|r| r.split('-').next())
+                    .and_then(|r| r.parse::<usize>().ok())
+                    .unwrap_or(0);
+                if status_line != "200 OK" {
+                    let _ = s.write_all(format!("HTTP/1.1 {status_line}\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await;
+                    return;
+                }
+                let rest = &body[start..];
+                let (code, cr) = if start > 0 {
+                    (
+                        "206 Partial Content",
+                        format!(
+                            "Content-Range: bytes {start}-{}/{}\r\n",
+                            body.len() - 1,
+                            body.len()
+                        ),
+                    )
+                } else {
+                    ("200 OK", String::new())
+                };
+                let _ = s.write_all(format!("HTTP/1.1 {code}\r\n{cr}Content-Length: {}\r\nConnection: close\r\n\r\n", rest.len()).as_bytes()).await;
+                let send = if n.fetch_add(1, Ordering::SeqCst) < cuts {
+                    step.min(rest.len() - 1)
+                } else {
+                    rest.len()
+                };
+                let _ = s.write_all(&rest[..send]).await;
+            });
+        }
+    });
+    base
+}
+
+/// M8: a body cut 6 times, each with progress, still completes (the
+/// retry budget resets on progress).
+#[tokio::test]
+async fn download_survives_many_cuts_with_progress() {
+    let body: Vec<u8> = (0..70_000u32).map(|i| (i % 251) as u8).collect();
+    let base = raw_server(body.clone(), 6, 10_000, "200 OK", "").await;
+    let part = std::env::temp_dir().join(format!("moodle-mcp-t17-{}.part", std::process::id()));
+    let _ = std::fs::remove_file(&part);
+    let meta = Moodle::new(&base, TOKEN)
+        .download_resumable(
+            &format!("{base}/webservice/pluginfile.php/1/big.bin"),
+            &part,
+        )
+        .await
+        .expect("cuts with progress must complete");
+    assert_eq!(meta.size, body.len() as u64);
+    assert_eq!(std::fs::read(&part).expect("part"), body);
+    let _ = std::fs::remove_file(&part);
+}
+
+/// M9: Retry-After above the 60s cap fails fast, at both retry sites.
+#[tokio::test]
+async fn huge_retry_after_returns_ratelimited_immediately() {
+    let base = raw_server(
+        vec![],
+        0,
+        0,
+        "429 Too Many Requests",
+        "Retry-After: 3600\r\n",
+    )
+    .await;
+    let c = Moodle::new(&base, TOKEN);
+    let t = std::time::Instant::now();
+    let e = c
+        .call_with_retry("core_webservice_get_site_info", &[])
+        .await
+        .expect_err("429");
+    assert!(
+        matches!(e, moodle_mcp::errors::CoreError::RateLimited(3600)),
+        "{e}"
+    );
+    let part = std::env::temp_dir().join(format!("moodle-mcp-t17b-{}.part", std::process::id()));
+    let e = c
+        .download_resumable(&format!("{base}/webservice/pluginfile.php/1/x.bin"), &part)
+        .await
+        .expect_err("429");
+    assert!(
+        matches!(e, moodle_mcp::errors::CoreError::RateLimited(3600)),
+        "{e}"
+    );
+    assert!(t.elapsed() < std::time::Duration::from_secs(5));
+}

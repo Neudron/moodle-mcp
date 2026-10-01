@@ -27,6 +27,8 @@ use crate::retry;
 
 const API_TIMEOUT: Duration = Duration::from_secs(15);
 const FILE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Longer `Retry-After` waits fail fast as RateLimited instead of sleeping.
+const RETRY_AFTER_CAP: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const POOL_MAX_IDLE_PER_HOST: usize = 8;
@@ -157,7 +159,8 @@ impl Moodle {
         let tuned = reqwest::Client::builder()
             .user_agent("moodle-mcp/0.2")
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(FILE_TIMEOUT)
+            // No total timeout: large files; stalls are caught per read.
+            .read_timeout(FILE_TIMEOUT)
             .pool_idle_timeout(POOL_IDLE_TIMEOUT)
             .pool_max_idle_per_host(POOL_MAX_IDLE_PER_HOST)
             .gzip(true)
@@ -361,7 +364,9 @@ impl Moodle {
                     }
                     if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                         let after = retry::retry_after_from_headers(resp.headers());
-                        if attempt >= retry::MAX_RETRIES {
+                        if attempt >= retry::MAX_RETRIES
+                            || after.is_some_and(|d| d > RETRY_AFTER_CAP)
+                        {
                             self.breaker.record_failure();
                             return Err(CoreError::RateLimited(
                                 after.map(|d| d.as_secs()).unwrap_or(0),
@@ -549,7 +554,15 @@ impl Moodle {
                 }
                 Attempt::Abort(err) => return Err(err),
                 Attempt::Retryable { after, kind } => {
-                    if attempt >= retry::MAX_RETRIES {
+                    let grew = tokio::fs::metadata(part)
+                        .await
+                        .map(|m| m.len())
+                        .unwrap_or(0)
+                        > resume_from;
+                    if grew {
+                        attempt = 0; // progress: reset the retry budget
+                    }
+                    if attempt >= retry::MAX_RETRIES || after.is_some_and(|d| d > RETRY_AFTER_CAP) {
                         self.breaker.record_failure();
                         return Err(kind);
                     }
@@ -581,7 +594,7 @@ impl Moodle {
         let mut current = start.to_string();
         for _ in 0..=MAX_REDIRECT_HOPS {
             let target = authed_url(&current, &self.token(), authority);
-            let mut req = self.http.get(&target).timeout(FILE_TIMEOUT);
+            let mut req = self.http.get(&target);
             if resume_from > 0 {
                 req = req.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
             }
@@ -736,7 +749,10 @@ impl Moodle {
                     ));
                 }
                 Err(e) => {
-                    return Attempt::Abort(CoreError::Net(format!(
+                    use tokio::io::AsyncWriteExt as _;
+                    let _ = file.flush().await;
+                    // Cut connection: keep the prefix and resume.
+                    return Attempt::retryable(CoreError::Net(format!(
                         "file download body: {}",
                         redact_token(&e.to_string())
                     )));
