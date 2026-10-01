@@ -464,3 +464,13 @@ async fn run_sync_style_renewal_once_per_hour() {
         Some("needs-browser")
     );
 }
+
+#[tokio::test]
+async fn invalidtoken_200_body_is_auth() {
+    let (base, _m) = serve(Launch::Redirect, vec![NEW]).await;
+    let e = Moodle::new(&base, OLD).site_info().await.unwrap_err();
+    assert!(matches!(
+        e.downcast_ref::<CoreError>(),
+        Some(CoreError::Auth(_))
+    ));
+}

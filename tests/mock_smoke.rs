@@ -136,11 +136,7 @@ async fn ratelimit_headers_then_recovers() {
 async fn flaky_500_then_ok() {
     let m = MockMoodle::flaky(2).await;
     assert_eq!(m.flaky_500, 2);
-    let c = client(&m);
-    let first = c.site_info().await.expect_err("first call must 500");
-    assert!(first.to_string().contains("500"), "unexpected: {first}");
-    assert!(c.site_info().await.is_err());
-    let info = c.site_info().await.expect("recovers after flakies");
+    let info = client(&m).site_info().await.expect("retries past flakies");
     assert_eq!(info["userid"], USER_ID);
 }
 
@@ -152,12 +148,6 @@ async fn combined_ratelimit_before_flaky() {
         ..Default::default()
     })
     .await;
-    let c = client(&m);
-    // Route order: 429 quota is consumed before the 500 quota.
-    let first = c.site_info().await.expect_err("first call must 429");
-    assert!(first.to_string().contains("429"), "unexpected: {first}");
-    let second = c.site_info().await.expect_err("second call must 500");
-    assert!(second.to_string().contains("500"), "unexpected: {second}");
-    let info = c.site_info().await.expect("recovers after quotas");
+    let info = client(&m).site_info().await.expect("retries past quotas");
     assert_eq!(info["userid"], USER_ID);
 }

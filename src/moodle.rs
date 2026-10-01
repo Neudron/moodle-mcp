@@ -1,9 +1,7 @@
 //! Moodle webservice client (Task 2: P1 network/robustness + security core).
 //!
-//! Two API layers: the original single-shot [`Moodle::call`] /
-//! [`Moodle::download`] (kept for Task 1 compatibility) and the robust
-//! [`Moodle::call_with_retry`] / [`Moodle::download_resumable`] consumed by
-//! the sync engine (Task 3).
+//! Webservice calls go through [`Moodle::call_with_retry`]; downloads through
+//! [`Moodle::download`] / [`Moodle::download_resumable`].
 //!
 //! Robustness policy (plan #1001–1050): retries with `500ms x 2^n` backoff
 //! capped at 15s + jitter, `Retry-After` honored, retries only for
@@ -277,44 +275,6 @@ impl Moodle {
         })
     }
 
-    /// Single-shot webservice call (no retry; kept for Task 1 compatibility).
-    pub async fn call(
-        &self,
-        function: &str,
-        params: &[(&str, String)],
-    ) -> Result<serde_json::Value> {
-        let url = format!("{}/webservice/rest/server.php", self.base);
-        let mut form: Vec<(&str, String)> = vec![
-            ("wstoken", self.token()),
-            ("wsfunction", function.to_string()),
-            ("moodlewsrestformat", "json".into()),
-        ];
-        form.extend(params.iter().map(|p| (p.0, p.1.clone())));
-        let resp = self
-            .http
-            .post(&url)
-            .form(&form)
-            .timeout(API_TIMEOUT)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("moodle request: {}", redact_token(&e.to_string())))?;
-        let status = resp.status();
-        let body: serde_json::Value = resp
-            .json()
-            .await
-            .map_err(|e| anyhow::anyhow!("moodle json: {}", redact_token(&e.to_string())))?;
-        if !status.is_success() {
-            bail!("moodle http {status}: {body}");
-        }
-        if let Some(exc) = body.get("exception") {
-            bail!(
-                "moodle exception {exc}: {}",
-                body.get("message").unwrap_or_default()
-            );
-        }
-        Ok(body)
-    }
-
     /// Webservice call with retry: exp-backoff `500ms x 2^n` (cap 15s) +
     /// jitter, `Retry-After` honored, retries only for 429 / 5xx / timeouts.
     /// 401/403 abort as [`CoreError::Auth`], 404 as [`CoreError::NotFound`].
@@ -443,7 +403,7 @@ impl Moodle {
                             redact_token(&e.to_string())
                         ))
                     })?;
-                    if body.get("exception").is_some() {
+                    if body.get("exception").is_some() || body["errorcode"] == "invalidtoken" {
                         let exc = body
                             .get("exception")
                             .and_then(|v| v.as_str())
@@ -469,7 +429,7 @@ impl Moodle {
     }
 
     pub async fn site_info(&self) -> Result<serde_json::Value> {
-        self.call("core_webservice_get_site_info", &[]).await
+        Ok(self.probe().await?)
     }
 
     /// `site_info` with retry and typed errors (`CoreError::Auth` on a dead token).
@@ -480,7 +440,7 @@ impl Moodle {
 
     pub async fn courses(&self, user_id: i64) -> Result<Vec<Course>> {
         let v = self
-            .call(
+            .call_with_retry(
                 "core_enrol_get_users_courses",
                 &[("userid", user_id.to_string())],
             )
@@ -490,7 +450,7 @@ impl Moodle {
 
     pub async fn contents(&self, course_id: i64) -> Result<Vec<CourseSection>> {
         let v = self
-            .call(
+            .call_with_retry(
                 "core_course_get_contents",
                 &[("courseid", course_id.to_string())],
             )

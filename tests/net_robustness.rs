@@ -227,3 +227,12 @@ async fn combined_ratelimit_flaky_recovers_with_retry() {
         .expect("must recover after 429 then 500");
     assert_eq!(v["userid"], USER_ID);
 }
+
+#[tokio::test]
+async fn contents_retries_flaky_500() {
+    let m = MockMoodle::flaky(1).await;
+    client(&m)
+        .contents(COURSE_ID)
+        .await
+        .expect("contents retries");
+}
