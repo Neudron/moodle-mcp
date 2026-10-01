@@ -515,13 +515,32 @@ async function forumPill() {
   } catch (e) { /* ignore */ }
 }
 
+// auth-helpers-start
+function authBannerText(a) {
+  const m = [];
+  if (a && a.moodle && a.moodle !== 'ok') m.push('Moodle: sessió caducada. Obre Moodle a Firefox i prem Renova');
+  if (a && (a.apple === 'auth' || a.apple === 'err')) m.push("Recordatoris: sessió d'iCloud caducada");
+  return m.join(' · ');
+}
+// auth-helpers-end
 async function refreshStatus() {
   try {
     const s = await api('/api/status');
     setText($('#lastsync'), s.syncing ? 'Sincronitzant…' : s.last_sync ? `Sincronitzat ${syncAt(s.last_sync)}` : 'Mai sincronitzat');
     const b = $('#banner'); b.hidden = !s.error; setText(b, s.error || '');
   } catch (e) { /* server restarting */ }
+  try {
+    const t = authBannerText(await api('/api/auth/status')), ab = $('#auth-banner');
+    ab.hidden = !t; setText($('#auth-msg'), t);
+  } catch (e) { /* ignore */ }
 }
+$('#auth-renew').addEventListener('click', async (e) => {
+  const b = e.currentTarget;
+  if (b.getAttribute('aria-busy') === 'true') return;
+  b.setAttribute('aria-disabled', 'true'); b.setAttribute('aria-busy', 'true');
+  try { await api('/api/auth/renew', { method: 'POST' }); } catch (err) { toast(err.status === 429 ? 'Massa aviat, torna-ho a provar d\'aquí una estona' : err.message, true); }
+  b.removeAttribute('aria-disabled'); b.removeAttribute('aria-busy'); refreshStatus();
+});
 
 async function loadCourses() {
   const cs = await api('/api/courses');
@@ -562,7 +581,7 @@ addEventListener('hashchange', async () => {
 });
 // Sticky offsets from the real header/banner heights (scroll-padding + sticky group headings).
 {
-  const root = document.documentElement, side = $('.side'), banner = $('#banner');
+  const root = document.documentElement, side = $('.side'), banner = $('.stack');
   const measure = () => {
     root.style.setProperty('--side-h', getComputedStyle(side).position === 'sticky' && matchMedia('(max-width:899px)').matches ? `${side.offsetHeight}px` : '0px');
     root.style.setProperty('--banner-h', `${banner.offsetHeight}px`);

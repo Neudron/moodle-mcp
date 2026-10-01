@@ -56,7 +56,10 @@
   </div>
 </header>
 <div class="col">
-  <div id="banner" class="banner" role="alert" hidden></div>
+  <div class="stack">
+    <div id="banner" class="banner" role="alert" hidden></div>
+    <div id="auth-banner" class="banner auth" role="status" hidden><svg class="ic" aria-hidden="true"><use href="#i-warn"/></svg><span id="auth-msg"></span><button id="auth-renew" type="button">Renova</button></div>
+  </div>
   <main id="main" tabindex="-1"></main>
 </div>
 <dialog id="dlg" aria-labelledby="dlg-t" aria-describedby="dlg-b"><form method="dialog"><h2 id="dlg-t"></h2><div id="dlg-b"></div>

@@ -86,7 +86,10 @@ h3{margin:var(--s2) 0 var(--s1)}
 main{padding:var(--s4) var(--s4) 96px;width:100%;margin-inline:auto;max-width:1040px;min-width:0}
 main[data-view=tauler],main[data-view=calendari],main[data-view=notes]{max-width:1120px}
 main.edit{max-width:none;padding:0}
-.banner{position:sticky;top:var(--side-h);z-index:30;background:var(--late-bg);color:var(--late);border-bottom:1px solid var(--late);padding:var(--s2) var(--s4);font-weight:600}
+.stack{position:sticky;top:var(--side-h);z-index:30}
+.banner.auth{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}.banner.auth span{flex:1 1 20ch}
+.banner[hidden]{display:none}
+.banner{background:var(--late-bg);color:var(--late);border-bottom:1px solid var(--late);padding:var(--s2) var(--s4);font-weight:600}
 
 /* buttons */
 button,.btn,select,input{font:inherit;color:inherit;touch-action:manipulation}
