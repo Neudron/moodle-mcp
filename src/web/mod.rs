@@ -4,6 +4,7 @@ pub mod apple;
 pub mod db;
 pub mod env;
 pub mod files;
+pub mod folders;
 pub mod guard;
 pub mod ide;
 pub mod jev;

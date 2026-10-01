@@ -4,6 +4,9 @@ use moodle_mcp::{moodle::Moodle, state::State, sync::sync_course_renewing as syn
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--migrate-folders") {
+        return migrate_folders(args.iter().any(|a| a == "--dry-run"));
+    }
     let mut all = false;
     let mut course_id: Option<i64> = None;
     for a in &args {
@@ -57,5 +60,20 @@ async fn main() -> Result<()> {
             eprintln!("  state save failed: {e:#}");
         }
     }
+    Ok(())
+}
+
+fn migrate_folders(dry: bool) -> Result<()> {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8787));
+    if !dry
+        && std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(300))
+            .is_ok()
+    {
+        bail!("atura moodle-web primer");
+    }
+    let root = std::path::PathBuf::from(Moodle::moodle_root());
+    let db = moodle_mcp::web::db::Db::open(&root.join(".moodle/web.db"))?;
+    let r = moodle_mcp::web::folders::migrate(&root, &db, dry)?;
+    println!("{}", serde_json::to_string(&r)?);
     Ok(())
 }

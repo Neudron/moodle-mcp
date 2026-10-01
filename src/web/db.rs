@@ -266,6 +266,68 @@ impl Db {
         Ok(())
     }
 
+    /// Rewrite stored paths `old` (or `old/..`) to `new`: task url, scan_item,
+    /// extract_cache and local files. One transaction.
+    pub fn rewrite_prefix(&self, old: &str, new: &str) -> Result<usize> {
+        let mut c = self.c();
+        let tx = c.transaction()?;
+        let hit = |col: &str| format!("({col}=?1 OR substr({col},1,length(?1)+1)=?1||'/')");
+        let to = |col: &str| format!("?2||substr({col},length(?1)+1)");
+        let mut n = tx.execute(
+            &format!(
+                "UPDATE task SET json=json_set(json,'$.url',{}) WHERE {}",
+                to("json_extract(json,'$.url')"),
+                hit("json_extract(json,'$.url')")
+            ),
+            params![old, new],
+        )?;
+        n += tx.execute(
+            &format!(
+                "UPDATE OR IGNORE scan_item SET src={} WHERE {}",
+                to("src"),
+                hit("src")
+            ),
+            params![old, new],
+        )?;
+        n += tx.execute(
+            &format!("DELETE FROM scan_item WHERE {}", hit("src")),
+            params![old],
+        )?;
+        n += tx.execute(
+            &format!(
+                "UPDATE extract_cache SET source_url={} WHERE {}",
+                to("source_url"),
+                hit("source_url")
+            ),
+            params![old, new],
+        )?;
+        let rows = json_rows(&tx, "SELECT json FROM local")?;
+        for j in rows {
+            let mut l: Local = serde_json::from_str(&j)?;
+            let mut changed = false;
+            for f in &mut l.files {
+                let t = if f == old {
+                    Some(String::new())
+                } else {
+                    f.strip_prefix(old)
+                        .filter(|t| t.starts_with('/'))
+                        .map(String::from)
+                };
+                if let Some(t) = t {
+                    *f = format!("{new}{t}");
+                    changed = true;
+                }
+            }
+            if changed {
+                put_local(&tx, &l)?;
+                n += 1;
+            }
+        }
+        tx.commit()?;
+        self.1.fetch_add(1, Ordering::Relaxed);
+        Ok(n)
+    }
+
     pub fn set_ai_score(&self, id: &str, p: f64) -> Result<()> {
         self.update_task(id, |t| {
             (t.ai_score, t.ai_v) = (Some(p), crate::web::scan::JEV_V)
