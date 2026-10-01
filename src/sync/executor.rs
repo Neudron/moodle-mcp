@@ -263,6 +263,7 @@ async fn write_external(
         if let Some(prev) = old_files.get(&file.url) {
             let mut entry = prev.clone();
             entry.path = file.dest_rel.clone();
+            entry.contenthash.clone_from(&file.contenthash); // backfill legacy
             return TaskOutcome::Skipped {
                 url: file.url.clone(),
                 entry,
@@ -282,6 +283,7 @@ async fn write_external(
     TaskOutcome::New {
         url: file.url.clone(),
         entry: FileEntry {
+            contenthash: file.contenthash.clone(),
             path: file.dest_rel.clone(),
             sha256: sha256_hex(body.as_bytes()),
             size: body.len() as i64,
@@ -324,6 +326,7 @@ async fn download_one(
             TaskOutcome::New {
                 url: file.url.clone(),
                 entry: FileEntry {
+                    contenthash: file.contenthash.clone(),
                     path: dest_rel,
                     sha256: meta.sha256,
                     size: meta.size as i64,
@@ -407,6 +410,7 @@ pub async fn run(
         if let Some(prev) = old_files.get(&file.url) {
             let mut entry = prev.clone();
             entry.path = file.dest_rel.clone();
+            entry.contenthash.clone_from(&file.contenthash);
             new_files.insert(file.url.clone(), entry);
             report.files_skipped += 1;
         } else {
@@ -573,6 +577,7 @@ async fn record_move(
     if src_abs == dst_abs {
         let mut entry = prev.clone();
         entry.path = mv.to.clone();
+        entry.contenthash.clone_from(&mv.file.contenthash);
         new_files.insert(mv.url.clone(), entry);
         report.files_skipped += 1;
         return;
@@ -588,6 +593,7 @@ async fn record_move(
     if renamed {
         let mut entry = prev.clone();
         entry.path = mv.to.clone();
+        entry.contenthash.clone_from(&mv.file.contenthash);
         new_files.insert(mv.url.clone(), entry);
         report.files_skipped += 1;
     } else {
@@ -630,5 +636,38 @@ mod tests {
             part_for(dest),
             PathBuf::from("/root/C/RA01/001-m/a.pdf.part")
         );
+    }
+
+    #[tokio::test]
+    async fn record_move_backfills_contenthash() {
+        let root = std::env::temp_dir().join(format!("rm-ch-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.pdf"), b"x").unwrap();
+        let file: PlannedFile = serde_json::from_value(serde_json::json!({
+            "url": "u", "filename": "a.pdf", "stored_name": "a.pdf", "filesize": 1,
+            "timemodified": 0, "contenthash": "S", "section_folder": "s",
+            "module_name": "m", "module_folder": "m", "dest_rel": "a.pdf"
+        }))
+        .unwrap();
+        let mv = FileMove {
+            url: "u".into(),
+            from: "a.pdf".into(),
+            to: "a.pdf".into(),
+            file,
+        };
+        let mut old = BTreeMap::new();
+        old.insert(
+            "u".to_string(),
+            FileEntry {
+                path: "a.pdf".into(),
+                ..Default::default()
+            },
+        );
+        let mut new_files = BTreeMap::new();
+        let mut report = Report::empty(1, "c");
+        let mut dl = Vec::new();
+        record_move(&mv, &root, &old, &mut new_files, &mut report, &mut dl).await;
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(new_files["u"].contenthash, "S");
     }
 }

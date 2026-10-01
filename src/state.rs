@@ -85,6 +85,9 @@ impl Default for State {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileEntry {
     // Alphabetical field order (see State): sorted keys on disk (#986).
+    /// Moodle `contenthash` (`""` = unknown); cross-URL move key.
+    #[serde(default)]
+    pub contenthash: String,
     /// MIME type (`""` = unknown, backfilled).
     #[serde(default)]
     pub mimetype: String,
@@ -112,6 +115,7 @@ impl FileEntry {
         source: &str,
     ) -> Self {
         Self {
+            contenthash: String::new(),
             path,
             sha256,
             size,
@@ -886,6 +890,7 @@ mod tests {
                 files: BTreeMap::from([(
                     "u".to_string(),
                     FileEntry {
+                        contenthash: String::new(),
                         path: "../evil".to_string(),
                         sha256: String::new(),
                         size: -1,

@@ -554,7 +554,7 @@ pub fn plan(
 ///
 /// Same-URL path changes are detected in [`plan`] proper; this pass handles
 /// the content-identity case: a fetch candidate whose Moodle `contenthash`
-/// matches the stored sha256 of an old entry whose URL vanished from
+/// matches the stored contenthash of an old entry whose URL vanished from
 /// contents is a move (rename on disk, no download), not a fresh download.
 /// Only otherwise-stale entries participate (a still-visible URL keeps its
 /// own reuse/move/fetch verdict); each stale entry is consumed at most
@@ -576,11 +576,11 @@ fn resolve_cross_url_moves_by_sha(old: &BTreeMap<String, crate::state::FileEntry
         let Some(entry) = old.get(&stale.url) else {
             continue;
         };
-        if entry.sha256.is_empty() {
+        if entry.contenthash.is_empty() {
             continue;
         }
         by_sha
-            .entry(entry.sha256.clone())
+            .entry(entry.contenthash.clone())
             .or_default()
             .push_back(idx);
     }
@@ -816,7 +816,8 @@ mod tests {
             "http://h.invalid/webservice/pluginfile.php/1/a.pdf".to_string(),
             FileEntry {
                 path: "C/RA01/001-m/a.pdf".to_string(),
-                sha256: "somesha256".to_string(),
+                sha256: "a".repeat(64),
+                contenthash: "S".to_string(),
                 size: 100,
                 ..Default::default()
             },
@@ -846,7 +847,7 @@ mod tests {
                         "http://h.invalid/webservice/pluginfile.php/1/a-v2.pdf".to_string(),
                     ),
                     timemodified: 0,
-                    contenthash: "somesha256".to_string(),
+                    contenthash: "S".to_string(),
                 }]),
             }],
         }];
@@ -874,7 +875,7 @@ mod tests {
             "http://h.invalid/webservice/pluginfile.php/1/a.pdf".to_string(),
             FileEntry {
                 path: "C/RA01/001-m/a.pdf".to_string(),
-                sha256: "somesha256".to_string(),
+                sha256: "a".repeat(64),
                 size: 100,
                 ..Default::default()
             },
@@ -884,7 +885,7 @@ mod tests {
             files,
             ..Default::default()
         };
-        // Same shape as above but the new file carries no contenthash:
+        // Same shape as above but the old entry carries no contenthash:
         // empty hashes never match, so it stays fetch + stale.
         let contents = vec![CourseSection {
             id: 1,
@@ -904,7 +905,7 @@ mod tests {
                         "http://h.invalid/webservice/pluginfile.php/1/a-v2.pdf".to_string(),
                     ),
                     timemodified: 0,
-                    contenthash: String::new(),
+                    contenthash: "S".to_string(),
                 }]),
             }],
         }];
