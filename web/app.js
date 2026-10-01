@@ -154,7 +154,7 @@ function card(tv, hideCourse, quick) {
   const row = h('a', { class: 'row' + (done ? ' done' : left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
     h('span', { class: 'dot', style: { '--h': hue(t.course) } }),
     h('span', { class: 't', title: t.title }, t.title),
-    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hue(t.course) } }, cname(t.course)), h('span', {}, KIND[t.kind] || t.kind), badges),
+    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hue(t.course) } }, cname(t.course)), t.kind === 'assign' ? null : h('span', {}, KIND[t.kind] || t.kind), badges),
     dueChip(tv));
   if (!quick || done) return row;
   // Not inside the <a>: a button in a link is invalid. Commit is deferred so the undo toast is real.
@@ -217,10 +217,10 @@ function proposal(tv) {
   const set = async (keep) => {
     try { await api(`/api/tasks/${enc(t.id)}/ai`, { method: 'POST', body: { keep } }); route({ soft: true }); } catch (e) { art.hidden = false; toast(e.message, true); }
   };
-  const act = (keep, label) => h('button', { type: 'button', class: keep ? 'primary' : '', onclick: () => {
+  const act = (keep, label) => h('button', { type: 'button', class: keep ? '' : 'ghost', onclick: () => {
     if (keep) return set(true);
     $('#main').focus(); art.hidden = true;
-    later(`Descartada: ${t.title}`, () => { art.hidden = false; art.querySelector('button:not(.primary)').focus(); }, () => set(false));
+    later(`Descartada: ${t.title}`, () => { art.hidden = false; art.querySelector('button.ghost').focus(); }, () => set(false));
   } }, label);
   const art = h('article', { class: 'v-prop' },
     h('h3', {}, h('a', { href: `#/tasca/${enc(t.id)}` }, t.title)),
@@ -890,6 +890,7 @@ views.calendari = async (ym) => {
   const byDay = {};
   for (const tv of all) { const d = new Date(tv.task.due * 1000); (byDay[key(d)] ||= []).push(tv); }
   const wd = new Intl.DateTimeFormat('ca-ES', { weekday: 'long' });
+  const mon = new Intl.DateTimeFormat('ca-ES', { month: 'short' });
   const long = new Intl.DateTimeFormat('ca-ES', { weekday: 'long', day: 'numeric', month: 'long' });
   const ev = (tv, extra) => h('a', {
     href: `#/tasca/${enc(tv.task.id)}`, title: tv.task.title,
@@ -904,7 +905,7 @@ views.calendari = async (ym) => {
     const cls = 'd' + (d.getMonth() !== m - 1 ? ' out' : '') + (today ? ' today' : '');
     const cell = h('div', { class: cls, role: 'gridcell', tabindex: -1, 'aria-label': long.format(d), ...(today ? { 'aria-current': 'date' } : {}) },
       h('strong', {}, d.getDate()),
-      h('span', { class: 'wd' }, wd.format(d)),
+      h('span', { class: 'wd' }, wd.format(d) + (d.getMonth() !== m - 1 ? ` · ${mon.format(d)}` : '')),
       evs.slice(0, 3).map((tv) => ev(tv)),
       evs.slice(3).map((tv) => ev(tv, true)));
     if (evs.length > 3) {
@@ -960,7 +961,7 @@ views.notes = async () => {
 views.organitza = async () => {
   const log = await api('/api/organize');
   const KINDS = { move: 'Mou', replace: 'Substitueix', module: 'Mòdul' };
-  const act = (label, run, confirm) => h('button', { type: 'button', class: confirm ? '' : 'primary', onclick: async (e) => {
+  const act = (label, run, confirm) => h('button', { type: 'button', class: '', onclick: async (e) => {
     const b = e.currentTarget;
     if (b.getAttribute('aria-busy') === 'true') return;
     if (confirm && !(await confirmDialog(confirm[0], h('p', {}, confirm[1]), label))) { b.focus(); return; }
@@ -982,8 +983,8 @@ views.organitza = async () => {
       act('Sincronitza amb Apple', ['/api/apple-sync', withErr((r) => `Apple: ${r.created} noves, ${r.updated} actualitzades, ${r.done} fetes, ${r.deleted} esborrades`), errs])),
     h('h2', {}, 'Última ordenació'),
     !ops.length ? empty('Encara no s\'ha ordenat res') : h('div', {},
-      h('p', { class: 'dim' }, `Execució ${log.run} · ${when(log.at)} · ${ops.length} operacions`),
-      h('ul', { class: 'oplog' }, ops.map((o) => h('li', {}, h('b', {}, KINDS[o.kind] || o.kind), ' ', h('span', { class: 'mono' }, o.from), ' → ', h('span', { class: 'mono' }, o.to))))));
+      h('p', { class: 'dim' }, `${when(log.at)} · ${ops.length} operacions`),
+      h('ul', { class: 'oplog' }, ops.map((o) => h('li', {}, h('b', {}, KINDS[o.kind] || o.kind), h('span', { class: 'mono' }, o.from), h('span', { class: 'mono dim' }, '→ ', o.to.replace(/^\.moodle\/trash\/\d+\//, 'paperera/')))))));
 };
 
 views.forums = async () => {
@@ -1008,7 +1009,7 @@ views.forums = async () => {
     } }, h('summary', {},
       isRead ? null : h('span', { class: 'ud' }, h('span', { class: 'sr-only' }, 'Sense llegir')),
       h('span', { class: 'ft' }, tv.task.title),
-      h('span', { class: 'dim mono fm' }, `${cname(tv.task.course)} · ${when(tv.task.opens)}`)));
+      h('span', { class: 'dim fm' }, `${cname(tv.task.course)} · ${when(tv.task.opens)}`)));
   };
   const unread = posts.filter((p) => p.local.status !== 'llegit');
   const read = posts.filter((p) => p.local.status === 'llegit');
