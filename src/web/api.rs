@@ -255,22 +255,40 @@ async fn set_status(
     }
     let t = app.db.task(&id)?.ok_or(bad("no existeix"))?;
     let mut l = app.db.local(&id)?;
+    let was = l.status == "lliurat";
     l.status = b.status;
-    if l.status == "lliurat" {
-        move_lliurat(&app, &t, &mut l)?;
+    if l.status == "lliurat" && !was {
+        move_lliurat(&app, &t, &mut l, "submit/", "submit/_lliurat/")?;
+    } else if was && l.status != "lliurat" {
+        move_lliurat(&app, &t, &mut l, "submit/_lliurat/", "submit/")?;
     }
     app.db.set_local(&l)?;
     readme::write(&app.db, &app.root)?;
     Ok(Json(l))
 }
 
-/// `lliurat` moves the task folder to `submit/_lliurat/` and rewrites `l.files`.
-fn move_lliurat(app: &App, t: &crate::web::db::Task, l: &mut Local) -> R<()> {
-    let from_rel = readme::submit_dir(&module_of(l, &t.course), &t.title);
+/// Moves the task folder between `submit/` and `submit/_lliurat/` (prefixes) and rewrites `l.files`.
+fn move_lliurat(
+    app: &App,
+    t: &crate::web::db::Task,
+    l: &mut Local,
+    from_p: &str,
+    to_p: &str,
+) -> R<()> {
+    let base = readme::submit_dir(&module_of(l, &t.course), &t.title);
+    let from_rel = base.replacen("submit/", from_p, 1);
     let root = std::path::Path::new(&app.root);
-    let to_rel = from_rel.replacen("submit/", "submit/_lliurat/", 1);
+    let to_rel = base.replacen("submit/", to_p, 1);
     if root.join(&from_rel).is_dir() {
         let to = root.join(&to_rel);
+        if to.is_dir()
+            && std::fs::read_dir(&to)
+                .map_err(anyhow::Error::from)?
+                .next()
+                .is_some()
+        {
+            return Err(bad("la carpeta destí ja existeix i no és buida"));
+        }
         std::fs::create_dir_all(to.parent().unwrap_or(&to)).map_err(anyhow::Error::from)?;
         std::fs::rename(root.join(&from_rel), &to).map_err(anyhow::Error::from)?;
         for f in &mut l.files {
@@ -342,12 +360,14 @@ pub fn mark_lliurat(app: &App, id: &str) -> R<Option<String>> {
     let mut l = app.db.local(id)?;
     l.status = "lliurat".into();
     let t = app.db.task(id)?.ok_or(bad("no existeix"))?;
-    let warning = move_lliurat(app, &t, &mut l).err().map(|e| {
-        format!(
-            "Enviada a Moodle, però no s'ha pogut moure la carpeta: {}",
-            e.1
-        )
-    });
+    let warning = move_lliurat(app, &t, &mut l, "submit/", "submit/_lliurat/")
+        .err()
+        .map(|e| {
+            format!(
+                "Enviada a Moodle, però no s'ha pogut moure la carpeta: {}",
+                e.1
+            )
+        });
     app.db.set_local(&l)?;
     readme::write(&app.db, &app.root)?;
     Ok(warning)

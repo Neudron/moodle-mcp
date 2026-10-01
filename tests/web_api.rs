@@ -230,6 +230,47 @@ async fn lliurat_moves_folder_under_module_and_rewrites_files() {
     assert!(root.join("submit/README.md").exists());
 }
 
+#[tokio::test]
+async fn undo_lliurat_moves_folder_back_and_refuses_nonempty_target() {
+    let (base, _app, _m, root) = start("unlliurat").await;
+    let c = reqwest::Client::new();
+    post(&c, &base, "/api/sync").send().await.unwrap();
+    let get = |c: &reqwest::Client| c.get(format!("{base}/api/tasks/assign:7")).send();
+    let one: serde_json::Value = get(&c).await.unwrap().json().await.unwrap();
+    let dir = one["submit_dir"].as_str().unwrap().to_string();
+    std::fs::create_dir_all(root.join(&dir)).unwrap();
+    std::fs::write(root.join(&dir).join("a.txt"), "x").unwrap();
+    let file = format!("{dir}/a.txt");
+    post(&c, &base, "/api/tasks/assign:7/files")
+        .json(&serde_json::json!({"files": [file]}))
+        .send()
+        .await
+        .unwrap();
+    let st = |s: &'static str| {
+        post(&c, &base, "/api/tasks/assign:7/status").json(&serde_json::json!({"status": s}))
+    };
+    assert!(st("lliurat").send().await.unwrap().status().is_success());
+    // target now exists and is non-empty: clean 4xx, status unchanged
+    std::fs::create_dir_all(root.join(&dir)).unwrap();
+    std::fs::write(root.join(&dir).join("b.txt"), "y").unwrap();
+    let r = st("per revisar").send().await.unwrap();
+    assert!(r.status().is_client_error(), "{}", r.status());
+    let one: serde_json::Value = get(&c).await.unwrap().json().await.unwrap();
+    assert_eq!(one["local"]["status"], "lliurat");
+    std::fs::remove_dir_all(root.join(&dir)).unwrap();
+    assert!(st("per revisar")
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .is_success());
+    assert!(root.join(&dir).join("a.txt").exists());
+    let one: serde_json::Value = get(&c).await.unwrap().json().await.unwrap();
+    assert_eq!(one["submit_dir"], dir);
+    assert!(root.join(one["submit_dir"].as_str().unwrap()).is_dir());
+    assert_eq!(one["local"]["files"][0], format!("{dir}/a.txt"));
+}
+
 #[test]
 fn small_tag_font_size_is_16px_multiple() {
     let css = include_str!("../web/app.css");
