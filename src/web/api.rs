@@ -525,13 +525,59 @@ async fn file_info(State(app): S, Query(q): Query<PathQ>) -> R<Json<Value>> {
     ))
 }
 
-async fn raw(State(app): S, Query(q): Query<PathQ>) -> R<Response> {
+const RAW_MAX: u64 = 8 << 20;
+
+/// Single `bytes=a-b` / `a-` / `-n` range -> inclusive (start, end); None = unsatisfiable/invalid.
+fn parse_range(h: &str, size: u64) -> Option<(u64, u64)> {
+    let (a, b) = h.strip_prefix("bytes=")?.split_once('-')?;
+    let (s, e) = match (a.trim(), b.trim()) {
+        ("", n) => (
+            size.checked_sub(n.parse().ok().filter(|&n| n > 0)?)?,
+            size.checked_sub(1)?,
+        ),
+        (a, "") => (a.parse().ok()?, size.checked_sub(1)?),
+        (a, b) => (
+            a.parse().ok()?,
+            b.parse::<u64>().ok()?.min(size.checked_sub(1)?),
+        ),
+    };
+    (s <= e && e < size).then_some((s, e.min(s + RAW_MAX - 1)))
+}
+
+async fn raw(State(app): S, Query(q): Query<PathQ>, req_h: HeaderMap) -> R<Response> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let nf = |e: std::io::Error| ApiErr(StatusCode::NOT_FOUND, e.to_string());
     let p = files::jail(std::path::Path::new(&app.root), &q.path).map_err(forbid)?;
-    let bytes = tokio::fs::read(&p)
-        .await
-        .map_err(|e| ApiErr(StatusCode::NOT_FOUND, e.to_string()))?;
-    let ct = files::mime(&p);
+    let mut f = tokio::fs::File::open(&p).await.map_err(nf)?;
+    let size = f.metadata().await.map_err(nf)?.len();
+    let range = req_h.get(header::RANGE).and_then(|v| v.to_str().ok());
     let mut h = HeaderMap::new();
+    h.insert(header::ACCEPT_RANGES, "bytes".parse().expect("static"));
+    let (status, s, e) = match range {
+        Some(r) => match parse_range(r, size) {
+            Some((s, e)) => (StatusCode::PARTIAL_CONTENT, s, e),
+            None => {
+                h.insert(
+                    header::CONTENT_RANGE,
+                    format!("bytes */{size}").parse().expect("ascii"),
+                );
+                return Ok((StatusCode::RANGE_NOT_SATISFIABLE, h).into_response());
+            }
+        },
+        // ponytail: no-Range responses buffer the whole file; stream them with tokio_util ReaderStream once it is approved.
+        None => (StatusCode::OK, 0, size.saturating_sub(1)),
+    };
+    let len = if size == 0 { 0 } else { e - s + 1 };
+    f.seek(std::io::SeekFrom::Start(s)).await.map_err(nf)?;
+    let mut bytes = Vec::with_capacity(len as usize);
+    f.take(len).read_to_end(&mut bytes).await.map_err(nf)?;
+    if status == StatusCode::PARTIAL_CONTENT {
+        h.insert(
+            header::CONTENT_RANGE,
+            format!("bytes {s}-{e}/{size}").parse().expect("ascii"),
+        );
+    }
+    let ct = files::mime(&p);
     h.insert(header::CONTENT_TYPE, ct.parse().expect("static mime"));
     h.insert("x-content-type-options", "nosniff".parse().expect("static"));
     h.insert(
@@ -544,7 +590,7 @@ async fn raw(State(app): S, Query(q): Query<PathQ>) -> R<Response> {
             "sandbox".parse().expect("static"),
         );
     }
-    Ok((h, Body::from(bytes)).into_response())
+    Ok((status, h, Body::from(bytes)).into_response())
 }
 
 #[derive(Deserialize)]

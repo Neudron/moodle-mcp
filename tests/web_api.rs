@@ -770,3 +770,41 @@ async fn auth_status_states_and_renew_rate_limit() {
     );
     drop(m);
 }
+
+#[tokio::test]
+async fn raw_supports_range_and_caps_large_files() {
+    let (base, _app, _m, root) = start("range").await;
+    std::fs::write(root.join("r.bin"), (0..=255u8).collect::<Vec<_>>()).unwrap();
+    std::fs::write(root.join("big.bin"), vec![7u8; 9 << 20]).unwrap();
+    let c = reqwest::Client::new();
+    let get = |p: &str, r: Option<&str>| {
+        let mut q = c.get(format!("{base}/api/raw?path={p}"));
+        if let Some(r) = r {
+            q = q.header("range", r);
+        }
+        q.send()
+    };
+    let r = get("r.bin", Some("bytes=0-9")).await.unwrap();
+    assert_eq!(r.status(), 206);
+    assert_eq!(r.headers()["content-range"], "bytes 0-9/256");
+    assert_eq!(r.headers()["accept-ranges"], "bytes");
+    assert_eq!(
+        r.bytes().await.unwrap().to_vec(),
+        (0..10u8).collect::<Vec<_>>()
+    );
+    let r = get("r.bin", Some("bytes=-4")).await.unwrap();
+    assert_eq!(r.status(), 206);
+    assert_eq!(r.bytes().await.unwrap().to_vec(), vec![252, 253, 254, 255]);
+    let r = get("r.bin", Some("bytes=300-400")).await.unwrap();
+    assert_eq!(r.status(), 416);
+    assert_eq!(r.headers()["content-range"], "bytes */256");
+    assert_eq!(get("r.bin", Some("bytes=9-2")).await.unwrap().status(), 416);
+    assert_eq!(get("r.bin", None).await.unwrap().status(), 200);
+    let r = get("big.bin", None).await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(r.headers().get("content-range").is_none());
+    assert_eq!(r.bytes().await.unwrap().len(), 9 << 20);
+    let r = get("big.bin", Some("bytes=0-")).await.unwrap();
+    assert_eq!(r.status(), 206);
+    assert_eq!(r.bytes().await.unwrap().len(), 8 << 20);
+}
