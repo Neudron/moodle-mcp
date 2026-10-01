@@ -424,3 +424,17 @@ small{font-size:16px}
 .v-prop h3{margin:0;font-size:18px;color:var(--text)}.v-prop p{margin:0}.v-prop blockquote{margin:0;border-left:3px solid var(--accent);padding-left:var(--s2);color:var(--dim)}
 @media (max-width:899px){#scan-slot{display:none}}
 .oplog{list-style:none;margin:0;padding:0}.oplog li{padding:var(--s1) 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+
+/* Tauler triage */
+.rowq{display:flex;align-items:stretch;box-shadow:0 1px 0 var(--line)}.rowq[hidden]{display:none}
+.rowq>.row{flex:1;min-width:0;box-shadow:none}
+.rowq>button{flex:none;align-self:center;margin:0 var(--s1);min-height:44px;min-width:44px;display:inline-flex;align-items:center;gap:var(--s1)}
+@media (max-width:599px){.rowq>button{align-self:flex-start;margin-top:var(--s1)}.rowq>button .ic+*{display:none}}
+.v-tauler .next{display:flex;flex-direction:column;gap:2px;margin:0 0 var(--s2);padding:var(--s2);background:var(--raised);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--r-lg);color:var(--text);text-decoration:none}
+.v-tauler .next:hover{background:var(--hover)}
+.v-tauler .next .eyebrow{margin:0}
+.v-tauler .next .nt{font-size:20px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}
+.v-tauler .next .nm{color:var(--dim);font-size:14px}
+.g-ai details.fold{margin:var(--s2) 0}.g-ai details.fold>summary{min-height:44px;display:flex;align-items:center;cursor:pointer;font-weight:600}
+.g-ai>.ghost{margin-top:var(--s1)}
+#toast-u{flex:none;min-height:44px}

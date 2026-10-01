@@ -77,20 +77,23 @@ function sandboxed(html, label) {
   return h('iframe', { class: 'sheet', sandbox: '', referrerpolicy: 'no-referrer', title: label || 'Contingut de Moodle', srcdoc: css + html });
 }
 
-function toast(msg, bad) {
-  const t = $('#toast'), ok = $('#toast-s'), er = $('#toast-e'), x = $('#toast-x');
+function toast(msg, bad, undo) {
+  const t = $('#toast'), ok = $('#toast-s'), er = $('#toast-e'), x = $('#toast-x'), u = $('#toast-u');
+  if (!undo) flush();
   clearTimeout(toast.t); clearTimeout(toast.c); clearTimeout(toast.h);
   ok.textContent = er.textContent = '';
   // Clear first, set on the next tick: repeated messages get announced again.
   toast.t = setTimeout(() => {
     (bad ? er : ok).textContent = msg;
-    t.classList.add('on'); t.classList.toggle('bad', !!bad); x.hidden = !bad;
-    if (!bad) toast.h = setTimeout(hideToast, toast.ms = msg.length > 60 ? 6000 : 3000);
+    t.classList.add('on'); t.classList.toggle('bad', !!bad); x.hidden = !bad; u.hidden = !undo;
+    u.onclick = () => { undo(); hideToast(); };
+    if (!bad) toast.h = setTimeout(hideToast, toast.ms = undo || msg.length > 60 ? 6000 : 3000);
   }, 50);
 }
 // Keep the live regions in the tree (sr-only when empty); clear the text once the fade is done.
 function hideToast() {
-  $('#toast').classList.remove('on'); $('#toast-x').hidden = true;
+  flush();
+  $('#toast').classList.remove('on'); $('#toast-x').hidden = true; $('#toast-u').hidden = true;
   toast.c = setTimeout(() => { $('#toast-s').textContent = $('#toast-e').textContent = ''; }, 250);
 }
 $('#toast-x').addEventListener('click', hideToast);
@@ -98,6 +101,18 @@ $('#toast-x').addEventListener('click', hideToast);
 $('#toast').addEventListener('pointerenter', () => clearTimeout(toast.h));
 $('#toast').addEventListener('focusin', () => clearTimeout(toast.h));
 $('#toast').addEventListener('pointerleave', () => { if ($('#toast').classList.contains('on') && !$('#toast').classList.contains('bad')) toast.h = setTimeout(hideToast, toast.ms || 3000); });
+
+// Commit runs when the toast hides (hover/focus extends it), or when another toast replaces it, unless Desfés / Esc runs `onUndo` first.
+let pending;
+function flush() { const p = pending; pending = null; if (p) p(); }
+function later(msg, onUndo, commit) {
+  flush();
+  pending = commit;
+  toast(`${msg}. Esc per desfer.`, false, () => { pending = null; onUndo(); });
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('#toast-u').hidden && !document.querySelector('dialog[open]')) $('#toast-u').click();
+});
 
 // Shared states. All text via h()/textContent.
 const empty = (title, text, btn) => h('div', { class: 'empty' }, h('h2', {}, title), text && h('p', {}, text), btn);
@@ -126,7 +141,7 @@ const views = {};
 const taskExtras = [];
 const fileExtras = [];
 
-function card(tv, hideCourse) {
+function card(tv, hideCourse, quick) {
   const t = tv.task, done = isDone(tv);
   // Badges only when they differ from the default 'Sense enviar'.
   const badges = [
@@ -134,11 +149,21 @@ function card(tv, hideCourse) {
     tv.local.status && h('span', { class: 'badge ' + (tv.local.status === 'revisat OK' ? 'ok' : 'warn') }, LSTATUS[tv.local.status] || tv.local.status),
     t.source === 'ai' && aiBadge(),
   ];
-  return h('a', { class: 'row' + (done ? ' done' : left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
+  const row = h('a', { class: 'row' + (done ? ' done' : left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
     h('span', { class: 'dot', style: { '--h': hue(t.course) } }),
     h('span', { class: 't', title: t.title }, t.title),
     h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hue(t.course) } }, cname(t.course)), h('span', {}, KIND[t.kind] || t.kind), badges),
     dueChip(tv));
+  if (!quick || done) return row;
+  // Not inside the <a>: a button in a link is invalid. Commit is deferred so the undo toast is real.
+  const wrap = h('div', { class: 'rowq' }, row, h('button', { type: 'button', class: 'ghost', 'aria-label': `Marca lliurada: ${t.title}`, onclick: () => {
+    $('#main').focus(); wrap.hidden = true;
+    later(`Marcada com a lliurada: ${t.title}`, () => { wrap.hidden = false; wrap.querySelector('button').focus(); }, async () => {
+      try { await api(`/api/tasks/${enc(t.id)}/status`, { method: 'POST', body: { status: 'lliurat' } }); } catch (e) { wrap.hidden = false; toast(e.message, true); }
+      route({ soft: true });
+    });
+  } }, ic('check'), 'Lliurada'));
+  return wrap;
 }
 
 // AI scan: one poller shared by every scanControl() instance (sidebar + tauler).
@@ -188,41 +213,43 @@ function scanControl() {
 // "Proposades per IA": evidence is text only, preview loads on first open.
 function proposal(tv) {
   const t = tv.task, box = h('div', { class: 'v-preview' }), web = /^https?:\/\//.test(t.url);
-  const act = (keep, label) => h('button', { type: 'button', class: keep ? 'primary' : '', onclick: async () => {
-    try { await api(`/api/tasks/${enc(t.id)}/ai`, { method: 'POST', body: { keep } }); setText($('#live'), keep ? `Mantinguda: ${t.title}` : `Descartada: ${t.title}`); route({ soft: true }); } catch (e) { toast(e.message, true); } } }, label);
-  return h('article', { class: 'v-prop' },
+  const set = async (keep) => {
+    try { await api(`/api/tasks/${enc(t.id)}/ai`, { method: 'POST', body: { keep } }); route({ soft: true }); } catch (e) { art.hidden = false; toast(e.message, true); }
+  };
+  const act = (keep, label) => h('button', { type: 'button', class: keep ? 'primary' : '', onclick: () => {
+    if (keep) return set(true);
+    $('#main').focus(); art.hidden = true;
+    later(`Descartada: ${t.title}`, () => { art.hidden = false; art.querySelector('button:not(.primary)').focus(); }, () => set(false));
+  } }, label);
+  const art = h('article', { class: 'v-prop' },
     h('h3', {}, h('a', { href: `#/tasca/${enc(t.id)}` }, t.title)),
     h('p', { class: 'm' }, h('span', { class: 'cn', style: { '--h': hue(t.course) } }, cname(t.course)), t.due ? ` · ${when(t.due)}` : null, t.ai_score != null ? ` · Jev ${t.ai_score.toFixed(2)}` : null),
     evidenceOf(t.body_html) ? h('blockquote', {}, evidenceOf(t.body_html)) : null,
     h('p', { class: 'dim' }, 'Font: ', web ? h('a', { href: t.url, target: '_blank', rel: 'noopener' }, t.url, ic('ext'), h('span', { class: 'sr-only' }, ' (obre en una pestanya nova)')) : h('a', { href: `#/fitxers/${enc(t.url)}` }, t.url)),
     h('details', { ontoggle: (e) => { if (e.target.open && !box.hasChildNodes()) preview(box, web ? { moodleUrl: t.url } : { path: t.url }); } }, h('summary', {}, 'Previsualitza'), box),
     h('div', { class: 'field-row' }, act(true, 'Mantén'), act(false, 'Descarta')));
+  return art;
 }
 
 views.tauler = async () => {
   const tasks = (await api('/api/tasks')).filter((tv) => tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
   const props = tasks.filter((tv) => tv.task.source === 'ai' && tv.task.ai_confirmed == null), all = tasks.filter((tv) => !props.includes(tv));
-  const now = Date.now() / 1000, week = now + 7 * 86400;
+  const now = Date.now() / 1000;
   // Overdue by more than 60 days = last school year's leftovers: collapsed, not counted as pending.
   const stale = (tv) => !isDone(tv) && tv.task.due && tv.task.due < now - 60 * 86400;
-  const groups = [
-    ['late', 'Endarrerides', (tv) => !isDone(tv) && !stale(tv) && tv.task.due && tv.task.due < now],
-    ['week', 'Aquesta setmana', (tv) => !isDone(tv) && tv.task.due >= now && tv.task.due <= week],
-    ['later', 'Més endavant', (tv) => !isDone(tv) && (!tv.task.due || tv.task.due > week)],
-    ['done', 'Lliurades', isDone],
-  ];
   const pendingList = all.filter((tv) => !isDone(tv) && !stale(tv));
   if (!all.length && !props.length) return h('section', { class: 'v-tauler' }, h('h1', {}, 'Tauler'), scanControl(), empty('Encara no hi ha tasques', 'Sincronitza per carregar-les.'));
   const pending = pendingList.length;
   const old = all.filter(stale);
   const doneN = all.filter(isDone).length, total = all.length - old.length;
   const next = pendingList.filter((tv) => tv.task.due >= now).sort((a, b) => a.task.due - b.task.due)[0];
+  const by = groupByDue(pendingList, now), doneList = all.filter(isDone).reverse();
 
-  // Each block: { key, el, rows[] }. Filtering only toggles `hidden` on what is already rendered.
+  // Each block: { key, el, rows[], fold? }. Filtering only toggles `hidden` on what is already rendered.
   const blocks = [];
-  const block = (key, el, rows) => { blocks.push({ key, el, rows }); return el; };
-  const rowsOf = (items) => items.map((tv) => { const r = card(tv); return r; });
-  const grp = (key, name, items, late) => {
+  const block = (key, el, rows, fold) => { blocks.push({ key, el, rows, fold }); return el; };
+  const rowsOf = (items) => items.map((tv) => card(tv, false, true));
+  const grp = (key, name, items) => {
     const rows = rowsOf(items);
     return block(key, h('section', { class: `v-grp g-${key}` },
       h('h2', { class: 'grp' }, name, h('span', { class: 'n' }, items.length)),
@@ -233,13 +260,28 @@ views.tauler = async () => {
     return block(key, h('details', { class: `fold g-${key}`, open }, h('summary', { class: 'grp' }, h('h2', {}, name, h('span', { class: 'n' }, items.length))), h('div', { class: 'cards' }, rows)), rows);
   };
 
-  const sections = groups.map(([key, name, f]) => {
-    const items = all.filter(f);
-    if (key === 'done') items.reverse();
-    if (!items.length) return null;
-    return key === 'done' ? fold(key, name, items, items.length <= 5) : grp(key, name, items, key === 'late');
-  });
+  const sections = [['late', 'Vençudes'], ['today', 'Avui'], ['week', 'Aquesta setmana'], ['later', 'Més tard']]
+    .map(([key, name]) => (by[key].length ? grp(key, name, by[key]) : null));
+  if (doneList.length) sections.push(fold('done', 'Lliurades', doneList, doneList.length <= 5));
   const oldEl = old.length ? fold('old', 'Antigues sense enviar', old, false) : null;
+
+  // AI proposals: top ranked first, the rest folded, searchable like real tasks.
+  let propEl = null;
+  if (props.length) {
+    const { top, rest } = rankProposals(props), zero = props.filter((tv) => !tv.task.ai_score);
+    const topRows = top.map(proposal), restRows = rest.map(proposal);
+    const dropZero = h('button', { type: 'button', class: 'ghost', onclick: async () => {
+      if (!(await confirmDialog(`Descartar ${zero.length} propostes?`, h('p', {}, `Es descartaran les ${zero.length} propostes amb puntuació 0. No es poden recuperar.`), 'Descarta'))) return;
+      let bad = 0;
+      for (const tv of zero) { try { await api(`/api/tasks/${enc(tv.task.id)}/ai`, { method: 'POST', body: { keep: false } }); } catch (e) { bad++; } }
+      toast(bad ? `${zero.length - bad} descartades, ${bad} han fallat` : `${zero.length} propostes descartades`, !!bad);
+      route({ soft: true });
+    } }, `Descarta les ${zero.length} de puntuació 0`);
+    const f = rest.length ? h('details', { class: 'fold' }, h('summary', {}, `${rest.length} de baixa confiança`), h('div', { class: 'v-props' }, restRows)) : null;
+    propEl = block('ai', h('section', { class: 'v-grp g-ai' },
+      h('h2', { class: 'grp' }, 'Propostes de la IA', h('span', { class: 'n' }, `${props.length} propostes, ${top.length} destacades`)),
+      h('div', { class: 'v-props' }, topRows), f, zero.length ? dropZero : null), [...topRows, ...restRows], f);
+  }
 
   const status = h('p', { class: 'sr-only', role: 'status' });
   const none = h('div', { hidden: true }, empty('Cap tasca coincideix', 'Prova un altre filtre o esborra la cerca.'));
@@ -253,14 +295,14 @@ views.tauler = async () => {
       let n = 0;
       for (const r of b.rows) { const ok = inMode && (!q || r.textContent.toLowerCase().includes(q)); r.hidden = !ok; if (ok) n++; }
       b.el.hidden = !n;
-      if (n && b.el.tagName === 'DETAILS' && (q || mode !== 'all')) b.el.open = true;
+      if (n && (q || mode !== 'all')) { if (b.el.tagName === 'DETAILS') b.el.open = true; if (b.fold) b.fold.open = true; }
       shown += n;
     }
     none.hidden = shown > 0;
-    status.textContent = `${shown} ${shown === 1 ? 'tasca' : 'tasques'}`;
+    setText(status, `${shown} ${shown === 1 ? 'tasca' : 'tasques'}`);
   };
   const input = h('input', { id: 'filter', type: 'search', 'aria-label': 'Filtra tasques', placeholder: 'Filtra tasques  ( / )', title: 'Drecera: / enfoca, Esc esborra', value: views.tauler.q || '', oninput: () => { views.tauler.q = input.value; apply(); } });
-  const FILTERS = [['all', 'Totes'], ['late', 'Endarrerides'], ['week', 'Aquesta setmana'], ['later', 'Més endavant'], ['done', 'Lliurades']];
+  const FILTERS = [['all', 'Totes'], ['late', 'Vençudes'], ['today', 'Avui'], ['week', 'Aquesta setmana'], ['later', 'Més tard'], ['done', 'Lliurades']];
   const seg = h('div', { class: 'seg', role: 'group', 'aria-label': 'Filtre per estat' }, FILTERS.map(([k, label]) =>
     h('button', { type: 'button', 'aria-pressed': String(k === mode), onclick: (e) => {
       mode = k; seg.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', b === e.currentTarget)); apply();
@@ -268,13 +310,13 @@ views.tauler = async () => {
 
   const out = h('section', { class: 'v-tauler' },
     h('h1', {}, pending === 0 ? 'Tot al dia' : `Tens ${pending} ${pending === 1 ? 'tasca pendent' : 'tasques pendents'}`),
-    h('div', { class: 'sub' },
-      next ? h('span', {}, 'La propera: ', h('a', { href: `#/tasca/${enc(next.task.id)}` }, next.task.title)) : null,
-      total ? bar(doneN, total, 'Tasques lliurades', '', `${doneN} de ${total} lliurades`) : null),
+    next ? h('a', { class: 'next', href: `#/tasca/${enc(next.task.id)}` },
+      h('span', { class: 'eyebrow' }, 'La propera'), h('span', { class: 'nt' }, next.task.title),
+      h('span', { class: 'nm' }, cname(next.task.course), ' · ', when(next.task.due))) : null,
+    total ? h('div', { class: 'sub' }, bar(doneN, total, 'Tasques lliurades', '', `${doneN} de ${total} lliurades`)) : null,
     all.length ? h('div', { class: 'v-tools' }, seg, h('label', { class: 'sr-only', for: 'filter' }, 'Filtra tasques'), input) : null,
     scanControl(), status,
-    props.length ? h('section', { class: 'v-grp g-ai' }, h('h2', { class: 'grp' }, 'Proposades per IA', h('span', { class: 'n' }, props.length)), h('div', { class: 'v-props' }, props.map(proposal))) : null,
-    sections, oldEl, none);
+    sections, propEl, oldEl, none);
   if (input.value) apply(); // filter survives soft refreshes
   return out;
 };
@@ -355,20 +397,21 @@ function tabs(key, items) {
 views.tasca = async (id) => {
   const tv = await api(`/api/tasks/${enc(id)}`);
   const t = tv.task, l = tv.local;
-  // Save only on an explicit click: arrow keys on a closed <select> fire `change` per step,
-  // and 'lliurat' moves the submit folder, so it also needs a confirmation.
+  // Saves on `change`, after 6 s with Desfés: arrow-stepping a closed <select> only commits the last pick.
+  // 'lliurat' also moves the submit folder, which is why the commit waits.
   const select = h('select', { id: 'estat-sel', 'aria-label': 'Estat local' },
     ['', 'per revisar', 'revisat OK', 'lliurat'].map((s) => h('option', { value: s, selected: s === l.status }, s ? LSTATUS[s] : '— sense estat —')));
   const selErr = h('p', { class: 'err', id: 'estat-err', role: 'alert' });
   select.setAttribute('aria-describedby', 'estat-err');
-  const save = h('button', { type: 'button', id: 'estat-desa', onclick: async () => {
+  select.addEventListener('change', async () => {
     const next = select.value;
-    if (next === l.status) { selErr.textContent = 'Cap canvi per desar.'; select.setAttribute('aria-invalid', 'true'); return; }
-    if (next === 'lliurat' && !(await confirmDialog('Marcar com a lliurada?',
-      h('p', {}, `La carpeta de "${t.title}" es mourà a submit/_lliurat/.`), 'Marca lliurada'))) { select.value = l.status; save.focus(); return; }
-    try { await api(`/api/tasks/${enc(id)}/status`, { method: 'POST', body: { status: next } }); selErr.textContent = ''; select.removeAttribute('aria-invalid'); toast('Estat desat'); await route({ soft: true }); $('#estat-desa')?.focus(); }
-    catch (err) { selErr.textContent = err.message; select.setAttribute('aria-invalid', 'true'); select.value = l.status; }
-  } }, 'Desa estat');
+    if (next === l.status) return;
+    if (next === 'lliurat' && !(await confirmDialog('Marcar com a lliurada?', h('p', {}, 'També mou la carpeta de lliurament.'), 'Marca'))) { select.value = l.status; select.focus(); return; }
+    later(`Estat: ${next ? LSTATUS[next] : 'sense estat'}`, () => { select.value = l.status; select.focus(); }, async () => {
+      try { await api(`/api/tasks/${enc(id)}/status`, { method: 'POST', body: { status: next } }); selErr.textContent = ''; select.removeAttribute('aria-invalid'); await route({ soft: true }); }
+      catch (err) { selErr.textContent = err.message; select.setAttribute('aria-invalid', 'true'); select.value = l.status; }
+    });
+  });
   const aiBtn = (bid, label, keep, after) => h('button', { type: 'button', id: bid, onclick: async () => {
     try { await api(`/api/tasks/${enc(id)}/ai`, { method: 'POST', body: { keep } }); after(); } catch (e) { toast(e.message, true); } } }, label);
   const extras = taskExtras.map((f) => f(tv)).reverse(); // Edita first, then Puja / Envia
@@ -385,7 +428,7 @@ views.tasca = async (id) => {
       h('p', {}, 'Extreta per IA. Revisa-la i decideix si la mantens.'),
       h('div', { class: 'field-row' }, aiBtn('ai-keep', 'Mantén', true, () => route({ soft: true })), aiBtn('ai-drop', 'Descarta', false, () => { location.hash = '#/tauler'; }))),
     h('a', { class: 'ext', href: t.url, target: '_blank', rel: 'noopener' }, 'Obre a Moodle', ic('ext'), NEWTAB),
-    h('div', { class: 'fld' }, h('label', { for: 'estat-sel' }, 'Estat local'), h('div', { class: 'field-row' }, select, save), selErr),
+    h('div', { class: 'fld' }, h('label', { for: 'estat-sel' }, 'Estat local'), h('div', { class: 'field-row' }, select), selErr),
     extras.flat(Infinity).some(Boolean) ? h('div', { class: 'v-deliver' }, h('h2', { class: 'sr-only' }, 'Entrega'), extras) : null);
 
   const badges = [
@@ -515,6 +558,29 @@ async function forumPill() {
   } catch (e) { /* ignore */ }
 }
 
+// triage-helpers-start
+// Madrid calendar-day key; 'YYYY-MM-DD' strings sort chronologically.
+const dayKey = (ts) => new Date(ts * 1000).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
+// ai_score desc (stable), top 10 with score >= 0.5, the rest folded.
+function rankProposals(list) {
+  const s = (tv) => tv.task.ai_score ?? 0;
+  const sorted = [...list].sort((a, b) => s(b) - s(a));
+  const top = sorted.filter((tv) => s(tv) >= 0.5).slice(0, 10);
+  return { top, rest: sorted.filter((tv) => !top.includes(tv)) };
+}
+// Pending tasks -> late (before today) / today / week (next 6 days) / later (incl. no due). Due-sorted, undated last.
+// ponytail: week bound is now+6*86400 as a day key, off by one around DST changes.
+function groupByDue(tasks, now) {
+  const today = dayKey(now), wk = dayKey(now + 6 * 86400), g = { late: [], today: [], week: [], later: [] };
+  for (const tv of [...tasks].sort((a, b) => (a.task.due || Infinity) - (b.task.due || Infinity))) {
+    const d = tv.task.due && dayKey(tv.task.due);
+    (!d ? g.later : d < today ? g.late : d === today ? g.today : d <= wk ? g.week : g.later).push(tv);
+  }
+  return g;
+}
+// Refresh the view when a sync finished, unless the user is typing or editing.
+const shouldSoftRoute = (prev, cur, tag, view) => !!prev && !!cur && prev !== cur && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) && view !== 'edita' && view !== 'ide';
+// triage-helpers-end
 // auth-helpers-start
 function authBannerText(a) {
   const m = [];
@@ -527,6 +593,8 @@ async function refreshStatus() {
   try {
     const s = await api('/api/status');
     setText($('#lastsync'), s.syncing ? 'Sincronitzant…' : s.last_sync ? `Sincronitzat ${syncAt(s.last_sync)}` : 'Mai sincronitzat');
+    const prev = refreshStatus.ls; refreshStatus.ls = s.last_sync;
+    if (!s.syncing && shouldSoftRoute(prev, s.last_sync, document.activeElement?.tagName, route.cur)) route({ soft: true });
     const b = $('#banner'); b.hidden = !s.error; setText(b, s.error || '');
   } catch (e) { /* server restarting */ }
   try {
