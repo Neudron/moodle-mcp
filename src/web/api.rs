@@ -73,8 +73,9 @@ pub fn routes() -> Router<Arc<App>> {
     Router::new()
         .route(
             "/",
-            get(|| async {
+            get(|h: HeaderMap| async move {
                 static_file(
+                    &h,
                     "text/html; charset=utf-8",
                     include_str!("../../web/index.html"),
                 )
@@ -82,14 +83,19 @@ pub fn routes() -> Router<Arc<App>> {
         )
         .route(
             "/app.css",
-            get(|| async {
-                static_file("text/css; charset=utf-8", include_str!("../../web/app.css"))
+            get(|h: HeaderMap| async move {
+                static_file(
+                    &h,
+                    "text/css; charset=utf-8",
+                    include_str!("../../web/app.css"),
+                )
             }),
         )
         .route(
             "/app.js",
-            get(|| async {
+            get(|h: HeaderMap| async move {
                 static_file(
+                    &h,
                     "text/javascript; charset=utf-8",
                     include_str!("../../web/app.js"),
                 )
@@ -126,16 +132,49 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/open", post(open_local))
 }
 
-fn static_file(ct: &'static str, body: &'static str) -> Response {
-    (
-        [
-            (header::CONTENT_TYPE, ct),
-            // no-store: embedded assets carry no ETag, so no-cache let browsers keep a stale app.js after a rebuild.
-            (header::CACHE_CONTROL, "no-store"),
-        ],
-        body,
-    )
-        .into_response()
+fn etag_of(parts: &[&[u8]]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    parts.hash(&mut h);
+    format!("\"{:x}\"", h.finish())
+}
+
+/// 304 when `If-None-Match` equals `etag`, else `body` with the ETag.
+fn cached(h: &HeaderMap, etag: String, ct: &'static str, body: impl IntoResponse) -> Response {
+    let hit = h
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v == etag);
+    let heads = [
+        (header::ETAG, etag),
+        (header::CACHE_CONTROL, "no-cache".into()),
+    ];
+    if hit {
+        (StatusCode::NOT_MODIFIED, heads).into_response()
+    } else {
+        (heads, [(header::CONTENT_TYPE, ct)], body).into_response()
+    }
+}
+
+// ponytail: hashed per request (~100 KB, microseconds); OnceLock per asset if it ever shows up in a profile.
+fn static_file(h: &HeaderMap, ct: &'static str, body: &'static str) -> Response {
+    cached(h, etag_of(&[body.as_bytes()]), ct, body)
+}
+
+/// Text of the first `<blockquote>` (scan.rs escapes `& < > "`), capped to ~200 chars.
+fn evidence_of(html: &str) -> String {
+    let inner = html
+        .split_once("<blockquote>")
+        .and_then(|(_, r)| r.split_once("</blockquote>"))
+        .map_or("", |(q, _)| q);
+    inner
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "&")
+        .chars()
+        .take(200)
+        .collect()
 }
 
 pub fn module_of(l: &Local, course: &str) -> String {
@@ -146,7 +185,11 @@ pub fn module_of(l: &Local, course: &str) -> String {
     }
 }
 
-async fn list_tasks(State(app): S) -> R<Json<Value>> {
+async fn list_tasks(State(app): S, h: HeaderMap) -> R<Response> {
+    let etag = format!("\"t{:x}\"", app.db.version());
+    if h.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == Some(etag.as_str()) {
+        return Ok(cached(&h, etag, "application/json", ()));
+    }
     let locals: std::collections::HashMap<_, _> = app
         .db
         .all_local()?
@@ -158,15 +201,29 @@ async fn list_tasks(State(app): S) -> R<Json<Value>> {
         .all_tasks()?
         .into_iter()
         .map(|mut t| {
+            let ev = (t.source == "ai").then(|| evidence_of(&t.body_html));
+            // List view never reads these; the detail endpoint stays complete.
             t.body_html.clear();
+            t.feedback_html.clear();
+            t.attachments.clear();
+            t.submission_files.clear();
             let l = locals.get(&t.id).cloned().unwrap_or(Local {
                 task_id: t.id.clone(),
                 ..Default::default()
             });
-            json!({"task": t, "local": l})
+            let mut tv = serde_json::to_value(&t).unwrap_or(Value::Null);
+            if let Some(ev) = ev {
+                tv["evidence"] = ev.into();
+            }
+            json!({"task": tv, "local": l})
         })
         .collect();
-    Ok(Json(Value::Array(out)))
+    Ok(cached(
+        &h,
+        etag,
+        "application/json",
+        Json(Value::Array(out)),
+    ))
 }
 
 async fn one_task(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {

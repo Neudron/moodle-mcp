@@ -34,6 +34,8 @@ async function api(path, opts = {}) {
   return (r.headers.get('content-type') || '').includes('json') ? r.json() : r.text();
 }
 
+// One /api/tasks request per route() call (view and forumPill share it); the server ETag covers repeat visits.
+const tasksOnce = () => (tasksOnce.n === route.n ? tasksOnce.p : (tasksOnce.n = route.n, tasksOnce.p = api('/api/tasks')));
 const TZ = 'Europe/Madrid';
 const FMT = new Intl.DateTimeFormat('ca-ES', { timeZone: TZ, weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 // '2 oct · 14:30', with weekday 'dj 2 oct · 14:30'. Built from parts so the locale's 'd’oct.' style never shows.
@@ -171,7 +173,6 @@ function scanTotals(p) {
   const total = Object.values(p.counts || {}).reduce((a, n) => a + n, 0);
   return { total, finished: total - ((p.counts || {}).pending || 0) };
 }
-const evidenceOf = (html) => new DOMParser().parseFromString(html || '', 'text/html').querySelector('blockquote')?.textContent.trim() || '';
 const SCAN = { nodes: new Set(), p: null, timer: 0 };
 async function scanPoll() {
   let p;
@@ -224,7 +225,7 @@ function proposal(tv) {
   const art = h('article', { class: 'v-prop' },
     h('h3', {}, h('a', { href: `#/tasca/${enc(t.id)}` }, t.title)),
     h('p', { class: 'm' }, h('span', { class: 'cn', style: { '--h': hue(t.course) } }, cname(t.course)), t.due ? ` · ${when(t.due)}` : null, t.ai_score != null ? ` · Jev ${t.ai_score.toFixed(2)}` : null),
-    evidenceOf(t.body_html) ? h('blockquote', {}, evidenceOf(t.body_html)) : null,
+    t.evidence ? h('blockquote', {}, t.evidence) : null,
     h('p', { class: 'dim' }, 'Font: ', web ? h('a', { href: t.url, target: '_blank', rel: 'noopener' }, t.url, ic('ext'), h('span', { class: 'sr-only' }, ' (obre en una pestanya nova)')) : h('a', { href: `#/fitxers/${enc(t.url)}` }, t.url)),
     h('details', { ontoggle: (e) => { if (e.target.open && !box.hasChildNodes()) preview(box, web ? { moodleUrl: t.url } : { path: t.url }); } }, h('summary', {}, 'Previsualitza'), box),
     h('div', { class: 'field-row' }, act(true, 'Mantén'), act(false, 'Descarta')));
@@ -232,7 +233,7 @@ function proposal(tv) {
 }
 
 views.tauler = async () => {
-  const tasks = (await api('/api/tasks')).filter((tv) => tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
+  const tasks = (await tasksOnce()).filter((tv) => tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
   const props = tasks.filter((tv) => tv.task.source === 'ai' && tv.task.ai_confirmed == null), all = tasks.filter((tv) => !props.includes(tv));
   const now = Date.now() / 1000;
   // Overdue by more than 60 days = last school year's leftovers: collapsed, not counted as pending.
@@ -553,7 +554,7 @@ async function route(o) {
 // Unread forum posts -> nav pill (hidden at 0).
 async function forumPill() {
   try {
-    const n = (await api('/api/tasks')).filter((tv) => tv.task.kind === 'post' && tv.local.status !== 'llegit').length;
+    const n = (await tasksOnce()).filter((tv) => tv.task.kind === 'post' && tv.local.status !== 'llegit').length;
     const p = $('#forum-pill'); p.hidden = !n; p.replaceChildren(String(n), h('span', { class: 'sr-only' }, ' sense llegir')); p.title = `${n} sense llegir`;
   } catch (e) { /* ignore */ }
 }
@@ -693,7 +694,7 @@ addEventListener('DOMContentLoaded', () => { loadCourses().catch(() => {}).final
 const NOISE = new Set(['meta.json', 'index.md', 'last-sync.json']);
 views.curs = async (short) => {
   const c = await api(`/api/courses/${enc(short)}`);
-  const tasks = (await api('/api/tasks')).filter((tv) => tv.task.course === short && tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
+  const tasks = (await tasksOnce()).filter((tv) => tv.task.course === short && tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
   const nDone = tasks.filter(isDone).length;
   const tasksCol = tasks.length
     ? h('div', {}, h('h2', {}, 'Tasques'), h('div', { class: 'cards' }, tasks.map((tv) => card(tv, true))))
@@ -753,7 +754,7 @@ views.fitxers = async (...parts) => {
 };
 
 views.calendari = async (ym) => {
-  const all = (await api('/api/tasks')).filter((tv) => tv.task.due && tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
+  const all = (await tasksOnce()).filter((tv) => tv.task.due && tv.task.kind !== 'post' && tv.task.ai_confirmed !== false);
   const now = new Date();
   const [y, m] = ym ? ym.split('-').map(Number) : [now.getFullYear(), now.getMonth() + 1];
   const first = new Date(y, m - 1, 1), start = new Date(first);
@@ -861,7 +862,7 @@ views.organitza = async () => {
 };
 
 views.forums = async () => {
-  const posts = (await api('/api/tasks')).filter((tv) => tv.task.kind === 'post').sort((a, b) => b.task.opens - a.task.opens);
+  const posts = (await tasksOnce()).filter((tv) => tv.task.kind === 'post').sort((a, b) => b.task.opens - a.task.opens);
   const item = (tv) => {
     const isRead = tv.local.status === 'llegit';
     return h('details', { class: 'fpost' + (isRead ? ' read' : ''), ontoggle: async (e) => {

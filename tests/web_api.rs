@@ -256,12 +256,95 @@ async fn app_shell_cannot_be_framed_cross_site() {
 }
 
 #[tokio::test]
-async fn static_assets_are_not_cached() {
+async fn static_assets_use_etag_and_304() {
     let (base, ..) = start("cache").await;
+    let c = reqwest::Client::new();
     for p in ["/", "/app.js", "/app.css"] {
-        let r = reqwest::get(format!("{base}{p}")).await.unwrap();
-        assert_eq!(r.headers().get("cache-control").unwrap(), "no-store", "{p}");
+        let r = c.get(format!("{base}{p}")).send().await.unwrap();
+        assert_eq!(r.headers().get("cache-control").unwrap(), "no-cache", "{p}");
+        let et = r
+            .headers()
+            .get("etag")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let r = c
+            .get(format!("{base}{p}"))
+            .header("if-none-match", &et)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 304, "{p}");
+        assert_eq!(r.headers().get("etag").unwrap(), et.as_str());
     }
+}
+
+#[tokio::test]
+async fn tasks_etag_changes_on_write_and_304s_otherwise() {
+    let (base, app, ..) = start("tetag").await;
+    let c = reqwest::Client::new();
+    post(&c, &base, "/api/sync").send().await.unwrap();
+    let r = c.get(format!("{base}/api/tasks")).send().await.unwrap();
+    let et = r
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let ask = |et: String| {
+        c.get(format!("{base}/api/tasks"))
+            .header("if-none-match", et)
+            .send()
+    };
+    assert_eq!(ask(et.clone()).await.unwrap().status(), 304);
+    let l = web::db::Local {
+        task_id: "assign:7".into(),
+        status: "revisat OK".into(),
+        ..Default::default()
+    };
+    app.db.set_local(&l).unwrap();
+    let r = ask(et.clone()).await.unwrap();
+    assert_eq!(r.status(), 200);
+    assert_ne!(r.headers().get("etag").unwrap().to_str().unwrap(), et);
+}
+
+#[tokio::test]
+async fn ai_task_list_has_evidence_but_no_body_and_detail_is_full() {
+    let (base, app, ..) = start("evid").await;
+    let t = web::db::Task {
+        id: "ai:abc:0".into(),
+        kind: "ai".into(),
+        source: "ai".into(),
+        title: "x".into(),
+        body_html: "<p>d</p><blockquote>cal fer &lt;b&gt; &amp; \"més\"</blockquote>".into(),
+        ..Default::default()
+    };
+    app.db.upsert_tasks(&[t]).unwrap();
+    let c = reqwest::Client::new();
+    let l: serde_json::Value = c
+        .get(format!("{base}/api/tasks"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(l[0]["task"]["body_html"], "");
+    assert_eq!(l[0]["task"]["evidence"], "cal fer <b> & \"més\"");
+    let d: serde_json::Value = c
+        .get(format!("{base}/api/tasks/ai:abc:0"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(d["task"]["body_html"]
+        .as_str()
+        .unwrap()
+        .contains("<p>d</p>"));
 }
 
 #[tokio::test]

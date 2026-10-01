@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 pub const STATUSES: [&str; 4] = ["per revisar", "revisat OK", "lliurat", "llegit"];
@@ -54,7 +55,7 @@ pub struct Local {
     pub chat_session: String,
 }
 
-pub struct Db(Mutex<Connection>);
+pub struct Db(Mutex<Connection>, AtomicU64);
 
 /// Applied in order; `PRAGMA user_version` = number applied. Append only.
 const MIGRATIONS: &[&str] = &[
@@ -125,14 +126,27 @@ impl Db {
         c.execute_batch("PRAGMA journal_mode=WAL;")?;
         c.execute_batch(PRAGMAS)?;
         migrate(&c)?;
-        Ok(Db(Mutex::new(c)))
+        Ok(Db(Mutex::new(c), AtomicU64::new(Self::boot())))
     }
 
     pub fn memory() -> Result<Db> {
         let c = Connection::open_in_memory()?;
         c.execute_batch(PRAGMAS)?;
         migrate(&c)?;
-        Ok(Db(Mutex::new(c)))
+        Ok(Db(Mutex::new(c), AtomicU64::new(Self::boot())))
+    }
+
+    /// Start value for the data version: unique per process so an ETag from a
+    /// previous run never matches.
+    fn boot() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos() as u64)
+    }
+
+    /// Bumped on every task/local write; backs the /api/tasks ETag.
+    pub fn version(&self) -> u64 {
+        self.1.load(Ordering::Relaxed)
     }
 
     fn c(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -158,6 +172,7 @@ impl Db {
             )?;
         }
         tx.commit()?;
+        self.1.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
@@ -192,6 +207,7 @@ impl Db {
     /// Only for unconfirmed AI proposals that Jev rejected.
     pub fn delete_task(&self, id: &str) -> Result<()> {
         self.c().execute("DELETE FROM task WHERE id=?1", [id])?;
+        self.1.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
@@ -253,6 +269,7 @@ impl Db {
             "INSERT INTO local(task_id,json) VALUES(?1,?2) ON CONFLICT(task_id) DO UPDATE SET json=excluded.json",
             params![l.task_id, serde_json::to_string(l)?],
         )?;
+        self.1.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 
