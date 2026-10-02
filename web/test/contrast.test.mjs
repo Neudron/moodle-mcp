@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+const HUES = new Function(`${readFileSync(new URL('../app.js', import.meta.url), 'utf8').match(/const HUES = .*;/)[0]}; return HUES;`)();
 const css = readFileSync(new URL('../app.css', import.meta.url), 'utf8');
 const tok = (block, n) => (block.match(new RegExp(`--${n}:(#[0-9A-Fa-f]{6})`)) || [])[1];
 const dark = css.split(':root{')[1].split('}')[0];
@@ -17,8 +18,11 @@ for (const [name, b] of [['dark', dark], ['light', light]]) {
   test(`${name}: text tokens 4.5:1`, () => {
     for (const t of ['text', 'dim', 'accent', 'late', 'soon', 'stale', 'ok']) for (const bg of bgs) assert.ok(ratio(rgb(get(t)), bg) >= 4.5, `${name} ${t} ${ratio(rgb(get(t)), bg).toFixed(2)}`);
   });
+  test(`${name}: ctl 3:1`, () => {
+    for (const t of ['ctl']) for (const bg of bgs) assert.ok(ratio(rgb(get(t)), bg) >= 3, `${name} ${t} ${ratio(rgb(get(t)), bg).toFixed(2)}`);
+  });
   test(`${name}: course hue text 4.5:1, dot 3:1`, () => {
-    for (let h = 0; h < 360; h++) for (const bg of bgs) {
+    for (const h of HUES) for (const bg of bgs) {
       assert.ok(ratio(hsl(h, ...ct), bg) >= 4.5, `${name} cn h=${h} ${ratio(hsl(h, ...ct), bg).toFixed(2)}`);
       assert.ok(ratio(hsl(h, ...cs), bg) >= 3, `${name} dot h=${h} ${ratio(hsl(h, ...cs), bg).toFixed(2)}`);
     }

@@ -61,7 +61,11 @@ function dueChip(tv, big) {
   const title = l.s === 'stale' ? "Venciment de fa més de 300 dies: probablement la data de l'any passat" : tv.task.due ? when(tv.task.due) : null;
   return h('span', { class: `due ${l.s}${big ? ' lg' : ''}`, title }, GLYPH[l.s] ? ic(GLYPH[l.s]) : null, l.t, tv.task.due ? h('span', { class: 'sr-only' }, ` (${when(tv.task.due)})`) : null);
 }
-function hue(s) { let x = 0; for (const c of s || '') x = (x * 31 + c.codePointAt(0)) % 360; return x; }
+// hue-helpers-start
+const HUES = [205, 150, 25, 335, 95, 245, 180, 55];
+function hue(s, keys = []) { const i = keys.indexOf(s); if (i >= 0) return HUES[i % HUES.length]; let x = 0; for (const c of s || '') x = (x * 31 + c.codePointAt(0)) % 360; return HUES[x % HUES.length]; }
+// hue-helpers-end
+const hueOf = (s) => hue(s, Object.keys(COURSES));
 const isDone = (tv) => tv.local.status === 'lliurat' || tv.task.moodle_status === 'submitted';
 const KIND = { assign: 'Tasca', quiz: 'Qüestionari', post: 'Avís', ai: 'IA' };
 const MSTATUS = { new: 'Sense enviar', draft: 'Esborrany', submitted: 'Enviada' };
@@ -177,9 +181,9 @@ function card(tv, hideCourse, quick) {
     t.source === 'ai' && aiBadge(),
   ];
   const row = h('a', { class: 'row' + (done ? ' done' : !isStale(tv) && left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
-    h('span', { class: 'dot', style: { '--h': hue(t.course) } }),
+    h('span', { class: 'dot', style: { '--h': hueOf(t.course) } }),
     h('span', { class: 't', title: t.title }, t.title),
-    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hue(t.course) } }, cname(t.course)), profTxt(t.course) && !hideCourse ? h('span', {}, profTxt(t.course)) : null, t.kind === 'assign' || t.kind === 'ai' ? null : h('span', {}, KIND[t.kind] || t.kind), badges),
+    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hueOf(t.course) } }, cname(t.course)), profTxt(t.course) && !hideCourse ? h('span', {}, profTxt(t.course)) : null, t.kind === 'assign' || t.kind === 'ai' ? null : h('span', {}, KIND[t.kind] || t.kind), badges),
     dueChip(tv));
   if (!quick || done) return row;
   // Not inside the <a>: a button in a link is invalid. Commit is deferred so the undo toast is real.
@@ -253,7 +257,7 @@ function proposal(tv) {
   } }, label);
   const art = h('article', { class: 'v-prop' },
     h('h3', {}, h('a', { href: `#/tasca/${enc(t.id)}` }, t.title)),
-    h('p', { class: 'm' }, h('span', { class: 'cn', style: { '--h': hue(t.course) } }, cname(t.course)), t.due ? ` · ${when(t.due)}` : null, t.ai_score != null ? ` · Jev ${t.ai_score.toFixed(2)}` : null),
+    h('p', { class: 'm' }, h('span', { class: 'cn', style: { '--h': hueOf(t.course) } }, cname(t.course)), t.due ? ` · ${when(t.due)}` : null, t.ai_score != null ? ` · Jev ${t.ai_score.toFixed(2)}` : null),
     t.evidence ? h('blockquote', {}, t.evidence) : null,
     h('p', { class: 'dim' }, 'Font: ', web ? popLink(t.url, {}, t.url, ic('ext')) : h('a', { href: `#/fitxers/${enc(t.url)}` }, t.url)),
     h('details', { ontoggle: (e) => { if (e.target.open && !box.hasChildNodes()) preview(box, web ? { moodleUrl: t.url } : { path: t.url }); } }, h('summary', {}, 'Previsualitza'), box),
@@ -311,7 +315,7 @@ views.tauler = async () => {
   const sections = bySubject(pendingList).map(({ course, items }) => {
     const rows = items.map((tv) => { const r = card(tv, true, true); r.dataset.due = dueOf.get(tv); return r; });
     return block('subj', h('section', { class: 'v-grp g-subj' },
-      h('h2', { class: 'grp' }, h('span', { class: 'dot', style: { '--h': hue(course) } }), cname(course), profTxt(course) ? h('span', { class: 'dim' }, ` · ${profTxt(course)}`) : null, h('span', { class: 'n' }, items.length)),
+      h('h2', { class: 'grp' }, h('span', { class: 'dot', style: { '--h': hueOf(course) } }), cname(course), profTxt(course) ? h('span', { class: 'dim' }, ` · ${profTxt(course)}`) : null, h('span', { class: 'n' }, items.length)),
       h('div', { class: 'cards' }, rows)), rows);
   });
   if (doneList.length) sections.push(fold('done', 'Lliurades', doneList, doneList.length <= 5));
@@ -570,7 +574,7 @@ views.tasca = async (id) => {
     h('a', { class: 'btn ghost', href: '#/tauler' }, ic('arrow-l'), 'Tauler'),
     h('h1', {}, t.title),
     h('div', { class: 'meta' },
-      h('a', { class: 'chip cn', style: { '--h': hue(t.course) }, href: `#/curs/${enc(t.course)}` }, h('span', { class: 'dot', style: { '--h': hue(t.course) } }), cname(t.course)),
+      h('a', { class: 'chip cn', style: { '--h': hueOf(t.course) }, href: `#/curs/${enc(t.course)}` }, h('span', { class: 'dot', style: { '--h': hueOf(t.course) } }), cname(t.course)),
       profTxt(t.course) ? h('span', { class: 'dim' }, profTxt(t.course)) : null,
       dueChip(tv, true), badges),
     h('div', { class: 'split' }, h('div', { class: 'grid' }, main, rail)));
@@ -854,8 +858,8 @@ async function loadCourses() {
   TEACH = Object.fromEntries(cs.map((c) => [c.shortname, c.teachers || []]));
   DIRS = Object.fromEntries(cs.map((c) => [c.dir, c.shortname]));
   $('#courses').hidden = $('.side .sec').hidden = !cs.length;
-  $('#courses').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, title: c.title }, h('span', { class: 'dot', style: { '--h': hue(c.shortname) } }), h('span', { class: 'nm' }, c.title))));
-  $('#cursos-list').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, onclick: () => $('#cursos-sheet').close() }, h('span', { class: 'dot', style: { '--h': hue(c.shortname) } }), h('span', { class: 'nm' }, c.title))));
+  $('#courses').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, title: c.title }, h('span', { class: 'dot', style: { '--h': hueOf(c.shortname) } }), h('span', { class: 'nm' }, c.title))));
+  $('#cursos-list').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, onclick: () => $('#cursos-sheet').close() }, h('span', { class: 'dot', style: { '--h': hueOf(c.shortname) } }), h('span', { class: 'nm' }, c.title))));
   $('#cursos-btn').hidden = !cs.length;
   markNav();
 }
@@ -997,7 +1001,7 @@ views.curs = async (short) => {
             ic('file'), h('span', { class: 'fn' }, f.name), h('span', { class: 'mono dim' }, fsize(f.size))), dlBtn(dlHref(f.rel), f.name))))] : null;
       }))) : empty('Sense continguts', 'Sincronitza per carregar-los.'));
   return h('section', { class: 'v-curs' },
-    h('h1', {}, h('span', { class: 'dot lg', style: { '--h': hue(short) } }), ' ', c.title),
+    h('h1', {}, h('span', { class: 'dot lg', style: { '--h': hueOf(short) } }), ' ', c.title),
     profTxt(short) ? h('p', { class: 'sub' }, profTxt(short)) : null,
     tasks.length ? h('p', { class: 'sub' }, bar(nDone, tasks.length, `Tasques lliurades de ${c.title}`, '', `${nDone} de ${tasks.length} lliurades`)) : null,
     h('div', { class: 'two' }, tasksCol, contents));
@@ -1072,7 +1076,7 @@ views.calendari = async (ym) => {
   const ev = (tv, extra) => h('a', {
     href: `#/tasca/${enc(tv.task.id)}`, title: tv.task.title,
     class: (isDone(tv) ? 'done ' : isStale(tv) ? 'stale ' : left(tv.task.due).s === 'late' ? 'late ' : '') + (extra ? 'x' : ''),
-  }, isDone(tv) ? ic('check') : isStale(tv) ? ic('clock') : left(tv.task.due).s === 'late' ? ic('warn') : h('span', { class: 'dot', style: { '--h': hue(tv.task.course) } }),
+  }, isDone(tv) ? ic('check') : isStale(tv) ? ic('clock') : left(tv.task.due).s === 'late' ? ic('warn') : h('span', { class: 'dot', style: { '--h': hueOf(tv.task.course) } }),
     h('span', { class: 'et' }, isDone(tv) ? h('span', { class: 'sr-only' }, 'Lliurada: ') : isStale(tv) ? h('span', { class: 'sr-only' }, 'Data antiga: ') : left(tv.task.due).s === 'late' ? h('span', { class: 'sr-only' }, 'Endarrerida: ') : null, tv.task.title));
   const cells = [];
   for (let i = 0; i < 42; i++) {
@@ -1122,7 +1126,7 @@ views.notes = async () => {
     const ps = items.map((i) => pct(i.percentageformatted)).filter((n) => n != null);
     const avg = ps.length ? Math.round(ps.reduce((a, b) => a + b, 0) / ps.length) : null;
     return h('div', { class: 'course-notes' },
-      h('h2', {}, h('span', { class: 'dot', style: { '--h': hue(g.course || String(g.course_id)) } }), name,
+      h('h2', {}, h('span', { class: 'dot', style: { '--h': hueOf(g.course || String(g.course_id)) } }), name,
         avg != null ? h('span', { class: 'badge', title: 'Mitjana dels percentatges' }, `Mitjana ${avg}%`) : null),
       h('div', { class: 'tablewrap', role: 'region', 'aria-label': `Notes de ${name}` },
         h('table', {}, h('caption', { class: 'sr-only' }, `Notes de ${name}`),
