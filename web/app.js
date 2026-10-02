@@ -1147,7 +1147,7 @@ views.calendari = async (ym) => {
 
 views.notes = async () => {
   const gs = await api('/api/grades');
-  const none0 = () => h('section', { class: 'v-notes' }, h('h1', {}, 'Notes'), empty('Encara no hi ha notes', null, h('button', { class: 'btn', type: 'button', onclick: () => $('#sync').click() }, 'Sincronitza')));
+  const none0 = () => h('section', { class: 'v-notes' }, h('h1', {}, 'Notes'), empty('Encara no hi ha notes', 'Sincronitza per baixar les notes de Moodle.', h('button', { class: 'btn', type: 'button', onclick: () => $('#sync').click() }, 'Sincronitza')));
   if (!gs.length) return none0();
   const pct = (s) => { const n = parseFloat(String(s ?? '').replace(',', '.')); return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : null; };
   const nm = (g) => (cname(g.course) || `Curs ${g.course_id}`).replace(/\.(?=\p{L})/u, '. ');
@@ -1376,7 +1376,7 @@ views.ide = async (...parts) => {
   const rel = parts.join('/');
   let f, t0 = ideTarget(rel);
   if (!t0) try { f = await api(`/api/ide/file?path=${enc(rel)}`); } catch (e) { t0 = ideTarget(rel, e); }
-  if (t0) return t0.kind === 'empty' ? empty(t0.title, t0.text, h('a', { class: 'btn', href: t0.href }, t0.label)) : errorPanel(t0.msg, t0.retry);
+  if (t0) return t0.kind === 'empty' ? h('section', {}, h('h1', {}, 'IDE'), empty(t0.title, t0.text, h('a', { class: 'btn', href: t0.href }, t0.label))) : errorPanel(t0.msg, t0.retry);
   let sha = f.sha, dirty = false, ed;
   const lang = langOf(rel), live = ['html', 'svg', 'markdown'].includes(lang) || lang === 'xml';
   const state = h('span', { class: 'v-dirty dim', role: 'status' });

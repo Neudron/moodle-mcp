@@ -231,6 +231,7 @@ dl.kv{display:flex;flex-direction:column}dl.kv>div{padding:var(--s0) 0}dl.kv>div
 
 /* states */
 .empty{margin:var(--s3) 0;color:var(--dim)}
+main .empty .btn{margin-top:var(--s2)}
 main .empty h2{margin:0 0 var(--s0);font:600 var(--fs-3)/1.4 var(--sans);color:var(--text)}
 .err-panel{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s2);background:var(--late-bg);color:var(--late);border-radius:var(--r-md);padding:var(--s2)}
 .err-panel p{flex:1;min-width:0;font-weight:600}
