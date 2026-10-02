@@ -509,7 +509,7 @@ pub fn plan(
                     is_external: external,
                 };
                 match old.get(&url) {
-                    Some(prev) if prev.size == f.filesize => {
+                    Some(prev) if prev.size == f.filesize || f.filesize == 0 => {
                         if prev.path == dest_rel {
                             out.reuse.push(planned);
                         } else {
@@ -694,6 +694,51 @@ mod tests {
         assert_eq!(b.as_deref(), Some("a-2.pdf"));
         let c = unique_leaf(&mut assigned, "RA01/001-m", "a.pdf", ConflictStrategy::Skip);
         assert_eq!(c, None);
+    }
+
+    #[test]
+    fn planner_reuses_when_moodle_size_zero() {
+        use crate::state::FileEntry;
+        let mut files = BTreeMap::new();
+        files.insert(
+            "http://h.invalid/webservice/pluginfile.php/1/index.html".to_string(),
+            FileEntry {
+                path: "C/RA01/001-m/index.html".to_string(),
+                sha256: "abc".to_string(),
+                size: 604,
+                ..Default::default()
+            },
+        );
+        let state = CourseState {
+            shortname: "C".to_string(),
+            files,
+            ..Default::default()
+        };
+        let contents = vec![CourseSection {
+            id: 1,
+            name: "RA01".to_string(),
+            summary: "s".to_string(),
+            position: 1,
+            modules: vec![crate::moodle::CourseModule {
+                id: 2,
+                name: "m".to_string(),
+                module_type: "page".to_string(),
+                description: None,
+                contents: Some(vec![ModuleFile {
+                    filename: "index.html".to_string(),
+                    filesize: 0,
+                    mimetype: "text/html".to_string(),
+                    fileurl: Some(
+                        "http://h.invalid/webservice/pluginfile.php/1/index.html".to_string(),
+                    ),
+                    timemodified: 0,
+                    contenthash: String::new(),
+                }]),
+            }],
+        }];
+        let p = plan(&contents, &SyncFilters::default(), &state, "C");
+        assert_eq!(p.reuse.len(), 1, "{p:?}");
+        assert!(p.fetch.is_empty(), "{p:?}");
     }
 
     #[test]
