@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const src = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const block = (n) => src.split(`// ${n}-helpers-start`)[1].split(`// ${n}-helpers-end`)[0];
-const { authBannerText, notifItems, visibleBanner, bellItems } = new Function(`${block('auth')}; return { authBannerText, notifItems, visibleBanner, bellItems };`)();
+const { authBannerText, notifItems, visibleBanner, bellItems, bellCount } = new Function(`${block('auth')}; return { authBannerText, notifItems, visibleBanner, bellItems, bellCount };`)();
 
 test('authBannerText', () => {
   assert.equal(authBannerText({ moodle: 'ok', apple: 'ok' }), '');
@@ -87,6 +87,12 @@ test('bellItems adds a non-dismissable overdue item', () => {
   const all = bellItems({ moodle: 'expired', apple: 'ok' }, 1);
   assert.equal(all.length, 2);
   assert.equal(all[1].key, 'late');
+});
+
+test('bellCount matches what the items say', () => {
+  assert.equal(bellCount(bellItems({ moodle: 'ok', apple: 'ok' }, 6)), 6);
+  assert.equal(bellCount(bellItems({ moodle: 'expired', apple: 'ok' }, 6)), 7);
+  assert.equal(bellCount([]), 0);
 });
 
 test('ideTarget', () => {

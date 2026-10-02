@@ -218,12 +218,12 @@ async function scanPoll() {
   setText($('#live'), p.state === 'done' ? `Escaneig acabat: ${p.proposed} proposades, ${c.broken || 0} enllaços trencats, ${c.needs_review || 0} per revisar, ${c.error || 0} errors` : p.state === 'cancelled' ? 'Escaneig cancel·lat' : "Escaneig interromput");
   if (route.cur === 'tauler') route({ soft: true });
 }
-function scanControl() {
-  const go = h('button', { type: 'button', class: 'primary', onclick: async () => {
+function scanControl(primary) {
+  const go = h('button', { type: 'button', class: primary ? 'primary' : '', title: 'Escaneja Moodle amb IA', onclick: async () => {
     if (SCAN.p?.state === 'running') return;
     try { await api('/api/scan', { method: 'POST' }); } catch (e) { if (e.status === 409) toast('Ja hi ha un escaneig en marxa'); else return toast(e.message, true); }
     scanPoll();
-  } }, ic('search'), 'Escaneja Moodle amb IA');
+  } }, ic('search'), primary ? 'Escaneja Moodle amb IA' : 'Escaneja amb IA');
   const stop = h('button', { type: 'button', class: 'ghost', hidden: true, onclick: async () => { try { await api('/api/scan/cancel', { method: 'POST' }); } catch (e) { toast(e.message, true); } scanPoll(); } }, 'Cancel·la');
   const prog = h('div', { class: 'v-scan-p' });
   const mk = () => { const ul = h('ul', { class: 'v-scan-l' }), sum = h('summary'); return { ul, sum, d: h('details', { hidden: true }, sum, ul) }; };
@@ -282,7 +282,7 @@ views.tauler = async () => {
   const now = Date.now() / 1000;
   // Server flags deadlines >300 days overdue (last year's dates): own fold, not counted as pending.
   const pendingList = all.filter((tv) => !isDone(tv) && !isStale(tv));
-  if (!all.length && !props.length) return h('section', { class: 'v-tauler' }, h('h1', {}, 'Tauler'), scanControl(), empty('Encara no hi ha tasques', 'Sincronitza per carregar-les.'));
+  if (!all.length && !props.length) return h('section', { class: 'v-tauler' }, h('h1', {}, 'Tauler'), scanControl(true), empty('Encara no hi ha tasques', 'Sincronitza per carregar-les.'));
   const pending = pendingList.length;
   const old = all.filter(isStale);
   const doneN = all.filter(isDone).length, total = all.length - old.length;
@@ -329,7 +329,7 @@ views.tauler = async () => {
     const f = rest.length ? h('details', { class: 'fold' }, h('summary', {}, `${rest.length} de baixa confiança`), h('div', { class: 'v-props' }, restRows)) : null;
     propEl = block('ai', h('details', { class: 'fold g-ai', open: views.tauler.aiOpen, ontoggle: (e) => { views.tauler.aiOpen = e.target.open; } },
       h('summary', { class: 'grp' }, h('h2', {}, 'Propostes de la IA', h('span', { class: 'n' }, `${props.length} propostes, ${top.length} destacades`))),
-      scanControl(), h('div', { class: 'v-props' }, topRows), f, zero.length ? dropZero : null), [...topRows, ...restRows], f);
+      scanControl(true), h('div', { class: 'v-props' }, topRows), f, zero.length ? dropZero : null), [...topRows, ...restRows], f);
   }
 
   const status = h('p', { class: 'sr-only', role: 'status' });
@@ -803,7 +803,8 @@ function notifItems(a) {
   return o;
 }
 // Bell = auth items + overdue count (lateN from the tasks already fetched per route, no extra request). Never dismissable, never in the banner.
-const bellItems = (a, lateN) => [...notifItems(a), ...(lateN ? [{ key: 'late', text: lateN === 1 ? '1 tasca vençuda' : `${lateN} tasques vençudes`, act: '', href: '#/tauler' }] : [])];
+const bellItems = (a, lateN) => [...notifItems(a), ...(lateN ? [{ key: 'late', text: lateN === 1 ? '1 tasca vençuda' : `${lateN} tasques vençudes`, act: '', href: '#/tauler', n: lateN }] : [])];
+const bellCount = (items) => items.reduce((t, i) => t + (i.n || 1), 0);
 const authBannerText = (a) => notifItems(a).map((i) => i.text).join(' · ');
 const visibleBanner = (items, dismissed) => items.filter((i) => !dismissed.has(i.key));
 // auth-helpers-end
@@ -827,8 +828,8 @@ function bell() {
   const vis = visibleBanner(auth, dis), ab = $('#auth-banner');
   ab.hidden = !vis.length; setText($('#auth-msg'), vis.map((i) => i.text).join(' · '));
   $('#auth-renew').hidden = !vis.some((i) => i.act);
-  const n = $('#notif-n'); n.hidden = !items.length; setText(n, String(items.length));
-  $('#notif-b').setAttribute('aria-label', items.length ? `Notificacions (${items.length})` : 'Notificacions');
+  const n = $('#notif-n'); const cnt = bellCount(items); n.hidden = !cnt; setText(n, String(cnt));
+  $('#notif-b').setAttribute('aria-label', cnt ? `Notificacions (${cnt})` : 'Notificacions');
   const l = $('#notif-l'), had = l.contains(document.activeElement); l.replaceChildren();
   for (const i of items) {
     const li = document.createElement('li'), t = document.createElement(i.href ? 'a' : 'span'); t.textContent = i.text; if (i.href) t.href = i.href; li.append(t);

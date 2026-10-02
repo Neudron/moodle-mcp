@@ -70,6 +70,7 @@ h3{margin:var(--s2) 0 var(--s1)}
 .brand .ic{color:var(--accent);width:24px;height:24px}
 .top{display:flex;align-items:center;gap:var(--s0)}
 .top .brand{flex:1;min-width:0}.top .brand .ic{display:none}
+.top .icon{border-color:transparent;background:transparent}.top .icon:hover{background:var(--hover)}
 .foot{display:grid;gap:var(--s1);margin-top:var(--s1)}
 .foot #sync{gap:var(--s1)}
 .foot #syncbar .bar{width:100%}
@@ -284,9 +285,9 @@ kbd{font:600 12px var(--sans);background:var(--sunk);color:var(--text);border:1p
 @media (max-width:899px){
   body{display:block}
   .side{position:static;height:auto;overflow:visible;flex-direction:row;flex-wrap:wrap;align-items:center;gap:0 var(--s1);padding:var(--s1) var(--s2);border-right:0;border-bottom:1px solid var(--line)}
-  .top{flex:1}.top .brand .ic{display:block}.brand{min-height:40px}
+  .top{flex:1}.brand{min-height:40px}
   .foot{margin:0;display:flex;gap:var(--s1)}
-  .foot #sync{width:44px;padding:0}
+  .foot #sync{width:44px;padding:0;border-color:transparent;background:transparent}.foot #sync:hover{background:var(--hover)}
   .foot #sync .lbl{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .foot #syncbar{display:none}
   .foot #lastsync{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
