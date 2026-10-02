@@ -227,7 +227,7 @@ dl.kv{display:flex;flex-direction:column}dl.kv>div{padding:var(--s1) 0}dl.kv>div
 .split>.grid{display:grid;gap:var(--s4)}
 .two{display:grid;gap:var(--s4)}
 .two h2{margin-top:0}
-@media (min-width:1100px){.two{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+@media (min-width:1100px){.two{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start}.v-curs .two>:first-child{position:sticky;top:var(--s2);max-height:calc(100dvh - 32px);overflow:auto}}
 
 /* states */
 .empty{margin:var(--s3) 0;color:var(--dim)}
@@ -372,7 +372,10 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 .v-curs details .list li{display:flex;align-items:center;gap:var(--s1)}
 .v-curs details .list li>a:first-child{flex:1;min-width:0}
 .v-curs .list .num{margin-left:auto;flex:none;font-size:14px}
-.v-curs h1{display:flex;align-items:center;gap:var(--s1)}
+.v-curs h1{width:fit-content;max-width:100%;padding-bottom:var(--s1);border-bottom:4px solid hsl(var(--h) var(--cs))}
+.v-curs details details.mod{margin:0;border-top:1px solid var(--line)}
+.v-curs summary .n{color:var(--dim);font-weight:500}
+.v-curs .dl-t{display:none}
 .v-curs .sub{margin:0 0 var(--s3)}
 .v-curs h2{font:600 14px/1.4 var(--sans);color:var(--dim)}
 .v-curs h3{font-weight:500}
@@ -519,7 +522,7 @@ dialog.pal{padding:var(--s2);max-width:min(560px,calc(100vw - 32px));margin-top:
 @media (max-width:899px){.tabs button.cur{display:flex}.tabs button.cur[hidden]{display:none}}
 @media (max-width:599px){.tabs a>span:not(.pill),.tabs button.cur>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
 #cursos-list{display:flex;flex-direction:column;gap:var(--s1)}
-#cursos-list a{display:flex;align-items:center;gap:var(--s2);min-height:44px;padding:0 var(--s2);border-radius:var(--r-md);color:var(--text);text-decoration:none}
+#cursos-list a{display:flex;align-items:center;gap:var(--s2);min-height:44px;padding:0 var(--s2);border-left:3px solid hsl(var(--h) var(--cs));border-radius:var(--r-md);color:var(--text);text-decoration:none}
 #cursos-list a:hover{background:var(--hover)}
 
 dialog.picker{width:min(640px,calc(100vw - 32px));margin-top:8vh}

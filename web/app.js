@@ -880,7 +880,7 @@ async function loadCourses() {
   DIRS = Object.fromEntries(cs.map((c) => [c.dir, c.shortname]));
   $('#courses').hidden = $('.side .sec').hidden = !cs.length;
   $('#courses').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, title: c.title }, h('span', { class: 'dot', style: { '--h': hueOf(c.shortname) } }), h('span', { class: 'nm' }, c.title))));
-  $('#cursos-list').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, onclick: () => $('#cursos-sheet').close() }, h('span', { class: 'dot', style: { '--h': hueOf(c.shortname) } }), h('span', { class: 'nm' }, c.title))));
+  $('#cursos-list').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, style: { '--h': hueOf(c.shortname) }, onclick: () => $('#cursos-sheet').close() }, h('span', { class: 'nm' }, c.title))));
   $('#cursos-btn').hidden = !cs.length;
   markNav();
 }
@@ -1014,15 +1014,16 @@ views.curs = async (short) => {
   // Sections with no visible files are dropped (no empty accordions).
   const secs = c.sections.map((s) => ({ name: s.name, mods: s.modules.map((m) => [m, m.files.filter((f) => !f.is_dir && !NOISE.has(f.name))]).filter(([, fs]) => fs.length) })).filter((s) => s.mods.length);
   const contents = h('div', {}, h('h2', {}, 'Continguts'),
-    secs.length ? secs.map((s, i) => h('details', { open: i < 2 },
+    secs.length ? secs.map((s, i) => h('details', { open: i === 0 },
       h('summary', {}, s.name),
       s.mods.map(([m, fs]) => {
-        return fs.length ? [m.name === 'Fitxers' ? null : h('h3', {}, m.name), h('ul', { class: 'list' },
-          fs.map((f) => h('li', {}, h('a', { href: `#/fitxers/${enc(f.rel)}` },
-            ic('file'), h('span', { class: 'fn' }, f.name), h('span', { class: 'num dim' }, fsize(f.size))), dlBtn(dlHref(f.rel), f.name))))] : null;
+        const li = (f) => h('li', {}, h('a', { href: `#/fitxers/${enc(f.rel)}` },
+          ic('file'), h('span', { class: 'fn' }, f.name), h('span', { class: 'num dim' }, fsize(f.size))), dlBtn(dlHref(f.rel), f.name));
+        return fs.length > 1 ? h('details', { class: 'mod', open: s.mods.length <= 10 }, h('summary', {}, m.name, h('span', { class: 'n' }, fs.length)), h('ul', { class: 'list' }, fs.map(li)))
+          : [m.name === 'Fitxers' ? null : h('h3', {}, m.name), h('ul', { class: 'list' }, fs.map(li))];
       }))) : empty('Sense continguts', 'Sincronitza per carregar-los.'));
   return h('section', { class: 'v-curs' },
-    h('h1', {}, h('span', { class: 'dot lg', style: { '--h': hueOf(short) } }), ' ', c.title),
+    h('h1', { style: { '--h': hueOf(short) } }, c.title),
     profTxt(short) ? h('p', { class: 'sub' }, profTxt(short)) : null,
     tasks.length ? h('p', { class: 'sub' }, bar(nDone, tasks.length, `Tasques lliurades de ${c.title}`, '', `${nDone} de ${tasks.length} lliurades`)) : null,
     h('div', { class: 'two' }, tasksCol, contents));
