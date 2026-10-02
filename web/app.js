@@ -1140,12 +1140,21 @@ taskExtras.push((tv) => {
   const noUp = submitted || !files.length, noSend = tv.task.moodle_status !== 'draft';
   const whyUp = submitted ? 'Ja enviada.' : 'Vincula primer un fitxer per poder pujar-lo.';
   const whySend = submitted ? 'Ja enviada.' : 'Envia es desbloqueja quan hi ha un esborrany a Moodle.';
+  const DOC = /\.(docx?|odt)$/i, doc = files.find((f) => DOC.test(f));
+  const pdfWarn = tv.needs_pdf && doc && !submitted;
+  const toPdf = pdfWarn && h('div', { class: 'notice', role: 'group', 'aria-label': 'Cal PDF' },
+    h('p', {}, 'Aquesta tasca demana PDF.'),
+    h('button', { type: 'button', id: 'to-pdf', onclick: async () => {
+      try { await api(`/api/tasks/${id}/to-pdf`, { method: 'POST', body: { path: doc } }); toast('PDF creat.'); await route({ soft: true }); $('#to-pdf')?.focus(); }
+      catch (e) { toast(e.message, true); }
+    } }, 'Converteix a PDF'));
   const up = h('button', { type: 'button', id: 'puja', 'aria-disabled': String(noUp), 'aria-describedby': 'puja-hint', onclick: async () => {
     if (noUp) { toast(whyUp); return; }
     const sizes = await Promise.all(files.map((f) => api(`/api/files?path=${enc(f)}`).then((i) => kb(i.size), () => 'no trobat')));
     const body = h('div', {}, h('p', {}, `Tasca: ${tv.task.title} (${tv.task.course})`),
       h('p', {}, 'Es pujaran aquests fitxers com a esborrany. Substitueixen els que ja hi hagi a Moodle. Si la tasca no admet esborranys, quedarà enviada directament.'),
       h('ul', {}, files.map((f, i) => h('li', {}, `${f} (${sizes[i]})`))));
+    if (pdfWarn && files.some((f) => DOC.test(f)) && !files.some((f) => /\.pdf$/i.test(f))) body.prepend(h('p', {}, 'Atenció: la tasca demana PDF i només puges un document d\'ofimàtica.'));
     if (!(await confirmDialog('Puja com a esborrany?', body, 'Puja'))) { up.focus(); return; }
     try { await after(await api(`/api/tasks/${id}/upload`, { method: 'POST', body: { files } }), '#puja'); }
     catch (e) { toast(e.message, true); }
@@ -1157,7 +1166,7 @@ taskExtras.push((tv) => {
     try { await after(await api(`/api/tasks/${id}/submit`, { method: 'POST' }), '#envia'); }
     catch (e) { toast(e.message, true); }
   } }, 'Envia per qualificar');
-  return [up, h('p', { class: 'dim hint', id: 'puja-hint' }, noUp ? whyUp : ''), send, h('p', { class: 'dim hint', id: 'envia-hint' }, noSend ? whySend : '')];
+  return [toPdf, up, h('p', { class: 'dim hint', id: 'puja-hint' }, noUp ? whyUp : ''), send, h('p', { class: 'dim hint', id: 'envia-hint' }, noSend ? whySend : '')];
 });
 
 const OFFICE = /\.(docx?|odt|rtf|xlsx?|ods|csv|pptx?|odp)$/i;

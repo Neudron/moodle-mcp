@@ -79,6 +79,30 @@ pub fn from_assign(c: &Course, a: &Value, st: &Value, base: &str) -> Task {
         ai_confirmed: None,
         ai_score: None,
         ai_v: 0,
+        accepted: a["configs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|c| c["plugin"] == "file" && c["name"] == "filetypeslist")
+            .map(|c| {
+                s(&c["value"])
+                    .to_lowercase()
+                    .split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace())
+                    .filter(|x| !x.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
+}
+
+/// True when Moodle wants a PDF: the accepted list has pdf but no office format, or (no list) the intro says PDF.
+pub fn needs_pdf(t: &Task) -> bool {
+    let has = |e: &str| t.accepted.iter().any(|x| x.trim_start_matches('.') == e);
+    if t.accepted.is_empty() {
+        t.body_html.to_lowercase().contains("pdf")
+    } else {
+        has("pdf") && !["docx", "doc", "odt"].iter().any(|e| has(e))
     }
 }
 
@@ -426,6 +450,34 @@ mod tests {
             shortname: "2627_DAX_0373".into(),
             summary: String::new(),
         }
+    }
+
+    #[test]
+    fn accepted_and_needs_pdf() {
+        let mk = |v: &str, intro: &str| {
+            let a = json!({"id": 1, "intro": intro, "configs": [
+                {"plugin": "onlinetext", "name": "filetypeslist", "value": ".x"},
+                {"plugin": "file", "name": "filetypeslist", "value": v}]});
+            from_assign(&c(), &a, &Value::Null, "b")
+        };
+        let t = mk(".PDF, .zip", "");
+        assert_eq!(t.accepted, [".pdf", ".zip"]);
+        assert!(needs_pdf(&t));
+        assert!(!needs_pdf(&mk(".pdf,.docx", "")));
+        assert!(!needs_pdf(&mk(".zip", "pdf")));
+        let none = from_assign(
+            &c(),
+            &json!({"id": 1, "intro": "Lliura en PDF"}),
+            &Value::Null,
+            "b",
+        );
+        assert!(none.accepted.is_empty() && needs_pdf(&none));
+        assert!(!needs_pdf(&from_assign(
+            &c(),
+            &json!({"id": 1}),
+            &Value::Null,
+            "b"
+        )));
     }
 
     #[test]

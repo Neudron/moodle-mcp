@@ -44,6 +44,8 @@ pub struct Task {
     pub ai_score: Option<f64>,
     /// Version of the Jev prompt that produced `ai_score` (0 = old single question).
     pub ai_v: u8,
+    /// Accepted submission file types from the assignment settings (`.pdf`, `.docx`...), lowercase.
+    pub accepted: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

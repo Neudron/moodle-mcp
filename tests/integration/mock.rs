@@ -346,7 +346,8 @@ pub fn web_ws(function: &str) -> Option<serde_json::Value> {
         "mod_assign_get_assignments" => json!({"courses": [{"id": COURSE_ID, "assignments": [
             {"id": 7, "cmid": 70, "name": "M4_A1_A_RA2", "intro": "<p>Fes <b>això</b></p>",
              "introattachments": [{"filename": "enunciat.pdf", "fileurl": "https://x/webservice/pluginfile.php/1/enunciat.pdf", "mimetype": "application/pdf", "filesize": 4096}],
-             "allowsubmissionsfromdate": 1_790_000_000, "duedate": 1_795_000_000, "cutoffdate": 0},
+             "allowsubmissionsfromdate": 1_790_000_000, "duedate": 1_795_000_000, "cutoffdate": 0,
+             "configs": [{"plugin": "file", "subtype": "assignsubmission", "name": "filetypeslist", "value": ".PDF, .zip"}]},
             {"id": 8, "cmid": 80, "name": "Sense data", "intro": "", "duedate": 0}
         ]}]}),
         "mod_assign_get_submission_status" => {

@@ -118,6 +118,7 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/tasks/{id}/submit", post(submit))
         .route("/api/browse", get(browse))
         .route("/api/tasks/{id}/pick", post(pick))
+        .route("/api/tasks/{id}/to-pdf", post(to_pdf))
         .route("/api/courses", get(courses))
         .route("/api/courses/{short}", get(course))
         .route("/api/files", get(file_info))
@@ -227,6 +228,7 @@ async fn list_tasks(State(app): S, h: HeaderMap) -> R<Response> {
         .into_iter()
         .map(|mut t| {
             let ev = (t.source == "ai").then(|| evidence_of(&t.body_html));
+            let np = tasks::needs_pdf(&t);
             // List view never reads these; the detail endpoint stays complete.
             t.body_html.clear();
             t.feedback_html.clear();
@@ -240,7 +242,7 @@ async fn list_tasks(State(app): S, h: HeaderMap) -> R<Response> {
             if let Some(ev) = ev {
                 tv["evidence"] = ev.into();
             }
-            json!({"task": tv, "local": l, "stale": stale(&t, &l, now)})
+            json!({"task": tv, "local": l, "stale": stale(&t, &l, now), "needs_pdf": np})
         })
         .collect();
     Ok(cached(
@@ -259,13 +261,10 @@ async fn one_task(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
     t.body_html = tasks::proxy_urls(&t.body_html);
     t.feedback_html = tasks::proxy_urls(&t.feedback_html);
     let l = app.db.local(&id)?;
-    let mut dir = readme::submit_dir(&module_of(&l, &t.course), &t.title);
-    if l.status == "lliurat" {
-        dir = dir.replacen("submit/", "submit/_lliurat/", 1);
-    }
+    let dir = task_submit_dir(&l, &t);
     let shot = crate::web::shots::ensure(&app, &t);
     Ok(Json(
-        json!({"task": t, "local": l, "stale": stale(&t, &l, now_secs()), "submit_dir": dir, "shot": shot}),
+        json!({"task": t, "local": l, "stale": stale(&t, &l, now_secs()), "submit_dir": dir, "shot": shot, "needs_pdf": tasks::needs_pdf(&t)}),
     ))
 }
 
@@ -534,6 +533,57 @@ async fn browse(Query(q): Query<PathQ>) -> R<Json<Value>> {
     Ok(Json(json!({"rel": q.path, "entries": es})))
 }
 
+/// The task's folder under `submit/` (or `submit/_lliurat/` once handed in).
+fn task_submit_dir(l: &Local, t: &crate::web::db::Task) -> String {
+    let dir = readme::submit_dir(&module_of(l, &t.course), &t.title);
+    if l.status == "lliurat" {
+        dir.replacen("submit/", "submit/_lliurat/", 1)
+    } else {
+        dir
+    }
+}
+
+/// Converts a linked docx/doc/odt to `<name>_amin.pdf` next to it; the PDF replaces the source link.
+async fn to_pdf(State(app): S, Path(id): Path<String>, Json(b): Json<PickIn>) -> R<Json<Local>> {
+    app.db
+        .task(&id)?
+        .ok_or(ApiErr(StatusCode::NOT_FOUND, "no existeix".into()))?;
+    if !app.db.local(&id)?.files.contains(&b.path) {
+        return Err(bad("fitxer no enllaçat"));
+    }
+    let rel = std::path::Path::new(&b.path);
+    let ext = rel
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if !["docx", "doc", "odt"].contains(&ext.as_str()) {
+        return Err(bad("només docx/doc/odt"));
+    }
+    let src = crate::web::upload::resolve(std::path::Path::new(&app.root), &b.path)
+        .ok_or(bad("no és un fitxer"))?;
+    let bytes = std::fs::read(&src).map_err(anyhow::Error::from)?;
+    let pdf = crate::web::preview::convert(&app, &bytes, &ext, "pdf").await?;
+    let stem = rel.file_stem().unwrap_or_default().to_string_lossy();
+    let dir = rel.parent().unwrap_or(std::path::Path::new(""));
+    let abs = std::path::Path::new(&app.root).join(dir);
+    let mut name = files::amin_name(&format!("{stem}.pdf"));
+    for n in 2.. {
+        if !abs.join(&name).exists() {
+            break;
+        }
+        name = files::amin_name(&format!("{stem}-{n}.pdf"));
+    }
+    files::write_atomic(&abs.join(&name), pdf).map_err(anyhow::Error::from)?;
+    let out = dir.join(&name).to_string_lossy().into_owned();
+    let l = app.db.update_local(&id, |l| {
+        if let Some(f) = l.files.iter_mut().find(|f| **f == b.path) {
+            *f = out;
+        }
+    })?;
+    readme::write(&app.db, &app.root)?;
+    Ok(Json(l))
+}
+
 #[derive(Deserialize)]
 struct PickIn {
     path: String,
@@ -563,10 +613,7 @@ async fn pick(State(app): S, Path(id): Path<String>, Json(b): Json<PickIn>) -> R
                 "original del professor: obre'l per crear la còpia _amin",
             ));
         }
-        let mut dir = readme::submit_dir(&module_of(&l, &t.course), &t.title);
-        if l.status == "lliurat" {
-            dir = dir.replacen("submit/", "submit/_lliurat/", 1);
-        }
+        let dir = task_submit_dir(&l, &t);
         let abs = root.join(&dir);
         std::fs::create_dir_all(&abs).map_err(anyhow::Error::from)?;
         let ext = p

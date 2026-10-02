@@ -1,7 +1,7 @@
 #[path = "integration/mock.rs"]
 mod mock;
 
-use mock::{MockConfig, MockMoodle, TOKEN};
+use mock::{MockConfig, MockMoodle, MockOo, TOKEN};
 use moodle_mcp::{
     moodle::Moodle,
     web::{self, db::Db},
@@ -979,4 +979,46 @@ async fn file_meta_renames_link_and_repoints() {
     assert!(lk.symlink_metadata().unwrap().is_symlink());
     assert!(root.join("submit/T/old.txt").symlink_metadata().is_err());
     assert_eq!(std::fs::read_to_string(root.join(target)).unwrap(), "hola");
+}
+
+#[tokio::test]
+async fn to_pdf_converts_linked_docx_next_to_it() {
+    MockOo::shared();
+    let (base, _app, _m, root) = start("topdf").await;
+    let c = reqwest::Client::new();
+    let dir = seed_task_dir(&c, &base).await;
+    let one: serde_json::Value = c
+        .get(format!("{base}/api/tasks/assign:7"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(one["needs_pdf"], true);
+    std::fs::create_dir_all(root.join(&dir)).unwrap();
+    std::fs::write(root.join(&dir).join("a.docx"), "docx-topdf").unwrap();
+    std::fs::write(root.join(&dir).join("b.txt"), "x").unwrap();
+    std::fs::write(root.join(&dir).join("a_amin.pdf"), "old").unwrap();
+    let (d, t) = (format!("{dir}/a.docx"), format!("{dir}/b.txt"));
+    post(&c, &base, "/api/tasks/assign:7/files")
+        .json(&serde_json::json!({"files": [d, t]}))
+        .send()
+        .await
+        .unwrap();
+    let go = |p: &str| {
+        post(&c, &base, "/api/tasks/assign:7/to-pdf").json(&serde_json::json!({"path": p}))
+    };
+    assert_eq!(go(&t).send().await.unwrap().status(), 400);
+    assert_eq!(go("x/none.docx").send().await.unwrap().status(), 400);
+    let r = go(&d).send().await.unwrap();
+    assert_eq!(r.status(), 200);
+    let l: serde_json::Value = r.json().await.unwrap();
+    let f = l["files"].to_string();
+    assert!(f.contains("a-2_amin.pdf") && !f.contains("a.docx"), "{l}");
+    assert_eq!(
+        std::fs::read(root.join(&dir).join("a-2_amin.pdf")).unwrap(),
+        b"%PDF-mock"
+    );
+    assert_eq!(go(&d).send().await.unwrap().status(), 400);
 }
