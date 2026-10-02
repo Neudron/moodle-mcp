@@ -6,7 +6,8 @@ use crate::web::{
     files, office, App,
 };
 use axum::{
-    extract::{Query, State},
+    body::Bytes,
+    extract::{DefaultBodyLimit, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -104,24 +105,40 @@ fn io(e: std::io::Error) -> Response {
 /// Check teacher + sha under the lock, then .bak, tmp, rename. Returns the new sha.
 #[allow(clippy::result_large_err)] // Response is the handler's own error body
 fn save(root: &str, rel: &str, content: &str, base: &str) -> Result<String, Response> {
+    save_bytes(root, rel, content.as_bytes(), Some(base))
+}
+
+/// `base` Some: text file whose current sha must match. None: blind overwrite (save-back).
+#[allow(clippy::result_large_err)]
+fn save_bytes(
+    root: &str,
+    rel: &str,
+    content: &[u8],
+    base: Option<&str>,
+) -> Result<String, Response> {
     let _g = SAVE.lock().unwrap_or_else(|e| e.into_inner());
     let (p, rel) = resolve(root, rel).map_err(IntoResponse::into_response)?;
     if is_teacher(root, &rel).map_err(|e| ApiErr::from(e).into_response())? {
         return Err(conflict(json!({"error": "teacher_original", "path": rel})));
     }
-    let (_, cur) = read_text(&p).map_err(IntoResponse::into_response)?;
-    if cur != base {
-        return Err(conflict(json!({"error": "conflict", "sha": cur})));
+    if let Some(base) = base {
+        let (_, cur) = read_text(&p).map_err(IntoResponse::into_response)?;
+        if cur != base {
+            return Err(conflict(json!({"error": "conflict", "sha": cur})));
+        }
     }
     let mut bak = p.clone().into_os_string();
     bak.push(".bak");
-    std::fs::copy(&p, &bak).map_err(io)?;
+    // ponytail: save-back keeps the first .bak (pre-upload original); timestamped .bak if multi-generation history is needed
+    if base.is_some() || !Path::new(&bak).exists() {
+        std::fs::copy(&p, &bak).map_err(io)?;
+    }
     let mut tmp = p.clone().into_os_string();
     tmp.push(".tmp");
     std::fs::write(&tmp, content).map_err(io)?;
     std::fs::set_permissions(&tmp, std::fs::metadata(&p).map_err(io)?.permissions()).map_err(io)?;
     std::fs::rename(&tmp, &p).map_err(io)?;
-    Ok(sha_hex(content.as_bytes()))
+    Ok(sha_hex(content))
 }
 
 #[allow(clippy::result_large_err)]
@@ -133,6 +150,17 @@ async fn save_blocking(app: Arc<App>, b: SaveIn) -> Result<String, Response> {
 
 async fn save_h(State(app): State<Arc<App>>, Json(b): Json<SaveIn>) -> Response {
     let r = save_blocking(app, b).await;
+    match r {
+        Ok(sha) => Json(json!({"sha": sha})).into_response(),
+        Err(r) => r,
+    }
+}
+
+#[allow(clippy::result_large_err)]
+async fn save_back(State(app): State<Arc<App>>, Query(q): Query<PathIn>, body: Bytes) -> Response {
+    let r = tokio::task::spawn_blocking(move || save_bytes(&app.root, &q.path, &body, None))
+        .await
+        .unwrap_or_else(|e| Err(ApiErr::from(anyhow::Error::from(e)).into_response()));
     match r {
         Ok(sha) => Json(json!({"sha": sha})).into_response(),
         Err(r) => r,
@@ -157,5 +185,9 @@ pub fn router() -> Router<Arc<App>> {
     Router::new()
         .route("/api/ide/file", get(read))
         .route("/api/save", post(save_h))
+        .route(
+            "/api/save-back",
+            post(save_back).layer(DefaultBodyLimit::max(100 << 20)),
+        )
         .route("/api/ide/copy", post(copy))
 }

@@ -12,6 +12,10 @@ use std::sync::Arc;
 
 const COOKIE: &str = "neu_lan";
 
+/// Request extension: the request came in through the LAN listener (client is not this machine).
+#[derive(Clone, Copy, Debug)]
+pub struct Remote;
+
 #[derive(Debug, PartialEq)]
 pub enum Admit {
     Deny,
@@ -111,6 +115,7 @@ async fn mw(
                 );
             }
             hs.insert(header::HOST, HeaderValue::from_str(&local).unwrap());
+            req.extensions_mut().insert(Remote);
             next.run(req).await
         }
     }

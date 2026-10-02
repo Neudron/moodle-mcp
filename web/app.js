@@ -1179,8 +1179,26 @@ taskExtras.push((tv) => { const f = tv.local.files.find((x) => OFFICE.test(x)); 
 
 views.edita = async (...parts) => {
   const rel = parts.join('/');
-  const openLocal = h('button', { type: 'button', onclick: async () => { try { await api('/api/open', { method: 'POST', body: { path: rel } }); } catch (e) { toast(e.message, true); } } }, "Obre amb l'aplicació de l'ordinador");
-  const fallback = (msg) => h('div', { class: 'v-edita-fb' }, h('h1', { class: 'sr-only' }, 'Edita'), errorPanel(msg), h('div', { class: 'actions' }, openLocal));
+  let opened = rel; // the _amin copy once opened
+  const openLocal = h('button', { type: 'button', onclick: async () => {
+    try {
+      const r = await api('/api/open', { method: 'POST', body: { path: rel } });
+      opened = r.rel;
+      if (r.remote) { h('a', { href: dlHref(r.rel), download: r.rel.split('/').pop() }).click(); toast('Descarregant. Edita-ho i desa-ho amb «Desa la versió editada».'); }
+    } catch (e) { toast(e.message, true); }
+  } }, "Obre amb l'aplicació de l'ordinador");
+  // Remote browsers edit a downloaded copy: send it back over the same file (bak kept server-side).
+  const remoteHost = !['localhost', '127.0.0.1'].includes(location.hostname);
+  const saveBack = remoteHost ? h('label', { class: 'btn ghost' }, 'Desa la versió editada',
+    h('input', { type: 'file', class: 'sr-only', onchange: async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      try {
+        const r = await fetch(`/api/save-back?path=${enc(opened)}`, { method: 'POST', headers: { 'X-Neu': '1' }, body: f });
+        toast(r.ok ? 'Versió desada.' : (await r.text()) || r.statusText, !r.ok);
+      } catch (x) { toast(x.message, true); }
+      e.target.value = '';
+    } })) : null;
+  const fallback = (msg) => h('div', { class: 'v-edita-fb' }, h('h1', { class: 'sr-only' }, 'Edita'), errorPanel(msg), h('div', { class: 'actions' }, openLocal, saveBack));
   let cfg;
   try { cfg = await api('/api/office/config', { method: 'POST', body: { path: rel } }); }
   catch (e) { return fallback(e.status === 503 ? 'OnlyOffice no disponible.' : e.message); }

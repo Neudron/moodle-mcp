@@ -271,3 +271,31 @@ async fn copy_makes_amin_repoints_task_and_original_stays_byte_identical() {
         403
     );
 }
+
+async fn put_back(t: &T, path: &str, body: &'static [u8]) -> reqwest::Response {
+    t.c.post(format!("{}/api/save-back?path={path}", t.base))
+        .header("origin", &t.base)
+        .header("x-neu", "1")
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn save_back_writes_bytes_with_bak_and_guards() {
+    let t = T::new("back").await;
+    let r = put_back(&t, "C/mine.txt", b"\x00\xffnew").await;
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        std::fs::read(t.root.join("C/mine.txt")).unwrap(),
+        b"\x00\xffnew"
+    );
+    assert_eq!(t.read("C/mine.txt.bak"), "hola\n");
+    assert_eq!(put_back(&t, "C/mine.txt", b"b").await.status(), 200);
+    assert_eq!(t.read("C/mine.txt"), "b");
+    assert_eq!(t.read("C/mine.txt.bak"), "hola\n"); // first .bak kept
+    assert_eq!(put_back(&t, "C/teacher.txt", b"x").await.status(), 409);
+    assert_eq!(t.read("C/teacher.txt"), "original\n");
+    assert_eq!(put_back(&t, "../evil.txt", b"x").await.status(), 403);
+}

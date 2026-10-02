@@ -1159,7 +1159,11 @@ fn open_target(root: &std::path::Path, rel: &str) -> Result<(std::path::PathBuf,
     Ok((files::jail(root, &rel)?, rel))
 }
 
-async fn open_local(State(app): S, Json(b): Json<PathQ>) -> R<Json<Value>> {
+async fn open_local(
+    State(app): S,
+    remote: Option<axum::Extension<crate::web::lan::Remote>>,
+    Json(b): Json<PathQ>,
+) -> R<Json<Value>> {
     let root = app.root.clone();
     let q = b.path.clone();
     let (p, rel) =
@@ -1168,6 +1172,10 @@ async fn open_local(State(app): S, Json(b): Json<PathQ>) -> R<Json<Value>> {
             .map_err(anyhow::Error::from)?
             .map_err(forbid)?;
     repoint(&app, &b.path, &rel)?;
+    // LAN client: the browser downloads the file instead, xdg-open would open it on the tower.
+    if remote.is_some() {
+        return Ok(Json(json!({"rel": rel, "remote": true})));
+    }
     let mut ch = tokio::process::Command::new("xdg-open")
         .arg(p)
         .spawn()
@@ -1175,7 +1183,7 @@ async fn open_local(State(app): S, Json(b): Json<PathQ>) -> R<Json<Value>> {
     tokio::spawn(async move {
         let _ = ch.wait().await;
     });
-    Ok(Json(json!({})))
+    Ok(Json(json!({"rel": rel, "remote": false})))
 }
 
 #[cfg(test)]
