@@ -1411,6 +1411,13 @@ mod pos_tests {
         };
         assert_eq!(pos(&ai, &st), 11);
         assert_eq!(pos(&Task::default(), &st), i64::MAX);
+        let front = Task {
+            source: "ai".into(),
+            url: "c/index.md".into(),
+            ..Default::default()
+        };
+        assert_eq!(pos(&front, &st), i64::MAX);
+        assert!(pos(&front, &st) > pos(&ai, &st));
         // two sections: s1's lower NNN must not beat s0
         let mut c = CourseState::default();
         c.modules.insert("1".into(), "003-a".into());
