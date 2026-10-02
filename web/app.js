@@ -62,7 +62,7 @@ const GLYPH = { late: 'warn', soon: 'clock', stale: 'clock', done: 'check' };
 function dueChip(tv, big) {
   const l = isDone(tv) ? { t: 'Lliurada', s: 'done' } : isStale(tv) ? { t: 'Data antiga', s: 'stale' } : left(tv.task.due);
   const title = l.s === 'stale' ? "Venciment de fa més de 300 dies: probablement la data de l'any passat" : tv.task.due ? when(tv.task.due) : null;
-  return h('span', { class: `due ${l.s}${big ? ' lg' : ''}`, title }, GLYPH[l.s] ? ic(GLYPH[l.s]) : null, l.t, tv.task.due ? h('span', { class: 'sr-only' }, ` (${when(tv.task.due)})`) : null);
+  return h('span', { class: `due ${l.s}`, title }, GLYPH[l.s] ? ic(GLYPH[l.s]) : null, l.t, tv.task.due ? h('span', { class: 'sr-only' }, ` (${when(tv.task.due)})`) : null);
 }
 // hue-helpers-start
 const HUES = [205, 150, 25, 335, 95, 245, 180, 55];
@@ -189,13 +189,13 @@ function card(tv, hideCourse, quick, noProf) {
     dueChip(tv));
   if (!quick || done) return row;
   // Not inside the <a>: a button in a link is invalid. Commit is deferred so the undo toast is real.
-  const wrap = h('div', { class: 'rowq' }, row, h('button', { type: 'button', class: 'ghost', 'aria-label': `Marca lliurada: ${t.title}`, onclick: () => {
+  const wrap = h('div', { class: 'rowq' }, row, h('button', { type: 'button', class: 'ghost', 'aria-label': `Marca lliurada: ${t.title}`, title: 'Marca lliurada', onclick: () => {
     $('#main').focus(); wrap.classList.add('leaving'); setTimeout(() => { wrap.hidden = true; }, 150);
     later(`Marcada com a lliurada: ${t.title}`, () => { wrap.classList.remove('leaving'); wrap.hidden = false; wrap.querySelector('button').focus(); }, async () => {
       try { await api(`/api/tasks/${enc(t.id)}/status`, { method: 'POST', body: { status: 'lliurat' } }); } catch (e) { wrap.classList.remove('leaving'); wrap.hidden = false; toast(e.message, true); }
       route({ soft: true });
     });
-  } }, ic('check'), h('span', {}, 'Marca lliurada')));
+  } }, ic('check')));
   return wrap;
 }
 

@@ -143,9 +143,8 @@ label{font-weight:600}
 .g-old>summary h2,.g-old>summary{color:var(--stale)}
 .due.week{color:var(--text)}
 .due.done,.badge.ok{color:var(--ok)}
-.badge{background:var(--sunk)}
+.badge{padding:2px 0}
 .badge.warn{color:var(--soon)}.badge.ai{color:var(--accent)}
-.due.lg{font-size:16px;padding:var(--s0) var(--s1-5)}
 .due .ic{width:16px;height:16px}
 .chip{display:inline-flex;align-items:center;gap:var(--s1);font-weight:600}
 
@@ -503,9 +502,8 @@ small{font-size:13px}
 /* Tauler triage */
 .rowq{display:flex;align-items:stretch}.rowq[hidden]{display:none}
 .rowq>.row{flex:1;min-width:0}
-.rowq>button{flex:none;align-self:center;margin:0 var(--s1);min-height:44px;min-width:44px;display:inline-flex;align-items:center;gap:var(--s1);border-color:transparent;background:none;color:var(--dim)}
+.rowq>button{flex:none;align-self:center;margin:0 var(--s1);min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center;padding:0;border-color:transparent;background:none;color:var(--dim)}
 .rowq>button:hover{background:var(--hover);color:var(--text)}
-@media (max-width:899px){.rowq>button .ic+*{display:none}.rowq>button{padding:0}}
 @media (max-width:599px){.rowq>button{align-self:flex-start;margin-top:var(--s1)}}
 .v-tauler .next{display:block;margin:0 0 var(--s2);color:var(--dim);font-size:14px;text-decoration:none;overflow-wrap:anywhere}
 .v-tauler .next b{color:var(--text);font-weight:600;text-decoration:underline}
