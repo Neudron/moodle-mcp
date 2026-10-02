@@ -662,7 +662,7 @@ function linkFiles(id) {
 }
 
 function markNav() {
-  const [name, arg] = (location.hash.slice(2) || 'tauler').split('/'), nm = views[name] ? name : 'tauler';
+  const [name, arg] = (location.hash.slice(2) || 'calendari').split('/'), nm = views[name] ? name : 'calendari';
   document.querySelectorAll('.tabs a').forEach((a) => (a.getAttribute('href') === `#/${nm}` ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
   document.querySelectorAll('#courses a').forEach((a) => (nm === 'curs' && a.getAttribute('href') === `#/curs/${arg}` ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current')));
 }
@@ -675,8 +675,8 @@ async function route(o) {
   const soft = o?.soft === true;
   if (!soft) delete views.tauler.q;
   const my = (route.n = (route.n || 0) + 1);
-  const [name, ...rest] = (location.hash.slice(2) || 'tauler').split('/');
-  const nm = views[name] ? name : 'tauler';
+  const [name, ...rest] = (location.hash.slice(2) || 'calendari').split('/');
+  const nm = views[name] ? name : 'calendari';
   const main = $('#main');
   const y = scrollY, first = !route.cur, same = route.cur === nm;
   const had = main.contains(document.activeElement), aid = had ? document.activeElement.id : '';
