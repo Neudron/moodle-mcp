@@ -1233,7 +1233,7 @@ views.forums = async () => {
         }
       } catch (err) { delete d.dataset.loaded; toast(err.message, true); }
     } }, h('summary', {},
-      isRead ? null : h('span', { class: 'ud' }, h('span', { class: 'sr-only' }, 'Sense llegir')),
+      isRead ? null : h('span', { class: 'ud' }, h('span', { class: 'sr-only' }, 'No llegit')),
       h('span', { class: 'ft' }, tv.task.title),
       h('span', { class: 'dim fm' }, `${cname(tv.task.course)} · ${when(tv.task.opens)}`)));
   };
