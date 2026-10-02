@@ -147,8 +147,8 @@ document.addEventListener('keydown', (e) => {
 
 // Shared states. All text via h()/textContent.
 const empty = (title, text, btn) => h('div', { class: 'empty' }, h('h2', {}, title), text && h('p', {}, text), btn);
-const errorPanel = (msg) => h('div', { class: 'err-panel', role: 'alert' }, ic('warn'), h('p', {}, msg), h('button', { type: 'button', class: 'ghost', onclick: () => route() }, 'Torna-ho a provar'));
-const skeleton = () => h('div', {}, h('span', { class: 'sr-only' }, 'Carregant…'), [1, 2, 3].map(() => h('div', { class: 'skel' })));
+const errorPanel = (msg, retry = true) => h('div', { class: 'err-panel', role: 'alert' }, ic('warn'), h('p', {}, msg), retry && h('button', { type: 'button', onclick: () => route() }, 'Torna-ho a provar'));
+const skeleton = () => h('div', {}, h('span', { class: 'sr-only' }, 'Carregant…'), h('div', { class: 'cards', 'aria-hidden': 'true' }, [1, 2, 3, 4, 5].map(() => h('div', { class: 'skel' }, h('i'), h('i')))));
 function bar(n, m, label, cls = '', text = `${n}/${m}`) {
   return h('span', { class: 'barwrap' },
     h('span', { class: `bar ${cls}`, role: 'progressbar', 'aria-valuemin': 0, 'aria-valuemax': m, 'aria-valuenow': n, 'aria-label': label }, h('i', { style: { width: `${m ? Math.round((100 * n) / m) : 0}%` } })),
@@ -180,8 +180,7 @@ function card(tv, hideCourse, quick) {
     tv.local.status && h('span', { class: 'badge ' + (['revisat OK', 'lliurat'].includes(tv.local.status) ? 'ok' : 'warn') }, LSTATUS[tv.local.status] || tv.local.status),
     t.source === 'ai' && aiBadge(),
   ];
-  const row = h('a', { class: 'row' + (done ? ' done' : !isStale(tv) && left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
-    h('span', { class: 'dot', style: { '--h': hueOf(t.course) } }),
+  const row = h('a', { class: 'row' + (done ? ' done' : !isStale(tv) && left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}`, style: { '--h': hueOf(t.course) } },
     h('span', { class: 't', title: t.title }, t.title),
     h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hueOf(t.course) } }, cname(t.course)), profTxt(t.course) && !hideCourse ? h('span', {}, profTxt(t.course)) : null, t.kind === 'assign' || t.kind === 'ai' ? null : h('span', {}, KIND[t.kind] || t.kind), badges),
     dueChip(tv));
@@ -315,7 +314,7 @@ views.tauler = async () => {
   const sections = bySubject(pendingList).map(({ course, items }) => {
     const rows = items.map((tv) => { const r = card(tv, true, true); r.dataset.due = dueOf.get(tv); return r; });
     return block('subj', h('section', { class: 'v-grp g-subj' },
-      h('h2', { class: 'grp' }, h('span', { class: 'dot', style: { '--h': hueOf(course) } }), cname(course), profTxt(course) ? h('span', { class: 'dim' }, ` · ${profTxt(course)}`) : null, h('span', { class: 'n' }, items.length)),
+      h('h2', { class: 'grp' }, h('span', { class: 'dot', style: { '--h': hueOf(course) } }), cname(course), h('span', { class: 'n' }, items.length), profTxt(course) ? h('span', { class: 'dim tch' }, profTxt(course)) : null),
       h('div', { class: 'cards' }, rows)), rows);
   });
   if (doneList.length) sections.push(fold('done', 'Lliurades', doneList, doneList.length <= 5));
@@ -406,14 +405,14 @@ function zipEntries(buf) {
 }
 const dlHref = (path) => `/api/raw?path=${enc(path)}&dl=1`;
 const dlMoodle = (url) => `/api/moodle-file?url=${enc(url)}&dl=1`;
-const dlBtn = (href, name, cls = 'btn ghost') => h('a', { class: cls, href, download: name }, ic('download'), 'Descarrega', h('span', { class: 'sr-only' }, ` ${name}`));
+const dlBtn = (href, name) => h('a', { class: 'btn ghost dl', href, download: name, title: 'Descarrega' }, ic('download'), h('span', { class: 'dl-t', 'aria-hidden': 'true' }, 'Descarrega'), h('span', { class: 'sr-only' }, `Descarrega ${name}`));
 async function preview(el, o) {
   const name = o.name || (o.path || o.moodleUrl.split(/[?#]/)[0]).split('/').pop();
   const src = o.path != null ? `/api/raw?path=${enc(o.path)}` : `/api/moodle-file?url=${enc(o.moodleUrl)}`;
   const k = kindOf(name), big = o.size > 2e6;
   const pv = `/api/preview?${o.path != null ? 'path' : 'moodle'}=${enc(o.path ?? o.moodleUrl)}`; // office -> PDF, .url -> target + scanner text
   const fail = (t, b) => h('div', { class: 'pv-none' }, h('p', {}, t), b);
-  const dl = dlBtn(`${src}&dl=1`, name, 'btn');
+  const dl = dlBtn(`${src}&dl=1`, name);
   let node;
   try {
     if (k === 'img') node = h('img', { class: 'v-img', src, alt: name });
@@ -1001,7 +1000,7 @@ views.curs = async (short) => {
   const nDone = tasks.filter(isDone).length;
   const tasksCol = tasks.length
     ? h('div', {}, h('h2', {}, 'Tasques'), h('div', { class: 'cards' }, tasks.filter((tv) => !isDone(tv)).map((tv) => card(tv, true))),
-      nDone ? h('details', { class: 'done-tasks' }, h('summary', {}, `Lliurades (${nDone})`), h('div', { class: 'cards' }, tasks.filter(isDone).map((tv) => card(tv, true)))) : null)
+      nDone ? h('details', { class: 'done-tasks' }, h('summary', { class: 'grp' }, 'Lliurades', h('span', { class: 'n' }, nDone)), h('div', { class: 'cards' }, tasks.filter(isDone).map((tv) => card(tv, true)))) : null)
     : h('div', {}, h('h2', {}, 'Tasques'), h('p', { class: 'dim' }, 'Cap tasca en aquest curs.'));
   // Sections with no visible files are dropped (no empty accordions).
   const secs = c.sections.map((s) => ({ name: s.name, mods: s.modules.map((m) => [m, m.files.filter((f) => !f.is_dir && !NOISE.has(f.name))]).filter(([, fs]) => fs.length) })).filter((s) => s.mods.length);
@@ -1052,7 +1051,7 @@ views.fitxers = async (...parts) => {
   preview(body, { path: rel, name, size: info.size });
   return h('section', { class: 'v-fitxers' }, h('h1', {}, name), crumbs,
     h('div', { class: 'actions' },
-      dlBtn(dlHref(rel), name, 'btn'),
+      dlBtn(dlHref(rel), name),
       fileExtras.map((f) => f(info)),
       h('span', { class: 'num dim' }, fsize(info.size))),
     h('div', { class: 'v-preview' }, body));
