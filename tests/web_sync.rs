@@ -236,3 +236,78 @@ async fn unenrolled_course_files_are_trashed() {
     assert!(!std::path::Path::new(&r).join(&f).exists());
     assert!(std::path::Path::new(&r).join(".moodle/trash").is_dir());
 }
+
+#[tokio::test]
+async fn stale_duplicate_module_folders_are_trashed_only_if_pure_sync_output() {
+    let m = MockMoodle::healthy().await;
+    let c = Moodle::new(m.base(), TOKEN);
+    let db = Db::memory().unwrap();
+    let r = root("dupes");
+    sync_all(&c, &db, &r, true).await.unwrap();
+    let root_p = std::path::Path::new(&r);
+    let f = moodle_mcp::state::State::load(&r).unwrap().courses["101"]
+        .files
+        .values()
+        .next()
+        .unwrap()
+        .path
+        .clone();
+    let live = root_p.join(&f).parent().unwrap().to_path_buf();
+    let sec = live.parent().unwrap();
+    let meta = std::fs::read_to_string(live.join("meta.json")).unwrap();
+    for (name, extra) in [("zz-dup", None), ("zz-mine", Some("notes.txt"))] {
+        let d = sec.join(name);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("meta.json"), &meta).unwrap();
+        std::fs::write(d.join("README.md"), "x").unwrap();
+        if name == "zz-dup" {
+            std::fs::copy(root_p.join(&f), d.join("copy.bin")).unwrap();
+        }
+        if let Some(e) = extra {
+            std::fs::write(d.join(e), "mine").unwrap();
+        }
+    }
+    sync_all(&c, &db, &r, true).await.unwrap();
+    assert!(!sec.join("zz-dup").exists());
+    assert!(sec.join("zz-mine/notes.txt").is_file());
+    assert!(live.join("meta.json").is_file());
+    let res: serde_json::Value =
+        serde_json::from_str(&db.kv_get("sync_result").unwrap().unwrap()).unwrap();
+    assert!(res["files_removed"].as_u64().unwrap() >= 1, "{res}");
+    assert!(root_p.join(".moodle/trash").is_dir());
+}
+
+#[tokio::test]
+async fn module_removed_upstream_with_tracked_file_is_trashed_whole() {
+    let m = MockMoodle::healthy().await;
+    let c = Moodle::new(m.base(), TOKEN);
+    let db = Db::memory().unwrap();
+    let r = root("gone");
+    sync_all(&c, &db, &r, true).await.unwrap();
+    let root_p = std::path::Path::new(&r);
+    let (f, dir) = {
+        let st = moodle_mcp::state::State::load(&r).unwrap();
+        let f = st.courses["101"]
+            .files
+            .values()
+            .next()
+            .unwrap()
+            .path
+            .clone();
+        let dir = root_p.join(&f).parent().unwrap().to_path_buf();
+        (f, dir)
+    };
+    assert!(dir.join("meta.json").is_file());
+    m.set_drop_s1(true);
+    sync_all(&c, &db, &r, true).await.unwrap();
+    assert!(!dir.exists(), "module folder should be gone");
+    let rel = std::path::Path::new(&f).parent().unwrap();
+    let tr = root_p.join(".moodle/trash");
+    let found = std::fs::read_dir(&tr).unwrap().flatten().any(|e| {
+        let d = e.path().join(rel);
+        d.join("meta.json").is_file()
+            && d.join(std::path::Path::new(&f).file_name().unwrap())
+                .is_file()
+    });
+    assert!(found, "tracked file and meta.json under one sync-<ts>");
+}

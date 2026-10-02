@@ -337,6 +337,8 @@ pub async fn sync_course(
         .filter(|e| trash_untouched(&root_path, &e.path, &e.sha256, ts))
         .count();
 
+    report.files_removed += sweep_stale_modules(&root_path, &course_dir, &layout, &new_files, ts);
+
     write_index_and_meta(course, &layout, &plan, &new_files).await?;
     write_course_summary(&course_dir, course).await?;
 
@@ -353,6 +355,83 @@ pub async fn sync_course(
     report.duration_ms = receipt.duration_ms;
     write_receipt(&course_dir, &receipt).await?;
     Ok(report.to_sync_report())
+}
+
+/// 1:1 sync: module folders (`<section>/<module>/meta.json`) that the live layout
+/// no longer names (duplicate ids, modules gone upstream) move whole to
+/// `.moodle/trash/sync-<ts>/`, but only if every file is sync output or
+/// byte-identical to a tracked file. Anything else stays with a WARN.
+/// Returns the number of files moved.
+fn sweep_stale_modules(
+    root: &Path,
+    course_dir: &Path,
+    layout: &[SectionLayout],
+    tracked: &BTreeMap<String, crate::state::FileEntry>,
+    ts: u64,
+) -> usize {
+    use sha2::Digest as _;
+    let live: std::collections::HashSet<&Path> = layout
+        .iter()
+        .flat_map(|s| &s.modules)
+        .map(|m| m.dir.as_path())
+        .collect();
+    let subdirs = |d: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(d)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+            .map(|e| e.path())
+            .collect()
+    };
+    let mut moved = 0;
+    for dir in subdirs(course_dir).iter().flat_map(|s| subdirs(s)) {
+        if live.contains(dir.as_path()) || !dir.join("meta.json").is_file() {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let names: Vec<_> = rd.flatten().collect();
+        let is_sync = |e: &std::fs::DirEntry| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            let stem = n.strip_suffix(".md").unwrap_or(&n);
+            e.file_type().is_ok_and(|t| t.is_file())
+                && (n == "meta.json"
+                    || n == "README.md"
+                    || n.ends_with(".url")
+                    || (n.ends_with(".md") && dir.join(format!("{stem}.url")).is_file()))
+        };
+        let pure = names.iter().all(|e| {
+            is_sync(e)
+                || (e.file_type().is_ok_and(|t| t.is_file())
+                    && std::fs::read(e.path()).is_ok_and(|b| {
+                        let h = format!("{:x}", sha2::Sha256::digest(b));
+                        tracked.values().any(|t| t.sha256 == h)
+                    }))
+        });
+        let rel = dir.strip_prefix(root).unwrap_or(&dir);
+        if !pure {
+            tracing::warn!(
+                "stale module folder holds user files, kept: {}",
+                rel.display()
+            );
+            continue;
+        }
+        let to = root.join(format!(".moodle/trash/sync-{ts}")).join(rel);
+        // Per-entry moves: `to` may already exist (trash_untouched put files there).
+        let ok = std::fs::create_dir_all(&to).is_ok()
+            && names
+                .iter()
+                .all(|e| std::fs::rename(e.path(), to.join(e.file_name())).is_ok());
+        if ok {
+            let _ = std::fs::remove_dir(&dir);
+            moved += names.iter().filter(|e| !is_sync(e)).count(); // content files only
+        } else {
+            tracing::warn!("stale module trash failed: {}", rel.display());
+        }
+    }
+    moved
 }
 
 fn planned_lookup(plan: &Plan) -> HashMap<String, PlannedFile> {
