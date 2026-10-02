@@ -1046,12 +1046,13 @@ views.fitxers = async (...parts) => {
       es.length
         ? h('div', { class: 'tablewrap', role: 'region', 'aria-label': 'Llista de fitxers' },
             h('table', {}, h('caption', { class: 'sr-only' }, `Contingut de ${rel || '~/smx'}`),
+              h('colgroup', {}, h('col', {}), h('col', { class: 'c-sz' }), h('col', { class: 'c-ac' })),
               h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Nom'), h('th', { scope: 'col', class: 'num' }, 'Mida'), h('th', { scope: 'col' }, 'Accions'))),
               h('tbody', {}, es.map((e) => h('tr', {},
                 h('td', {}, h('a', { class: 'v-fname', href: `#/fitxers/${enc(e.rel)}` },
                   h('span', { class: e.is_dir ? 'v-glyph dir' : 'v-glyph' }, e.is_dir ? ic('folder') : ic('file')),
                   h('span', {}, e.name, !rel && e.is_dir && prof(DIRS[e.name]) ? ` (${prof(DIRS[e.name])})` : ''), e.is_dir ? h('span', { class: 'sr-only' }, ' (carpeta)') : null)),
-                h('td', { class: 'num' }, e.is_dir ? '' : fsize(e.size)),
+                h('td', { class: 'num dim' }, e.is_dir ? '' : fsize(e.size)),
                 h('td', {}, e.is_dir ? null : dlBtn(dlHref(e.rel), e.name)))))))
         : empty('Carpeta buida', 'No hi ha cap fitxer aquí.'));
   }
