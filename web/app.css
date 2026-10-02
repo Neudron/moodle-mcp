@@ -458,14 +458,13 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 .v-notes h1{margin-bottom:var(--s4)}
 .v-notes .course-notes{margin-bottom:48px}
 .v-notes th{font-weight:500}
-.v-notes>p.dim{margin-top:var(--s4);max-width:60ch}
+.v-notes>details{margin-top:var(--s4);max-width:60ch}
 .v-notes h2 .badge{background:none;padding:0;margin-left:auto;font-weight:400}
 .v-notes .tablewrap{max-height:none}
 .v-notes h2{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--s1);margin:0 0 var(--s2)}
 .v-notes h2 .dot,.v-notes h2 .badge{align-self:center}
 .v-notes td:first-child{min-width:9rem}
 .v-notes td.pc{white-space:nowrap}
-.v-notes td.pc .bar{display:none}
 .v-notes th.num{width:96px}
 @media (min-width:900px){.v-notes table{table-layout:fixed}}
 .row .cn{display:inline-block;vertical-align:bottom;max-width:36ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-weight:400}

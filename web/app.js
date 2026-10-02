@@ -1135,15 +1135,16 @@ views.calendari = async (ym) => {
 
 views.notes = async () => {
   const gs = await api('/api/grades');
-  if (!gs.length) return h('section', { class: 'v-notes' }, h('h1', {}, 'Notes'), empty('Encara no hi ha notes', 'Sincronitza per carregar-les.'));
+  const none0 = () => h('section', { class: 'v-notes' }, h('h1', {}, 'Notes'), empty('Encara no hi ha notes', null, h('button', { class: 'btn', type: 'button', onclick: () => $('#sync').click() }, 'Sincronitza')));
+  if (!gs.length) return none0();
   const pct = (s) => { const n = parseFloat(String(s ?? '').replace(',', '.')); return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : null; };
   const nm = (g) => (cname(g.course) || `Curs ${g.course_id}`).replace(/\.(?=\p{L})/u, '. ');
   const shown = (g) => (g.items || []).filter((i) => i.itemname);
   const dash = (v) => (!v || /^\s*[-–—]\s*$/.test(String(v)) ? '–' : v);
   const marked = (g) => shown(g).some((i) => dash(i.gradeformatted) !== '–' || dash(i.percentageformatted) !== '–');
   const blank = gs.filter((g) => !marked(g));
-  const none = blank.length === gs.length;
-  return h('section', { class: 'v-notes' }, h('h1', {}, 'Notes'), none ? empty('Encara no hi ha notes', 'Cap curs té qualificacions.') : null, gs.filter(marked).map((g) => {
+  if (blank.length === gs.length) return none0();
+  return h('section', { class: 'v-notes' }, h('h1', {}, 'Notes'), gs.filter(marked).map((g) => {
     const name = nm(g), items = shown(g);
     const ps = items.map((i) => pct(i.percentageformatted)).filter((n) => n != null);
     const avg = ps.length ? Math.round(ps.reduce((a, b) => a + b, 0) / ps.length) : null;
@@ -1154,11 +1155,10 @@ views.notes = async () => {
         h('table', {}, h('caption', { class: 'sr-only' }, `Notes de ${name}`),
           h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Element'), h('th', { scope: 'col', class: 'num' }, 'Nota'), h('th', { scope: 'col', class: 'num' }, '%'))),
           h('tbody', {}, items.map((i) => {
-            const p = pct(i.percentageformatted);
             return h('tr', {}, h('td', {}, i.itemname), h('td', { class: 'num' }, dash(i.gradeformatted)),
-              h('td', { class: 'num pc' }, p != null ? h('span', { class: 'bar acc', 'aria-hidden': 'true' }, h('i', { style: { width: `${p}%` } })) : null, dash(i.percentageformatted)));
+              h('td', { class: 'num pc' }, dash(i.percentageformatted)));
           })))));
-  }), blank.length ? h('p', { class: 'dim' }, `Sense notes: ${blank.map(nm).join(', ')}`) : null);
+  }), blank.length ? h('details', {}, h('summary', {}, `${blank.length} ${blank.length === 1 ? 'curs' : 'cursos'} sense notes`), h('p', { class: 'dim' }, blank.map(nm).join(', '))) : null);
 };
 
 // Organitza: last organize log + organize/undo/delivered/Apple actions. Text only via h().
