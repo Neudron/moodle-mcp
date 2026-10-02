@@ -214,6 +214,42 @@ fn now_secs() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
+fn lead(s: &str) -> Option<i64> {
+    let d: String = s.chars().take_while(char::is_ascii_digit).collect();
+    d.parse().ok()
+}
+
+/// Course-wide Moodle module order (`order`), else leading NNN of the folder. i64::MAX when unknown.
+pub(crate) fn pos(t: &crate::web::db::Task, st: &crate::state::State) -> i64 {
+    let cs = st.courses.get(&t.course_id.to_string());
+    let by_id = |cmid: &str| {
+        let cs = cs?;
+        cs.order
+            .get(cmid)
+            .copied()
+            .or_else(|| cs.modules.get(cmid).and_then(|m| lead(m)))
+    };
+    let n = if t.source == "moodle" {
+        t.url
+            .split("id=")
+            .nth(1)
+            .map(|c| {
+                c.chars()
+                    .take_while(char::is_ascii_digit)
+                    .collect::<String>()
+            })
+            .and_then(|cmid| by_id(&cmid))
+    } else {
+        let seg = t.url.split('/').nth(2);
+        seg.and_then(|f| {
+            cs.and_then(|cs| cs.modules.iter().find(|(_, m)| m.as_str() == f))
+                .and_then(|(id, _)| by_id(id))
+                .or_else(|| lead(f))
+        })
+    };
+    n.unwrap_or(i64::MAX)
+}
+
 async fn list_tasks(State(app): S, h: HeaderMap) -> R<Response> {
     let etag = format!("\"t{:x}\"", app.db.version());
     if h.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) == Some(etag.as_str()) {
@@ -226,6 +262,7 @@ async fn list_tasks(State(app): S, h: HeaderMap) -> R<Response> {
         .map(|l| (l.task_id.clone(), l))
         .collect();
     let now = now_secs();
+    let st = crate::state::State::load(&app.root).unwrap_or_default();
     let out: Vec<Value> = app
         .db
         .all_tasks()?
@@ -233,6 +270,7 @@ async fn list_tasks(State(app): S, h: HeaderMap) -> R<Response> {
         .map(|mut t| {
             let ev = (t.source == "ai").then(|| evidence_of(&t.body_html));
             let np = tasks::needs_pdf(&t);
+            let pos = pos(&t, &st);
             // List view never reads these; the detail endpoint stays complete.
             t.body_html.clear();
             t.feedback_html.clear();
@@ -246,7 +284,7 @@ async fn list_tasks(State(app): S, h: HeaderMap) -> R<Response> {
             if let Some(ev) = ev {
                 tv["evidence"] = ev.into();
             }
-            json!({"task": tv, "local": l, "stale": stale(&t, &l, now), "needs_pdf": np})
+            json!({"task": tv, "local": l, "stale": stale(&t, &l, now), "needs_pdf": np, "pos": pos})
         })
         .collect();
     Ok(cached(
@@ -267,8 +305,12 @@ async fn one_task(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
     let l = app.db.local(&id)?;
     let dir = task_submit_dir(&l, &t);
     let shot = crate::web::shots::ensure(&app, &t);
+    let pos = pos(
+        &t,
+        &crate::state::State::load(&app.root).unwrap_or_default(),
+    );
     Ok(Json(
-        json!({"task": t, "local": l, "stale": stale(&t, &l, now_secs()), "submit_dir": dir, "shot": shot, "needs_pdf": tasks::needs_pdf(&t)}),
+        json!({"pos": pos, "task": t, "local": l, "stale": stale(&t, &l, now_secs()), "submit_dir": dir, "shot": shot, "needs_pdf": tasks::needs_pdf(&t)}),
     ))
 }
 
@@ -1335,5 +1377,60 @@ mod frontmatter_tests {
         let md = render_index_md(&c, "", &[], "t");
         assert_eq!(frontmatter(&md, "title").unwrap(), "a\"b\\c\nd \\n");
         assert_eq!(frontmatter(&md, "course_id").unwrap(), "7");
+    }
+}
+
+#[cfg(test)]
+mod pos_tests {
+    use super::pos;
+    use crate::state::{CourseState, State};
+    use crate::web::db::Task;
+
+    #[test]
+    fn pos_cases() {
+        let mut st = State::default();
+        let mut c = CourseState::default();
+        c.modules.insert("164381".into(), "012-act".into());
+        st.courses.insert("5274".into(), c);
+        let m = Task {
+            source: "moodle".into(),
+            course_id: 5274,
+            url: "https://x/mod/assign/view.php?id=164381".into(),
+            ..Default::default()
+        };
+        assert_eq!(pos(&m, &st), 12);
+        let miss = Task {
+            url: "https://x/view.php?id=9".into(),
+            ..m.clone()
+        };
+        assert_eq!(pos(&miss, &st), i64::MAX);
+        let ai = Task {
+            source: "ai".into(),
+            url: "programacio/99-misc/011-ex/a.pdf".into(),
+            ..Default::default()
+        };
+        assert_eq!(pos(&ai, &st), 11);
+        assert_eq!(pos(&Task::default(), &st), i64::MAX);
+        // two sections: s1's lower NNN must not beat s0
+        let mut c = CourseState::default();
+        c.modules.insert("1".into(), "003-a".into());
+        c.modules.insert("2".into(), "001-b".into());
+        c.order.insert("1".into(), 0);
+        c.order.insert("2".into(), 1000);
+        st.courses.insert("7".into(), c);
+        let mk = |id: &str| Task {
+            source: "moodle".into(),
+            course_id: 7,
+            url: format!("https://x/view.php?id={id}"),
+            ..Default::default()
+        };
+        assert!(pos(&mk("1"), &st) < pos(&mk("2"), &st));
+        let aik = |f: &str| Task {
+            source: "ai".into(),
+            course_id: 7,
+            url: format!("c/ra/{f}/a.pdf"),
+            ..Default::default()
+        };
+        assert!(pos(&aik("003-a"), &st) < pos(&aik("001-b"), &st));
     }
 }

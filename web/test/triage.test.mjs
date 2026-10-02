@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const src = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const block = (n) => src.split(`// ${n}-helpers-start`)[1].split(`// ${n}-helpers-end`)[0];
-const { rankProposals, groupByDue, shouldSoftRoute, filterFor, isStale } = new Function(`${block('triage')}; return { rankProposals, groupByDue, shouldSoftRoute, filterFor, isStale };`)();
+const cname = (c) => c;
+const { bySubject, rankProposals, groupByDue, shouldSoftRoute, filterFor, isStale } = new Function('cname', `${block('triage')}; return { bySubject, rankProposals, groupByDue, shouldSoftRoute, filterFor, isStale };`)(cname);
 
 const p = (id, s) => ({ task: { id, ai_score: s } });
 test('rankProposals', () => {
@@ -53,3 +54,10 @@ test('filterFor', () => {
 });
 
 test('isStale', () => { assert.equal(isStale({ stale: true }), true); assert.equal(isStale({}), false); });
+
+test('bySubject: courses by name, natural title, pos first', () => {
+  const x = (course, title, pos) => ({ pos, task: { course, title } });
+  const r = bySubject([x('b', 'Act 10'), x('a', 'Act 3'), x('b', 'Act 3'), x('b', 'Act 1'), x('b', 'Zeta', 5), x('b', 'Alfa', 7)]);
+  assert.deepEqual(r.map((g) => g.course), ['a', 'b']);
+  assert.deepEqual(r[1].items.map((v) => v.task.title), ['Zeta', 'Alfa', 'Act 1', 'Act 3', 'Act 10']);
+});

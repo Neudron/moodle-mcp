@@ -29,6 +29,7 @@ fn sample_state() -> State {
             shortname: "MOCK101".to_string(),
             synced_at: "2023-11-14T22:13:20Z".to_string(),
             modules: BTreeMap::new(),
+            order: BTreeMap::new(),
             sections: BTreeMap::from([("1".to_string(), "RA01".to_string())]),
             files: BTreeMap::from([(
                 "http://h.invalid/webservice/pluginfile.php/1/a.pdf".to_string(),
@@ -242,6 +243,7 @@ fn state_large_state_roundtrip() {
             shortname: "C".to_string(),
             synced_at: "2023-11-14T22:13:20Z".to_string(),
             modules: BTreeMap::new(),
+            order: BTreeMap::new(),
             sections: BTreeMap::new(),
             files,
         },

@@ -308,6 +308,11 @@ pub async fn sync_course(
             cs.modules.insert(m.id.to_string(), m.folder.clone());
         }
     }
+    for (si, section) in contents.iter().enumerate() {
+        for (mi, m) in section.modules.iter().enumerate() {
+            cs.order.insert(m.id.to_string(), (si * 1000 + mi) as i64);
+        }
+    }
     ensure_layout(&layout, 20).await?;
     write_readmes(&layout).await?;
 

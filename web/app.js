@@ -307,8 +307,13 @@ views.tauler = async () => {
     return block(key, h('details', { class: `fold g-${key}`, open }, h('summary', { class: 'grp' }, h('h2', {}, name, h('span', { class: 'n' }, items.length))), h('div', { class: 'cards' }, rows)), rows);
   };
 
-  const sections = [['late', 'Vençudes'], ['today', 'Avui'], ['week', 'Aquesta setmana'], ['later', 'Més tard']]
-    .map(([key, name]) => (by[key].length ? grp(key, name, by[key]) : null));
+  const dueOf = new Map(Object.entries(by).flatMap(([k, l]) => l.map((tv) => [tv, k])));
+  const sections = bySubject(pendingList).map(({ course, items }) => {
+    const rows = items.map((tv) => { const r = card(tv, true, true); r.dataset.due = dueOf.get(tv); return r; });
+    return block('subj', h('section', { class: 'v-grp g-subj' },
+      h('h2', { class: 'grp' }, h('span', { class: 'dot', style: { '--h': hue(course) } }), cname(course), profTxt(course) ? h('span', { class: 'dim' }, ` · ${profTxt(course)}`) : null, h('span', { class: 'n' }, items.length)),
+      h('div', { class: 'cards' }, rows)), rows);
+  });
   if (doneList.length) sections.push(fold('done', 'Lliurades', doneList, doneList.length <= 5));
   const oldEl = old.length ? fold('old', "Data de l'any passat", old, false) : null;
 
@@ -338,9 +343,8 @@ views.tauler = async () => {
     let shown = 0;
     for (const b of blocks) {
       const { q, mode: m } = b.key === 'ai' ? filterFor(all.length ? tabs.sel.tauler : 'llista', q0, mode) : { q: q0, mode };
-      const inMode = m === 'all' || m === b.key;
       let n = 0;
-      for (const r of b.rows) { const ok = inMode && (!q || r.textContent.toLowerCase().includes(q)); r.hidden = !ok; if (ok) n++; }
+      for (const r of b.rows) { const ok = (m === 'all' || (b.key === 'subj' ? r.dataset.due === m : m === b.key)) && (!q || r.textContent.toLowerCase().includes(q)); r.hidden = !ok; if (ok) n++; }
       b.el.hidden = !n;
       if (n && (q || m !== 'all')) { if (b.el.tagName === 'DETAILS') b.el.open = true; if (b.fold) b.fold.open = true; }
       shown += n;
@@ -731,6 +735,16 @@ function groupByDue(tasks, now) {
     (!d ? g.later : d < today ? g.late : d === today ? g.today : d <= wk ? g.week : g.later).push(tv);
   }
   return g;
+}
+// Courses by name, items by Moodle module order (pos) then natural title ("Act 3" < "Act 10").
+function bySubject(list) {
+  const by = {};
+  for (const tv of list) (by[tv.task.course] ||= []).push(tv);
+  const p = (tv) => tv.pos ?? Number.MAX_SAFE_INTEGER;
+  return Object.keys(by).sort((a, b) => cname(a).localeCompare(cname(b))).map((c) => ({
+    course: c,
+    items: by[c].sort((a, b) => p(a) - p(b) || a.task.title.localeCompare(b.task.title, undefined, { numeric: true })),
+  }));
 }
 // The Tauler filter only applies to the AI proposals while the Llista tab is showing.
 const filterFor = (tab, q, mode) => (tab === 'llista' ? { q, mode } : { q: '', mode: 'all' });
