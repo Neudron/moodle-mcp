@@ -83,13 +83,21 @@ const popLink = (href, attrs, ...kids) => h('a', { ...attrs, href, target: '_bla
 // intro-helpers-start
 const hasText = (html) => !!html && (/<(img|video|iframe|object)\b/i.test(html) || html.replace(/<[^>]*>|&nbsp;|\s/g, '') !== '');
 const enunciatMode = (shot, hasIntro) => shot === 'ready' ? 'shot' : shot === 'pending' ? 'wait' : hasIntro ? 'text' : 'link';
+const stmtLinks = (html) => [...new Set([...(html || '').matchAll(/href\s*=\s*["'](https?:\/\/[^"']+)["']/gi)].map((m) => m[1].replace(/&amp;/g, '&')))];
+const linkKind = (u) => {
+  let x; try { x = new URL(u); } catch { return u; }
+  const h = x.hostname.replace(/^www\./, '');
+  if (h === 'docs.google.com') return { document: 'Google Docs', presentation: 'Google Slides', spreadsheets: 'Google Sheets', forms: 'Google Forms' }[x.pathname.split('/')[1]] || 'Google Docs';
+  if (h === 'drive.google.com') return 'Google Drive';
+  return /(^|\.)youtube\.com$|^youtu\.be$/.test(h) ? 'YouTube' : h;
+};
 // intro-helpers-end
 function sandboxed(html, label) {
   if (!html || !html.trim()) return h('p', { class: 'dim' }, 'Sense descripció a Moodle.');
   const c = getComputedStyle(document.documentElement), v = (n) => c.getPropertyValue(n).trim();
   const SERIF = v('--serif'), MONO = v('--mono'), INK = v('--text'), ACC = v('--accent'), RULE = v('--line'), DIM = v('--dim'), SUNK = v('--sunk');
   const css = `<style>:root{color-scheme:${c.colorScheme}}html{background:transparent;color:${INK};font:18px/1.7 ${SERIF}}body{max-width:68ch;margin:0 auto;padding:24px 16px;overflow-wrap:anywhere}a{color:${ACC};text-underline-offset:.2em}img,video{max-width:100%;height:auto}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid ${RULE};padding:8px 16px;text-align:left}blockquote{border-left:3px solid ${ACC};margin:0;padding-left:16px;color:${DIM}}pre,code{font-family:${MONO};background:${SUNK}}h1,h2,h3,h4{font-family:${SERIF};line-height:1.3}*{max-width:100%}font,[style*=color]{color:inherit!important}[style*=background],[bgcolor]{background:transparent!important}a{color:${ACC}!important}</style>`;
-  return h('iframe', { class: 'sheet', sandbox: '', referrerpolicy: 'no-referrer', title: label || 'Contingut de Moodle', srcdoc: css + html });
+  return h('iframe', { class: 'sheet', sandbox: 'allow-popups allow-popups-to-escape-sandbox', referrerpolicy: 'no-referrer', title: label || 'Contingut de Moodle', srcdoc: '<base target=_blank>' + css + html });
 }
 
 function toast(msg, bad, undo) {
@@ -492,7 +500,8 @@ views.tasca = async (id) => {
     l.status && !isDone(tv) && h('span', { class: 'badge ' + (['revisat OK', 'lliurat'].includes(l.status) ? 'ok' : 'warn') }, LSTATUS[l.status] || l.status),
     t.source === 'ai' && aiBadge()];
 
-  const intro = sandboxed(t.body_html, `Enunciat: ${t.title}`);
+  const links = stmtLinks(t.body_html);
+  const intro = h('div', {}, sandboxed(t.body_html, `Enunciat: ${t.title}`), links.length ? [h('h2', {}, "Enllaços de l'enunciat"), h('div', { class: 'list' }, links.map((u) => popLink(u, {}, linkKind(u), ' ', h('span', { class: 'mono dim' }, u))))] : null);
   const fb = t.feedback_html ? sandboxed(t.feedback_html, 'Retroacció') : null;
   if (fb && fb.tagName === 'IFRAME') fb.classList.add('fb');
   const attRows = t.attachments.map((a) => {

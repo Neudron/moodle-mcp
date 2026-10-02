@@ -62,3 +62,17 @@ test('plainClick', () => {
   assert.equal(plainClick({ button: 1 }), false);
   assert.equal(plainClick({ button: 0, defaultPrevented: true }), false);
 });
+
+const { stmtLinks, linkKind } = new Function(`${block('intro')}; return { stmtLinks, linkKind };`)();
+test('stmtLinks/linkKind', () => {
+  const html = `<a href="https://docs.google.com/document/d/1/edit?a=1&amp;b=2">x</a><a href='https://docs.google.com/document/d/1/edit?a=1&amp;b=2'>y</a><a href="mailto:a@b">m</a><a href="https://youtu.be/x">v</a>`;
+  assert.deepEqual(stmtLinks(html), ['https://docs.google.com/document/d/1/edit?a=1&b=2', 'https://youtu.be/x']);
+  assert.deepEqual(stmtLinks(''), []);
+  assert.equal(linkKind('https://docs.google.com/document/d/1'), 'Google Docs');
+  assert.equal(linkKind('https://docs.google.com/presentation/d/1'), 'Google Slides');
+  assert.equal(linkKind('https://docs.google.com/spreadsheets/d/1'), 'Google Sheets');
+  assert.equal(linkKind('https://drive.google.com/file/d/1'), 'Google Drive');
+  assert.equal(linkKind('https://docs.google.com/forms/d/1'), 'Google Forms');
+  assert.equal(linkKind('https://www.youtube.com/watch?v=1'), 'YouTube');
+  assert.equal(linkKind('https://example.org/a'), 'example.org');
+});
