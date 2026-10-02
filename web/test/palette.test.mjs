@@ -14,3 +14,8 @@ test('filterPalette', () => {
   assert.deepEqual(filterPalette(items, 'zzz'), []);
   assert.equal(filterPalette(Array.from({ length: 100 }, (_, i) => ({ label: `a${i}` })), 'a').length, 50);
 });
+test('filterPalette groups and excludes current', () => {
+  const items = [{ label: 'Nota a', kind: 'Tasca', hash: '#t' }, { label: 'Notes', kind: 'Pàgina', hash: '#/notes' }, { label: 'Notícies', kind: 'Curs', hash: '#c' }, { label: 'x nota', kind: 'Pàgina', hash: '#/x' }];
+  assert.deepEqual(filterPalette(items, 'not', '#/notes').map((x) => x.hash), ['#/x', '#c', '#t']);
+  assert.deepEqual(filterPalette(items, '', '#/notes').map((x) => x.hash), ['#/x', '#c', '#t']);
+});

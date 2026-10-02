@@ -785,13 +785,18 @@ function gridMove(i, key, n = 42) {
 }
 // agenda-helpers-end
 // palette-helpers-start
-// Lowercase includes, prefix matches first (stable), max 50.
-function filterPalette(items, q) {
+// Lowercase includes, prefix matches first, grouped by kind rank (stable), current page excluded, max 50.
+const PAL_RANK = { 'Pàgina': 0, Curs: 1, Tasca: 2, Carpeta: 3, Fitxer: 3 };
+function filterPalette(items, q, current) {
   q = q.trim().toLowerCase();
-  if (!q) return items.slice(0, 50);
   const pre = [], inc = [];
-  for (const it of items) { const i = it.label.toLowerCase().indexOf(q); if (i === 0) pre.push(it); else if (i > 0) inc.push(it); }
-  return [...pre, ...inc].slice(0, 50);
+  for (const it of items) {
+    if (current && it.hash === current) continue;
+    const i = it.label.toLowerCase().indexOf(q);
+    if (i === 0) pre.push(it); else if (i > 0) inc.push(it);
+  }
+  const r = (it) => PAL_RANK[it.kind] ?? 9;
+  return [...pre, ...inc].map((it, i) => [it, i]).sort((x, y) => r(x[0]) - r(y[0]) || x[1] - y[1]).map((x) => x[0]).slice(0, 50);
 }
 // palette-helpers-end
 // auth-helpers-start
@@ -955,23 +960,30 @@ document.addEventListener('keydown', (e) => {
 const pal = { items: [], files: null, act: 0, shown: [], opener: null };
 const PAL_VIEWS = [['Tauler', 'tauler'], ['Calendari', 'calendari'], ['Fitxers', 'fitxers'], ['Notes', 'notes'], ['Organitza', 'organitza'], ['Fòrums', 'forums']];
 async function palItems() {
-  const go = PAL_VIEWS.map(([label, v]) => ({ label, kind: 'Vés a', hash: `#/${v}` }));
+  const go = PAL_VIEWS.map(([label, v]) => ({ label, kind: 'Pàgina', hash: `#/${v}` }));
   const cs = Object.entries(COURSES).map(([s, t]) => ({ label: t, kind: 'Curs', hash: `#/curs/${enc(s)}` }));
   let ts = []; try { ts = (await tasksOnce()).filter((tv) => tv.task.kind !== 'post').map((tv) => ({ label: tv.task.title, kind: 'Tasca', hash: `#/tasca/${enc(tv.task.id)}` })); } catch (e) { /* ignore */ }
   return [...go, ...cs, ...ts];
 }
 function palRender() {
   const inp = $('#pal-q'), ul = $('#pal-l');
-  pal.shown = filterPalette([...pal.items, ...(pal.files || [])], inp.value);
+  pal.shown = filterPalette([...pal.items, ...(pal.files || [])], inp.value, location.hash);
   pal.act = Math.min(pal.act, Math.max(0, pal.shown.length - 1));
-  ul.replaceChildren(...pal.shown.map((it, i) => h('li', { id: `pal-o${i}`, role: 'option', 'aria-selected': String(i === pal.act), onclick: () => palGo(it), onmousemove: () => { if (pal.act !== i) { pal.act = i; palMark(); } } }, h('span', {}, it.label), h('small', {}, it.kind))));
+  const G = { 'Pàgina': 'Pàgines', Curs: 'Cursos', Tasca: 'Tasques', Carpeta: 'Fitxers', Fitxer: 'Fitxers' };
+  let g;
+  ul.replaceChildren(...pal.shown.flatMap((it, i) => {
+    const li = h('li', { id: `pal-o${i}`, role: 'option', 'aria-selected': String(i === pal.act), onclick: () => palGo(it), onmousemove: () => { if (pal.act !== i) { pal.act = i; palMark(); } } }, h('span', {}, it.label));
+    const t = G[it.kind];
+    if (!t || t === g) return [li];
+    g = t; return [h('li', { role: 'presentation', class: 'pal-g' }, t), li];
+  }));
   inp.setAttribute('aria-expanded', String(pal.shown.length > 0));
   palMark();
   setText($('#pal-n'), pal.shown.length ? `${pal.shown.length} resultats` : 'Cap resultat');
 }
 function palMark() {
   const inp = $('#pal-q');
-  [...$('#pal-l').children].forEach((li, i) => { li.setAttribute('aria-selected', String(i === pal.act)); if (i === pal.act) li.scrollIntoView({ block: 'nearest' }); });
+  $('#pal-l').querySelectorAll('[role=option]').forEach((li, i) => { li.setAttribute('aria-selected', String(i === pal.act)); if (i === pal.act) li.scrollIntoView({ block: 'nearest' }); });
   if (pal.shown.length) inp.setAttribute('aria-activedescendant', `pal-o${pal.act}`); else inp.removeAttribute('aria-activedescendant');
 }
 function palGo(it) { if (!it) return; $('#pal').close(); location.hash = it.hash; }

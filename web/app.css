@@ -517,7 +517,12 @@ dialog.pal{padding:var(--s2);max-width:min(560px,calc(100vw - 32px));margin-top:
 .pal ul{list-style:none;padding:0 0 var(--s1);scrollbar-gutter:stable;margin:var(--s1) 0 0;max-height:50vh;overflow:auto;font:inherit;background:none}
 .pal li{display:flex;justify-content:space-between;gap:var(--s2);align-items:center;min-height:44px;padding:0 var(--s2);border-radius:var(--r-md);cursor:pointer;border:0}
 .pal li>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pal li small{color:var(--dim);flex:none;font-size:14px}
+.pal li.pal-g{min-height:32px;padding:var(--s2) var(--s2) 0;color:var(--dim);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;cursor:default;pointer-events:none}
+.pal-k{margin:0;padding:var(--s2) var(--s2) 0;border-top:1px solid var(--line);color:var(--dim);font-size:12px;display:flex;gap:var(--s1);align-items:center}
+.pal-k kbd{font:inherit;padding:0 6px;border:1px solid var(--line);border-radius:6px;background:var(--raised)}
+.pal-k kbd:not(:first-child){margin-left:var(--s1)}
+.pal-k kbd+kbd{margin-left:0}
+@media (max-width:599px){.pal-k{display:none}}
 .pal li[aria-selected="true"]{background:color-mix(in oklab,var(--accent) 14%,var(--raised));box-shadow:inset 3px 0 0 var(--accent)}
 @media (forced-colors:active){.pal li[aria-selected="true"]{background:Highlight;color:HighlightText;forced-color-adjust:none}}
 
