@@ -406,7 +406,7 @@ function zipEntries(buf) {
 }
 const dlHref = (path) => `/api/raw?path=${enc(path)}&dl=1`;
 const dlMoodle = (url) => `/api/moodle-file?url=${enc(url)}&dl=1`;
-const dlBtn = (href, name, cls = 'btn ghost') => h('a', { class: cls, href, download: name }, ic('file'), 'Descarrega', h('span', { class: 'sr-only' }, ` ${name}`));
+const dlBtn = (href, name, cls = 'btn ghost') => h('a', { class: cls, href, download: name }, ic('download'), 'Descarrega', h('span', { class: 'sr-only' }, ` ${name}`));
 async function preview(el, o) {
   const name = o.name || (o.path || o.moodleUrl.split(/[?#]/)[0]).split('/').pop();
   const src = o.path != null ? `/api/raw?path=${enc(o.path)}` : `/api/moodle-file?url=${enc(o.moodleUrl)}`;
@@ -712,10 +712,13 @@ async function route(o) {
   forumPill();
 }
 
+let lateN = 0;
 // Unread forum posts -> nav pill (hidden at 0).
 async function forumPill() {
   try {
-    const n = (await tasksOnce()).filter((tv) => tv.task.kind === 'post' && tv.local.status !== 'llegit').length;
+    const all = await tasksOnce(), n = all.filter((tv) => tv.task.kind === 'post' && tv.local.status !== 'llegit').length;
+    lateN = groupByDue(all.filter((tv) => tv.task.kind !== 'post' && tv.task.ai_confirmed !== false && !isDone(tv) && !isStale(tv)), Date.now() / 1000).late.length;
+    bell();
     const p = $('#forum-pill'); p.hidden = !n; p.replaceChildren(String(n), h('span', { class: 'sr-only' }, ' sense llegir')); p.title = `${n} sense llegir`;
   } catch (e) { /* ignore */ }
 }
@@ -791,6 +794,8 @@ function notifItems(a) {
   if (ap && (a.apple !== 'auth' || a.apple_auto === 'failed')) o.push({ key: `apple:${a.apple}:${a.apple_since || 0}`, text: a.apple_error && a.apple !== 'auth' ? `${ap} (${a.apple_error})` : ap, act: a.apple === 'auth' || a.apple === 'err' ? 'Torna a importar' : '' });
   return o;
 }
+// Bell = auth items + overdue count (lateN from the tasks already fetched per route, no extra request). Never dismissable, never in the banner.
+const bellItems = (a, lateN) => [...notifItems(a), ...(lateN ? [{ key: 'late', text: lateN === 1 ? '1 tasca vençuda' : `${lateN} tasques vençudes`, act: '', href: '#/tauler' }] : [])];
 const authBannerText = (a) => notifItems(a).map((i) => i.text).join(' · ');
 const visibleBanner = (items, dismissed) => items.filter((i) => !dismissed.has(i.key));
 // auth-helpers-end
@@ -807,6 +812,25 @@ function syncUi(s) {
   if (s.syncing) { clearTimeout(refreshStatus.t); refreshStatus.t = setTimeout(refreshStatus, 1500); }
   else if (refreshStatus.watch) { refreshStatus.watch = false; toast(s.error || syncSummary(s.result), !!s.error); }
 }
+function bell() {
+  const items = bellItems(refreshStatus.auth, lateN), auth = notifItems(refreshStatus.auth), keys = new Set(auth.map((i) => i.key));
+  const dis = new Set(dismissed().filter((k) => keys.has(k)));
+  if (refreshStatus.auth) try { localStorage.setItem('notif-dismissed', JSON.stringify([...dis])); } catch (e) { /* private mode */ }
+  const vis = visibleBanner(auth, dis), ab = $('#auth-banner');
+  ab.hidden = !vis.length; setText($('#auth-msg'), vis.map((i) => i.text).join(' · '));
+  $('#auth-renew').hidden = !vis.some((i) => i.act);
+  const n = $('#notif-n'); n.hidden = !items.length; setText(n, String(items.length));
+  $('#notif-b').setAttribute('aria-label', items.length ? `Notificacions (${items.length})` : 'Notificacions');
+  const l = $('#notif-l'), had = l.contains(document.activeElement); l.replaceChildren();
+  for (const i of items) {
+    const li = document.createElement('li'), t = document.createElement(i.href ? 'a' : 'span'); t.textContent = i.text; if (i.href) t.href = i.href; li.append(t);
+    if (i.act) { const b = document.createElement('button'); b.type = 'button'; b.textContent = i.act; b.addEventListener('click', renew); li.append(b); }
+    l.append(li);
+  }
+  if (!items.length) { const li = document.createElement('li'); li.textContent = 'Cap avís'; l.append(li); }
+  if (had) (l.querySelector('button, a') || $('#notif-b')).focus();
+  refreshStatus.items = auth;
+}
 async function refreshStatus() {
   try {
     const s = await api('/api/status');
@@ -818,26 +842,15 @@ async function refreshStatus() {
     const b = $('#banner'); b.hidden = !s.error; setText(b, s.error || '');
   } catch (e) { /* server restarting */ }
   try {
-    const items = notifItems(await api('/api/auth/status')), keys = new Set(items.map((i) => i.key));
-    const dis = new Set(dismissed().filter((k) => keys.has(k)));
-    try { localStorage.setItem('notif-dismissed', JSON.stringify([...dis])); } catch (e) { /* private mode */ }
-    const vis = visibleBanner(items, dis), ab = $('#auth-banner');
-    ab.hidden = !vis.length; setText($('#auth-msg'), vis.map((i) => i.text).join(' · '));
-    $('#auth-renew').hidden = !vis.some((i) => i.act);
-    const n = $('#notif-n'); n.hidden = !items.length; setText(n, String(items.length));
-    $('#notif-b').setAttribute('aria-label', items.length ? `Notificacions (${items.length})` : 'Notificacions');
-    const l = $('#notif-l'), had = l.contains(document.activeElement); l.replaceChildren();
-    for (const i of items) {
-      const li = document.createElement('li'), t = document.createElement('span'); t.textContent = i.text; li.append(t);
-      if (i.act) { const b = document.createElement('button'); b.type = 'button'; b.textContent = i.act; b.addEventListener('click', renew); li.append(b); }
-      l.append(li);
-    }
-    if (!items.length) { const li = document.createElement('li'); li.textContent = 'Cap avís'; l.append(li); }
-    if (had) (l.querySelector('button') || $('#notif-b')).focus();
-    refreshStatus.items = items;
+    refreshStatus.auth = await api('/api/auth/status'); bell();
   } catch (e) { /* ignore */ }
 }
 function dismissed() { try { return JSON.parse(localStorage.getItem('notif-dismissed')) || []; } catch (e) { return []; } }
+// Anchor the popover beside the bell (right of the sidebar), keep the CSS placement on phones.
+$('#notif').addEventListener('beforetoggle', (e) => {
+  const p = e.currentTarget, wide = matchMedia('(min-width:900px)').matches, r = $('#notif-b').getBoundingClientRect();
+  p.style.top = wide ? `${Math.max(8, r.top)}px` : ''; p.style.left = wide ? `${$('.side').getBoundingClientRect().right + 8}px` : '';
+});
 $('#auth-x').addEventListener('click', () => {
   const k = new Set(dismissed()); for (const i of refreshStatus.items || []) k.add(i.key);
   try { localStorage.setItem('notif-dismissed', JSON.stringify([...k])); } catch (e) { /* private mode */ }
@@ -873,7 +886,7 @@ $('#sync').addEventListener('click', async () => {
 });
 const curTheme = () => document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
 // Sandboxed iframes bake the theme colours into srcdoc, so a theme change re-renders the view.
-function themeChanged() { document.querySelectorAll('meta[name=theme-color]').forEach((m) => { m.media = ''; m.content = curTheme() === 'light' ? '#F3F0EA' : '#0C0C0F'; }); $('#theme-use').setAttribute('href', curTheme() === 'light' ? '#i-sun' : '#i-moon'); $('#theme').setAttribute('aria-pressed', String(curTheme() === 'dark')); window.monaco?.editor.setTheme(curTheme() === 'light' ? 'vs' : 'vs-dark'); if (route.cur && route.cur !== 'edita' && route.cur !== 'ide') route({ soft: true }); } // never tear down an open editor
+function themeChanged() { document.querySelectorAll('meta[name=theme-color]').forEach((m) => { m.media = ''; m.content = curTheme() === 'light' ? '#FFFFFF' : '#0C0C0F'; }); $('#theme-use').setAttribute('href', curTheme() === 'light' ? '#i-sun' : '#i-moon'); $('#theme').setAttribute('aria-pressed', String(curTheme() === 'dark')); window.monaco?.editor.setTheme(curTheme() === 'light' ? 'vs' : 'vs-dark'); if (route.cur && route.cur !== 'edita' && route.cur !== 'ide') route({ soft: true }); } // never tear down an open editor
 $('#theme').addEventListener('click', () => {
   const next = curTheme() === 'light' ? 'dark' : 'light';
   document.documentElement.dataset.theme = next;

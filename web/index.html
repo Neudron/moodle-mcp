@@ -32,32 +32,36 @@
   <symbol id="i-arrow-r" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
   <symbol id="i-brand" viewBox="0 0 24 24"><path d="M22 10 12 5 2 10l10 5z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/></symbol>
   <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4 10 14M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-organize" viewBox="0 0 24 24"><path d="M4 7h16M4 12h10M4 17h6"/><path d="m16 15 2 2 4-4"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></symbol>
   <symbol id="i-keys" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
 </defs></svg>
 <a class="skip" href="#main">Salta al contingut</a>
 <header class="side">
-  <div class="brand"><svg class="ic" aria-hidden="true"><use href="#i-brand"/></svg>Institut</div>
-  <div class="foot">
-    <button id="sync" type="button" class="primary" aria-label="Sincronitza Moodle" title="Sincronitza Moodle"><svg class="ic" aria-hidden="true"><use href="#i-sync"/></svg><span class="lbl">Sincronitza Moodle</span></button>
-    <span id="syncbar" hidden></span>
+  <div class="top">
+    <div class="brand"><svg class="ic" aria-hidden="true"><use href="#i-brand"/></svg>Institut</div>
     <button id="keys" class="icon" type="button" aria-label="Dreceres de teclat" title="Dreceres de teclat"><svg class="ic" aria-hidden="true"><use href="#i-keys"/></svg></button>
     <button id="notif-b" class="icon" type="button" popovertarget="notif" aria-label="Notificacions" title="Notificacions"><svg class="ic" aria-hidden="true"><use href="#i-bell"/></svg><span id="notif-n" class="pill" hidden></span></button>
     <button id="theme" class="icon" type="button" aria-label="Tema fosc" aria-pressed="true"><svg class="ic" aria-hidden="true"><use id="theme-use" href="#i-moon"/></svg></button>
-    <small id="lastsync" role="status"></small>
   </div>
   <nav class="tabs" aria-label="Seccions">
     <a href="#/tauler"><svg class="ic" aria-hidden="true"><use href="#i-tauler"/></svg><span>Tauler</span></a>
     <a href="#/calendari"><svg class="ic" aria-hidden="true"><use href="#i-calendari"/></svg><span>Calendari</span></a>
     <a href="#/fitxers"><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg><span>Fitxers</span></a>
     <a href="#/notes"><svg class="ic" aria-hidden="true"><use href="#i-notes"/></svg><span>Notes</span></a>
-    <a href="#/organitza"><svg class="ic" aria-hidden="true"><use href="#i-sync"/></svg><span>Organitza</span></a>
+    <a href="#/organitza"><svg class="ic" aria-hidden="true"><use href="#i-organize"/></svg><span>Organitza</span></a>
     <a href="#/forums"><svg class="ic" aria-hidden="true"><use href="#i-forums"/></svg><span>Fòrums</span><span class="pill" id="forum-pill" hidden></span></a>
     <button id="cursos-btn" type="button" class="cur" hidden><svg class="ic" aria-hidden="true"><use href="#i-brand"/></svg><span>Cursos</span></button>
   </nav>
   <dialog id="cursos-sheet" aria-label="Cursos"><h2>Cursos</h2><nav id="cursos-list" aria-label="Cursos"></nav><menu><button type="button" onclick="this.closest('dialog').close()">Tanca</button></menu></dialog>
   <div class="sec" aria-hidden="true" hidden>Cursos</div>
   <nav class="courses" id="courses" aria-label="Cursos" hidden></nav>
-  <div id="scan-slot"></div>
+  <div class="foot">
+    <div id="scan-slot"></div>
+    <button id="sync" type="button" class="primary" aria-label="Sincronitza Moodle" title="Sincronitza Moodle"><svg class="ic" aria-hidden="true"><use href="#i-sync"/></svg><span class="lbl">Sincronitza Moodle</span></button>
+    <span id="syncbar" hidden></span>
+    <small id="lastsync" role="status"></small>
+  </div>
   <p id="live" class="sr-only" role="status"></p>
   <div id="toast" class="toast">
     <p id="toast-s" role="status"></p>

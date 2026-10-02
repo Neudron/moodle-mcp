@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 const src = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const block = (n) => src.split(`// ${n}-helpers-start`)[1].split(`// ${n}-helpers-end`)[0];
-const { authBannerText, notifItems, visibleBanner } = new Function(`${block('auth')}; return { authBannerText, notifItems, visibleBanner };`)();
+const { authBannerText, notifItems, visibleBanner, bellItems } = new Function(`${block('auth')}; return { authBannerText, notifItems, visibleBanner, bellItems };`)();
 
 test('authBannerText', () => {
   assert.equal(authBannerText({ moodle: 'ok', apple: 'ok' }), '');
@@ -75,4 +75,16 @@ test('stmtLinks/linkKind', () => {
   assert.equal(linkKind('https://docs.google.com/forms/d/1'), 'Google Forms');
   assert.equal(linkKind('https://www.youtube.com/watch?v=1'), 'YouTube');
   assert.equal(linkKind('https://example.org/a'), 'example.org');
+});
+
+test('bellItems adds a non-dismissable overdue item', () => {
+  const ok = { moodle: 'ok', apple: 'ok' };
+  assert.deepEqual(bellItems(ok, 0), []);
+  const [it] = bellItems(ok, 3);
+  assert.equal(it.href, '#/tauler');
+  assert.match(it.text, /3/);
+  assert.equal(it.act, '');
+  const all = bellItems({ moodle: 'expired', apple: 'ok' }, 1);
+  assert.equal(all.length, 2);
+  assert.equal(all[1].key, 'late');
 });
