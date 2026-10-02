@@ -90,8 +90,6 @@ h3{margin:var(--s2) 0 var(--s1)}
 /* shell: main */
 .col{min-width:0;display:flex;flex-direction:column}
 main{padding:var(--s4) var(--s4) 96px;width:100%;margin-inline:auto;max-width:1040px;min-width:0}
-main[data-view=tauler]{max-width:800px}
-main[data-view=calendari],main[data-view=notes]{max-width:1120px}
 main.edit{max-width:none;padding:0}
 .stack{position:sticky;top:var(--side-h);z-index:var(--z-stack)}
 .banner.auth{display:flex;align-items:center;gap:var(--s2);font-size:14px;padding:var(--s1) var(--s3)}.banner.auth span{flex:1 1 20ch;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.banner.auth button{flex:none}
