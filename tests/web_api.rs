@@ -1022,3 +1022,32 @@ async fn to_pdf_converts_linked_docx_next_to_it() {
     );
     assert_eq!(go(&d).send().await.unwrap().status(), 400);
 }
+
+#[tokio::test]
+async fn raw_dl_is_attachment() {
+    let (base, _app, _m, root) = start("rawdl").await;
+    std::fs::write(root.join("Mapa IT·OT.txt"), "hola").unwrap();
+    let c = reqwest::Client::new();
+    let q = moodle_mcp::web::tasks::pct("Mapa IT·OT.txt");
+    let d = |r: reqwest::Response| {
+        r.headers()["content-disposition"]
+            .to_str()
+            .unwrap()
+            .to_string()
+    };
+    let r = c
+        .get(format!("{base}/api/raw?path={q}&dl=1"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        d(r),
+        "attachment; filename=\"Mapa IT_OT.txt\"; filename*=UTF-8''Mapa%20IT%C2%B7OT.txt"
+    );
+    let r = c
+        .get(format!("{base}/api/raw?path={q}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(d(r), "inline");
+}

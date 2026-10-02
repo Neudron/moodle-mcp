@@ -788,7 +788,34 @@ fn parse_range(h: &str, size: u64) -> Option<(u64, u64)> {
     (s <= e && e < size).then_some((s, e.min(s + RAW_MAX - 1)))
 }
 
-async fn raw(State(app): S, Query(q): Query<PathQ>, req_h: HeaderMap) -> R<Response> {
+#[derive(Deserialize)]
+pub struct RawQ {
+    path: String,
+    dl: Option<u8>,
+}
+
+/// `attachment` Content-Disposition (ASCII fallback + RFC 5987 UTF-8 name) when `dl=1`, else `inline`.
+fn disposition(dl: Option<u8>, name: &str) -> String {
+    if dl != Some(1) {
+        return "inline".into();
+    }
+    let ascii: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() && !matches!(c, '"' | '\\' | '%') || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!(
+        "attachment; filename=\"{ascii}\"; filename*=UTF-8''{}",
+        super::tasks::pct(name)
+    )
+}
+
+async fn raw(State(app): S, Query(q): Query<RawQ>, req_h: HeaderMap) -> R<Response> {
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
     let nf = |e: std::io::Error| ApiErr(StatusCode::NOT_FOUND, e.to_string());
     let p = files::jail(std::path::Path::new(&app.root), &q.path).map_err(forbid)?;
@@ -824,9 +851,13 @@ async fn raw(State(app): S, Query(q): Query<PathQ>, req_h: HeaderMap) -> R<Respo
     let ct = files::mime(&p);
     h.insert(header::CONTENT_TYPE, ct.parse().expect("static mime"));
     h.insert("x-content-type-options", "nosniff".parse().expect("static"));
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
     h.insert(
         header::CONTENT_DISPOSITION,
-        "inline".parse().expect("static"),
+        disposition(q.dl, &name).parse().expect("ascii"),
     );
     if ct.starts_with("text/html") || ct.starts_with("image/svg") {
         h.insert(
@@ -840,6 +871,22 @@ async fn raw(State(app): S, Query(q): Query<PathQ>, req_h: HeaderMap) -> R<Respo
 #[derive(Deserialize)]
 pub struct UrlQ {
     url: String,
+    dl: Option<u8>,
+}
+fn unpct(s: &str) -> String {
+    let b = s.as_bytes();
+    let (mut o, mut i) = (Vec::new(), 0);
+    while i < b.len() {
+        let hex = (b[i] == b'%')
+            .then(|| {
+                s.get(i + 1..i + 3)
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+            })
+            .flatten();
+        o.push(hex.unwrap_or(b[i]));
+        i += if hex.is_some() { 3 } else { 1 };
+    }
+    String::from_utf8_lossy(&o).into_owned()
 }
 async fn moodle_file(State(app): S, Query(q): Query<UrlQ>) -> R<Response> {
     let bytes = app.moodle.download(&q.url).await?;
@@ -848,11 +895,14 @@ async fn moodle_file(State(app): S, Query(q): Query<UrlQ>) -> R<Response> {
     ));
     // Remote bytes on our origin: sandbox html/svg (blocks script); PDFs must not be sandboxed or Chrome will not render them.
     let sandbox = ct.starts_with("text/html") || ct.starts_with("image/svg");
+    let name = q.url.split(['?', '#']).next().unwrap_or("");
+    let name = name.rsplit('/').next().unwrap_or("");
+    let name = unpct(name);
     Ok((
         [
-            (header::CONTENT_TYPE, ct),
-            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            (header::CONTENT_DISPOSITION, "inline"),
+            (header::CONTENT_TYPE, ct.to_string()),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
+            (header::CONTENT_DISPOSITION, disposition(q.dl, &name)),
         ],
         AppendHeaders(sandbox.then_some((header::CONTENT_SECURITY_POLICY, "sandbox"))),
         bytes,

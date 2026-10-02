@@ -351,6 +351,9 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
 .v-curs .list .fn{flex:1;min-width:0}
 .v-curs details .list a{background:transparent;border-radius:0}
 .v-curs details .list li+li a{border-top:1px solid var(--line)}
+.v-curs details .list li{display:flex;align-items:center;gap:var(--s1)}
+.v-curs details .list li>a:first-child{flex:1;min-width:0}
+.v-curs details .list li>a.btn{flex:none}
 .v-curs .list .mono{margin-left:auto;flex:none;font-size:14px}
 .v-curs h1{display:flex;align-items:center;gap:var(--s1)}
 .v-curs .sub{margin:0 0 var(--s3)}

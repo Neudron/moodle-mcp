@@ -376,13 +376,16 @@ function zipEntries(buf) {
   }
   return out;
 }
+const dlHref = (path) => `/api/raw?path=${enc(path)}&dl=1`;
+const dlMoodle = (url) => `/api/moodle-file?url=${enc(url)}&dl=1`;
+const dlBtn = (href, name, cls = 'btn ghost') => h('a', { class: cls, href, download: name }, ic('file'), 'Descarrega', h('span', { class: 'sr-only' }, ` ${name}`));
 async function preview(el, o) {
   const name = o.name || (o.path || o.moodleUrl.split(/[?#]/)[0]).split('/').pop();
   const src = o.path != null ? `/api/raw?path=${enc(o.path)}` : `/api/moodle-file?url=${enc(o.moodleUrl)}`;
   const k = kindOf(name), big = o.size > 2e6;
   const pv = `/api/preview?${o.path != null ? 'path' : 'moodle'}=${enc(o.path ?? o.moodleUrl)}`; // office -> PDF, .url -> target + scanner text
   const fail = (t, b) => h('div', { class: 'pv-none' }, h('p', {}, t), b);
-  const dl = h('a', { class: 'btn', href: src, download: name }, ic('file'), 'Descarrega');
+  const dl = dlBtn(`${src}&dl=1`, name, 'btn');
   let node;
   try {
     if (k === 'img') node = h('img', { class: 'v-img', src, alt: name });
@@ -396,7 +399,7 @@ async function preview(el, o) {
       const es = zipEntries(await (await fetch(src)).arrayBuffer());
       node = es.length ? h('div', { class: 'tablewrap', role: 'region', tabindex: 0, 'aria-label': `Contingut de ${name}` },
         h('table', {}, h('caption', { class: 'sr-only' }, `Entrades de ${name}`),
-          h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Nom'), h('th', { scope: 'col', class: 'num' }, 'Mida'))),
+          h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Nom'), h('th', { scope: 'col', class: 'num' }, 'Mida'), h('th', { scope: 'col' }, 'Accions'))),
           h('tbody', {}, es.map((e) => h('tr', {}, h('td', { class: 'mono' }, e.name), h('td', { class: 'num' }, e.name.endsWith('/') ? '' : fsize(e.size))))))) : fail('Zip buit o il·legible.', dl);
     } else node = fail(big ? 'Fitxer massa gran per previsualitzar.' : "Aquest tipus de fitxer no es pot previsualitzar. Descarrega'l per obrir-lo.", dl);
   } catch (e) { node = fail(`No s'ha pogut carregar: ${e.message}`, dl); }
@@ -484,7 +487,7 @@ views.tasca = async (id) => {
     const box = h('div', { class: 'v-preview' });
     return h('details', { class: 'att', ontoggle: (e) => { if (e.target.open && !box.hasChildNodes()) preview(box, { moodleUrl: a.fileurl, name: a.filename, size: a.filesize }); } },
       h('summary', { class: 'row v-file' }, ic('file'), h('span', { class: 't' }, a.filename), a.filesize != null && h('span', { class: 'mono dim' }, fsize(a.filesize))),
-      box, h('a', { class: 'btn ghost', href: `/api/moodle-file?url=${enc(a.fileurl)}`, download: a.filename }, 'Descarrega'));
+      box, dlBtn(dlMoodle(a.fileurl), a.filename));
   });
   const shotUrl = () => `/api/shot/${enc(id)}?t=${Date.now()}`;
   const enunciat = () => {
@@ -513,7 +516,7 @@ views.tasca = async (id) => {
       const box = h('div', { class: 'v-preview' });
       lazyPreview(box, { path: f });
       return h('section', { class: 'v-item', 'aria-label': f },
-        h('h3', { class: 'mono' }, f), h('div', { class: 'field-row' }, fileExtras.map((x) => x({ rel: f })),
+        h('h3', { class: 'mono' }, f), h('div', { class: 'field-row' }, dlBtn(dlHref(f), f.split('/').pop()), fileExtras.map((x) => x({ rel: f })),
           f.startsWith('submit/') && h('button', { type: 'button', class: 'btn ghost', onclick: () => metaDialog(id, f, l.owners || {}) }, 'Nom i autor…'),
           l.owners?.[f] && h('span', { class: 'dim' }, `Propietari: ${l.owners[f]}`)), box);
     }) : h('p', { class: 'dim' }, `Cap fitxer vinculat. Carpeta suggerida: ${tv.submit_dir}`),
@@ -524,7 +527,7 @@ views.tasca = async (id) => {
       lazyPreview(box, { moodleUrl: f.fileurl, name: f.filename, size: f.filesize });
       return h('section', { class: 'v-item', 'aria-label': f.filename },
         h('h3', {}, f.filename, ' ', h('span', { class: 'mono dim' }, fsize(f.filesize))),
-        h('div', { class: 'field-row' }, h('a', { class: 'btn ghost', href: `/api/moodle-file?url=${enc(f.fileurl)}`, download: f.filename }, 'Descarrega')), box);
+        h('div', { class: 'field-row' }, dlBtn(dlMoodle(f.fileurl), f.filename)), box);
     }) : empty('Res lliurat', "Encara no hi ha cap fitxer entregat a Moodle."));
 
   const main = h('div', { class: 'v-main' }, tabs('tasca', [
@@ -930,7 +933,7 @@ views.curs = async (short) => {
       s.mods.map(([m, fs]) => {
         return fs.length ? [m.name === 'Fitxers' ? null : h('h3', {}, m.name), h('ul', { class: 'list' },
           fs.map((f) => h('li', {}, h('a', { href: `#/fitxers/${enc(f.rel)}` },
-            ic('file'), h('span', { class: 'fn' }, f.name), h('span', { class: 'mono dim' }, fsize(f.size))))))] : null;
+            ic('file'), h('span', { class: 'fn' }, f.name), h('span', { class: 'mono dim' }, fsize(f.size))), dlBtn(dlHref(f.rel), f.name))))] : null;
       }))) : empty('Sense continguts', 'Sincronitza per carregar-los.'));
   return h('section', { class: 'v-curs' },
     h('h1', {}, h('span', { class: 'dot lg', style: { '--h': hue(short) } }), ' ', c.title),
@@ -956,21 +959,21 @@ views.fitxers = async (...parts) => {
       es.length
         ? h('div', { class: 'tablewrap', role: 'region', 'aria-label': 'Llista de fitxers' },
             h('table', {}, h('caption', { class: 'sr-only' }, `Contingut de ${rel || '~/smx'}`),
-              h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Nom'), h('th', { scope: 'col', class: 'num' }, 'Mida'))),
+              h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Nom'), h('th', { scope: 'col', class: 'num' }, 'Mida'), h('th', { scope: 'col' }, 'Accions'))),
               h('tbody', {}, es.map((e) => h('tr', {},
                 h('td', {}, h('a', { class: 'v-fname', href: `#/fitxers/${enc(e.rel)}` },
                   h('span', { class: e.is_dir ? 'v-glyph dir' : 'v-glyph' }, e.is_dir ? ic('folder') : ic('file')),
                   h('span', {}, e.name), e.is_dir ? h('span', { class: 'sr-only' }, ' (carpeta)') : null)),
-                h('td', { class: 'num' }, e.is_dir ? '' : fsize(e.size)))))))
+                h('td', { class: 'num' }, e.is_dir ? '' : fsize(e.size)),
+                h('td', {}, e.is_dir ? null : dlBtn(dlHref(e.rel), e.name)))))))
         : empty('Carpeta buida', 'No hi ha cap fitxer aquí.'));
   }
-  const raw = `/api/raw?path=${enc(rel)}`;
   const name = rel.split('/').pop();
   const body = h('div', {});
   preview(body, { path: rel, name, size: info.size });
   return h('section', { class: 'v-fitxers' }, h('h1', {}, name), crumbs,
     h('div', { class: 'actions' },
-      h('a', { class: 'btn', href: raw, download: name }, 'Descarrega'),
+      dlBtn(dlHref(rel), name, 'btn'),
       fileExtras.map((f) => f(info)),
       h('span', { class: 'mono dim' }, fsize(info.size))),
     h('div', { class: 'v-preview' }, body));
