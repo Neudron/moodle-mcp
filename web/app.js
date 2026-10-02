@@ -103,7 +103,7 @@ const linkKind = (u) => {
 function sandboxed(html, label) {
   if (!html || !html.trim()) return h('p', { class: 'dim' }, 'Sense descripció a Moodle.');
   const c = getComputedStyle(document.documentElement), v = (n) => c.getPropertyValue(n).trim();
-  const SERIF = v('--serif'), MONO = v('--mono'), INK = v('--text'), ACC = v('--accent'), RULE = v('--line'), DIM = v('--dim'), SUNK = v('--sunk');
+  const SERIF = v('--sans'), MONO = v('--mono'), INK = v('--text'), ACC = v('--accent'), RULE = v('--line'), DIM = v('--dim'), SUNK = v('--sunk');
   const css = `<style>:root{color-scheme:${c.colorScheme}}html{background:transparent;color:${INK};font:18px/1.7 ${SERIF}}body{max-width:68ch;margin:0 auto;padding:24px 16px;overflow-wrap:anywhere}a{color:${ACC};text-underline-offset:.2em}img,video{max-width:100%;height:auto}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid ${RULE};padding:8px 16px;text-align:left}blockquote{border-left:3px solid ${ACC};margin:0;padding-left:16px;color:${DIM}}pre,code{font-family:${MONO};background:${SUNK}}h1,h2,h3,h4{font-family:${SERIF};line-height:1.3}*{max-width:100%}font,[style*=color]{color:inherit!important}[style*=background],[bgcolor]{background:transparent!important}a{color:${ACC}!important}</style>`;
   return h('iframe', { class: 'sheet', sandbox: 'allow-popups allow-popups-to-escape-sandbox', referrerpolicy: 'no-referrer', title: label || 'Contingut de Moodle', srcdoc: '<base target=_blank>' + css + html });
 }
@@ -519,7 +519,7 @@ views.tasca = async (id) => {
   const attRows = t.attachments.map((a) => {
     const box = h('div', { class: 'v-preview' });
     return h('details', { class: 'att', ontoggle: (e) => { if (e.target.open && !box.hasChildNodes()) preview(box, { moodleUrl: a.fileurl, name: a.filename, size: a.filesize }); } },
-      h('summary', { class: 'row v-file' }, ic('file'), h('span', { class: 't' }, a.filename), a.filesize != null && h('span', { class: 'mono dim' }, fsize(a.filesize))),
+      h('summary', { class: 'row v-file' }, ic('file'), h('span', { class: 't' }, a.filename), a.filesize != null && h('span', { class: 'num dim' }, fsize(a.filesize))),
       box, dlBtn(dlMoodle(a.fileurl), a.filename));
   });
   const shotUrl = () => `/api/shot/${enc(id)}?t=${Date.now()}`;
@@ -561,7 +561,7 @@ views.tasca = async (id) => {
       const box = h('div', { class: 'v-preview' });
       lazyPreview(box, { moodleUrl: f.fileurl, name: f.filename, size: f.filesize });
       return h('section', { class: 'v-item', 'aria-label': f.filename },
-        h('h3', {}, f.filename, ' ', h('span', { class: 'mono dim' }, fsize(f.filesize))),
+        h('h3', {}, f.filename, ' ', h('span', { class: 'num dim' }, fsize(f.filesize))),
         h('div', { class: 'field-row' }, dlBtn(dlMoodle(f.fileurl), f.filename)), box);
     }) : empty('Res lliurat', "Encara no hi ha cap fitxer entregat a Moodle."));
 
@@ -998,7 +998,7 @@ views.curs = async (short) => {
       s.mods.map(([m, fs]) => {
         return fs.length ? [m.name === 'Fitxers' ? null : h('h3', {}, m.name), h('ul', { class: 'list' },
           fs.map((f) => h('li', {}, h('a', { href: `#/fitxers/${enc(f.rel)}` },
-            ic('file'), h('span', { class: 'fn' }, f.name), h('span', { class: 'mono dim' }, fsize(f.size))), dlBtn(dlHref(f.rel), f.name))))] : null;
+            ic('file'), h('span', { class: 'fn' }, f.name), h('span', { class: 'num dim' }, fsize(f.size))), dlBtn(dlHref(f.rel), f.name))))] : null;
       }))) : empty('Sense continguts', 'Sincronitza per carregar-los.'));
   return h('section', { class: 'v-curs' },
     h('h1', {}, h('span', { class: 'dot lg', style: { '--h': hueOf(short) } }), ' ', c.title),
@@ -1041,7 +1041,7 @@ views.fitxers = async (...parts) => {
     h('div', { class: 'actions' },
       dlBtn(dlHref(rel), name, 'btn'),
       fileExtras.map((f) => f(info)),
-      h('span', { class: 'mono dim' }, fsize(info.size))),
+      h('span', { class: 'num dim' }, fsize(info.size))),
     h('div', { class: 'v-preview' }, body));
 };
 
