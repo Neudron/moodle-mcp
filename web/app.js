@@ -69,6 +69,10 @@ const LSTATUS = { 'per revisar': 'Per revisar', 'revisat OK': 'Revisada', lliura
 const aiBadge = () => h('span', { class: 'badge ai' }, 'IA');
 let COURSES = {}; // shortname -> title
 const cname = (short) => COURSES[short] || short;
+let TEACH = {}; // shortname -> [teacher names]
+let DIRS = {}; // folder name -> shortname
+const prof = (short) => (TEACH[short] || []).join(', ');
+const profTxt = (short) => (prof(short) ? `Prof.: ${prof(short)}` : null);
 const setText = (el, v) => { if (el.textContent !== v) el.textContent = v; }; // live regions re-announce on every write
 const enc = encodeURIComponent;
 
@@ -175,7 +179,7 @@ function card(tv, hideCourse, quick) {
   const row = h('a', { class: 'row' + (done ? ' done' : !isStale(tv) && left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}` },
     h('span', { class: 'dot', style: { '--h': hue(t.course) } }),
     h('span', { class: 't', title: t.title }, t.title),
-    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hue(t.course) } }, cname(t.course)), t.kind === 'assign' || t.kind === 'ai' ? null : h('span', {}, KIND[t.kind] || t.kind), badges),
+    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hue(t.course) } }, cname(t.course)), profTxt(t.course) && !hideCourse ? h('span', {}, profTxt(t.course)) : null, t.kind === 'assign' || t.kind === 'ai' ? null : h('span', {}, KIND[t.kind] || t.kind), badges),
     dueChip(tv));
   if (!quick || done) return row;
   // Not inside the <a>: a button in a link is invalid. Commit is deferred so the undo toast is real.
@@ -563,6 +567,7 @@ views.tasca = async (id) => {
     h('h1', {}, t.title),
     h('div', { class: 'meta' },
       h('a', { class: 'chip cn', style: { '--h': hue(t.course) }, href: `#/curs/${enc(t.course)}` }, h('span', { class: 'dot', style: { '--h': hue(t.course) } }), cname(t.course)),
+      profTxt(t.course) ? h('span', { class: 'dim' }, profTxt(t.course)) : null,
       dueChip(tv, true), badges),
     h('div', { class: 'split' }, h('div', { class: 'grid' }, main, rail)));
 };
@@ -790,6 +795,7 @@ async function refreshStatus() {
     setText($('#lastsync'), s.syncing ? syncProgress(s.progress) : s.last_sync ? `Sincronitzat ${syncAt(s.last_sync)}` : 'Mai sincronitzat');
     syncUi(s);
     const prev = refreshStatus.ls; refreshStatus.ls = s.last_sync;
+    if (!s.syncing && prev !== undefined && prev !== s.last_sync) await loadCourses().catch(() => {});
     if (!s.syncing && shouldSoftRoute(prev, s.last_sync, document.activeElement?.tagName, route.cur)) route({ soft: true });
     const b = $('#banner'); b.hidden = !s.error; setText(b, s.error || '');
   } catch (e) { /* server restarting */ }
@@ -831,6 +837,8 @@ $('#auth-renew').addEventListener('click', renew);
 async function loadCourses() {
   const cs = await api('/api/courses');
   COURSES = Object.fromEntries(cs.map((c) => [c.shortname, c.title]));
+  TEACH = Object.fromEntries(cs.map((c) => [c.shortname, c.teachers || []]));
+  DIRS = Object.fromEntries(cs.map((c) => [c.dir, c.shortname]));
   $('#courses').hidden = $('.side .sec').hidden = !cs.length;
   $('#courses').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, title: c.title }, h('span', { class: 'dot', style: { '--h': hue(c.shortname) } }), h('span', { class: 'nm' }, c.title))));
   $('#cursos-list').replaceChildren(...cs.map((c) => h('a', { href: `#/curs/${enc(c.shortname)}`, onclick: () => $('#cursos-sheet').close() }, h('span', { class: 'dot', style: { '--h': hue(c.shortname) } }), h('span', { class: 'nm' }, c.title))));
@@ -976,6 +984,7 @@ views.curs = async (short) => {
       }))) : empty('Sense continguts', 'Sincronitza per carregar-los.'));
   return h('section', { class: 'v-curs' },
     h('h1', {}, h('span', { class: 'dot lg', style: { '--h': hue(short) } }), ' ', c.title),
+    profTxt(short) ? h('p', { class: 'sub' }, profTxt(short)) : null,
     tasks.length ? h('p', { class: 'sub' }, bar(nDone, tasks.length, `Tasques lliurades de ${c.title}`, '', `${nDone} de ${tasks.length} lliurades`)) : null,
     h('div', { class: 'two' }, tasksCol, contents));
 };
@@ -1002,7 +1011,7 @@ views.fitxers = async (...parts) => {
               h('tbody', {}, es.map((e) => h('tr', {},
                 h('td', {}, h('a', { class: 'v-fname', href: `#/fitxers/${enc(e.rel)}` },
                   h('span', { class: e.is_dir ? 'v-glyph dir' : 'v-glyph' }, e.is_dir ? ic('folder') : ic('file')),
-                  h('span', {}, e.name), e.is_dir ? h('span', { class: 'sr-only' }, ' (carpeta)') : null)),
+                  h('span', {}, e.name, !rel && e.is_dir && prof(DIRS[e.name]) ? ` (${prof(DIRS[e.name])})` : ''), e.is_dir ? h('span', { class: 'sr-only' }, ' (carpeta)') : null)),
                 h('td', { class: 'num' }, e.is_dir ? '' : fsize(e.size)),
                 h('td', {}, e.is_dir ? null : dlBtn(dlHref(e.rel), e.name)))))))
         : empty('Carpeta buida', 'No hi ha cap fitxer aquí.'));

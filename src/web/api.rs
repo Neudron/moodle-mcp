@@ -745,6 +745,11 @@ pub(crate) fn course_short_of(root: &std::path::Path, dir: &str) -> String {
 
 async fn courses(State(app): S) -> R<Json<Vec<Value>>> {
     let root = std::path::Path::new(&app.root);
+    let teachers: Value = app
+        .db
+        .kv_get("course_teachers")?
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_else(|| json!({}));
     let mut out = Vec::new();
     for e in files::list(root, "").map_err(forbid)? {
         if !e.is_dir {
@@ -754,8 +759,13 @@ async fn courses(State(app): S) -> R<Json<Vec<Value>>> {
             continue;
         };
         let (title, id) = course_meta(&md, &e.name);
+        let short = course_short_of(root, &e.name);
+        let t = teachers
+            .get(short.as_str())
+            .cloned()
+            .unwrap_or_else(|| json!([]));
         out.push(
-            json!({"shortname": course_short_of(root, &e.name), "title": title, "course_id": id}),
+            json!({"shortname": short, "title": title, "course_id": id, "teachers": t, "dir": e.name}),
         );
     }
     Ok(Json(out))

@@ -243,6 +243,28 @@ async fn sync_all_inner(
         .await?,
     )
     .map_err(|e| CoreError::Invalid(e.to_string()))?;
+    let ids = courses.iter().map(|c| c.id.to_string()).collect::<Vec<_>>();
+    let tc = ws(
+        m,
+        "core_course_get_courses_by_field",
+        &[("field", "ids".into()), ("value", ids.join(","))],
+    )
+    .await?;
+    if let Some(list) = tc["courses"].as_array() {
+        let teachers: serde_json::Map<String, Value> = list
+            .iter()
+            .filter_map(|c| {
+                let names: Vec<&str> = c["contacts"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|x| x["fullname"].as_str())
+                    .collect();
+                Some((c["shortname"].as_str()?.to_string(), json!(names)))
+            })
+            .collect();
+        db.kv_set("course_teachers", &Value::Object(teachers).to_string())
+            .map_err(CoreError::Other)?;
+    }
     let base = m.base().to_string();
     let mut out = Vec::new();
     let mut bad: HashSet<i64> = HashSet::new();

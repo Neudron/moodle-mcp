@@ -372,6 +372,8 @@ pub fn web_ws(function: &str) -> Option<serde_json::Value> {
         "gradereport_user_get_grade_items" => {
             json!({"usergrades": [{"courseid": COURSE_ID, "gradeitems": [{"itemname": "M4_A1_A_RA2", "gradeformatted": "8,50", "percentageformatted": "85,00 %"}]}]})
         }
+        "core_course_get_courses_by_field" => json!({"courses": [
+            {"id": COURSE_ID, "shortname": "MOCK101", "contacts": [{"id": 9, "fullname": "Anna Prof"}]}]}),
         "mod_assign_save_submission" => json!([]),
         "mod_assign_submit_for_grading" => json!([]),
         _ => return None,

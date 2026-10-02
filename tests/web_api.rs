@@ -220,6 +220,29 @@ async fn sync_then_tasks_and_status() {
 }
 
 #[tokio::test]
+async fn courses_list_teachers_after_sync() {
+    let (base, _app, _m, _root) = start("teach").await;
+    let c = reqwest::Client::new();
+    sync_wait(&c, &base).await;
+    let v: serde_json::Value = c
+        .get(format!("{base}/api/courses"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let m = v
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["shortname"] == "MOCK101")
+        .unwrap();
+    assert_eq!(m["teachers"][0], "Anna Prof");
+    assert!(m["dir"].is_string());
+}
+
+#[tokio::test]
 async fn raw_serves_accented_path_and_refuses_dotfiles() {
     let (base, _app, _m, root) = start("raw").await;
     std::fs::write(root.join(".env"), "X=1").unwrap();
