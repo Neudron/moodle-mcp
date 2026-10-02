@@ -1051,3 +1051,28 @@ async fn raw_dl_is_attachment() {
         .unwrap();
     assert_eq!(d(r), "inline");
 }
+
+#[tokio::test]
+async fn put_writes_links_never_overwrites_and_rejects_bad_names() {
+    let (base, _app, _m, root) = start("put").await;
+    let c = reqwest::Client::new();
+    sync_wait(&c, &base).await;
+    let put = |name: &'static str| {
+        post(&c, &base, "/api/tasks/assign:7/put")
+            .query(&[("name", name)])
+            .body("hola")
+            .send()
+    };
+    let r = put("Doc.docx").await.unwrap();
+    assert!(r.status().is_success());
+    let l: serde_json::Value = r.json().await.unwrap();
+    let f = l["files"][0].as_str().unwrap().to_string();
+    assert!(f.ends_with("/Doc_amin.docx"), "{f}");
+    assert_eq!(std::fs::read(root.join(&f)).unwrap(), b"hola");
+    let l: serde_json::Value = put("Doc.docx").await.unwrap().json().await.unwrap();
+    assert!(l["files"][1]
+        .as_str()
+        .unwrap()
+        .ends_with("/Doc-2_amin.docx"));
+    assert_eq!(put("../a").await.unwrap().status(), 400);
+}

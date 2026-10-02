@@ -614,7 +614,23 @@ async function metaDialog(id, f, owners) {
   catch (e) { toast(e.message, true); }
 }
 function linkFiles(id) {
-  return h('div', { class: 'fld v-link' }, h('button', { type: 'button', id: 'vincula', onclick: () => openPicker(id) }, ic('folder'), 'Tria un fitxer…'));
+  const st = h('p', { class: 'dim hint', role: 'status' });
+  const inp = h('input', { type: 'file', multiple: true, class: 'sr-only', id: 'puja-i', onchange: async () => {
+    const fs = [...inp.files];
+    try {
+      for (const [i, f] of fs.entries()) {
+        setText(st, `Pujant ${f.name} (${i + 1}/${fs.length})…`);
+        try {
+          const r = await fetch(`/api/tasks/${enc(id)}/put?name=${encodeURIComponent(f.name)}`, { method: 'POST', headers: { 'x-neu': '1' }, body: f });
+          if (!r.ok) throw new Error(await r.text() || r.statusText);
+        } catch (e) { const m = `Error amb ${f.name}: ${e.message}`; setText(st, m); toast(m, true); return; }
+      }
+      setText(st, fs.length === 1 ? '1 fitxer pujat' : `${fs.length} fitxers pujats`);
+    } finally { inp.value = ''; await route({ soft: true }); }
+  } });
+  return h('div', { class: 'fld v-link' },
+    h('button', { type: 'button', id: 'vincula', onclick: () => openPicker(id) }, ic('folder'), 'Tria un fitxer de la torre…'),
+    h('label', { class: 'btn', for: 'puja-i' }, ic('upload'), "Puja des d'aquest dispositiu…"), inp, st);
 }
 
 function markNav() {

@@ -41,7 +41,7 @@ main,dialog,.toast,.banner,.side .courses{overflow-wrap:anywhere}
 h1,h2,h3,p,ul,menu,dl,dd{margin:0}
 ul,menu{padding:0;list-style:none}
 a{color:var(--accent);text-underline-offset:.2em}
-:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+:focus-visible,label.btn:has(+ input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
 main:focus,h1:focus{outline:none}
 ::placeholder{color:var(--dim);opacity:1}
 .ic{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}

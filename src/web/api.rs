@@ -4,8 +4,8 @@ use crate::web::{
     files, readme, tasks, App,
 };
 use axum::{
-    body::Body,
-    extract::{Path, Query, Request, State},
+    body::{Body, Bytes},
+    extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{header, HeaderMap, StatusCode},
     middleware::Next,
     response::{AppendHeaders, IntoResponse, Response},
@@ -115,6 +115,10 @@ pub fn routes() -> Router<Arc<App>> {
         .route("/api/me", get(me))
         .route("/api/tasks/{id}/ai", post(set_ai))
         .route("/api/tasks/{id}/upload", post(upload_files))
+        .route(
+            "/api/tasks/{id}/put",
+            post(put_file).layer(DefaultBodyLimit::max(100 << 20)),
+        )
         .route("/api/tasks/{id}/submit", post(submit))
         .route("/api/browse", get(browse))
         .route("/api/tasks/{id}/pick", post(pick))
@@ -531,6 +535,47 @@ async fn submit(State(app): S, Path(id): Path<String>) -> R<Json<Value>> {
 async fn browse(Query(q): Query<PathQ>) -> R<Json<Value>> {
     let es = files::list(&files::home(), &q.path).map_err(forbid)?;
     Ok(Json(json!({"rel": q.path, "entries": es})))
+}
+
+#[derive(Deserialize)]
+struct PutQ {
+    name: String,
+}
+/// Uploads a client-side file (raw body) into the task's submit folder as `<name>_amin.<ext>`; never overwrites.
+async fn put_file(
+    State(app): S,
+    Path(id): Path<String>,
+    Query(q): Query<PutQ>,
+    body: Bytes,
+) -> R<Json<Local>> {
+    let n = q.name.trim();
+    if n.is_empty() || n.contains(['/', '\\', '\0']) || n.starts_with('.') || n.len() > 200 {
+        return Err(bad("nom no vàlid"));
+    }
+    let t = app
+        .db
+        .task(&id)?
+        .ok_or(ApiErr(StatusCode::NOT_FOUND, "no existeix".into()))?;
+    let l = app.db.local(&id)?;
+    let dir = task_submit_dir(&l, &t);
+    let abs = std::path::Path::new(&app.root).join(&dir);
+    std::fs::create_dir_all(&abs).map_err(anyhow::Error::from)?;
+    let (stem, ext) = match n.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s, format!(".{e}")),
+        _ => (n, String::new()),
+    };
+    let mut name = files::amin_name(n);
+    for k in 2.. {
+        if abs.join(&name).symlink_metadata().is_err() {
+            break;
+        }
+        name = files::amin_name(&format!("{stem}-{k}{ext}"));
+    }
+    files::write_atomic(&abs.join(&name), body).map_err(anyhow::Error::from)?;
+    let rel = format!("{dir}/{name}");
+    let l = app.db.update_local(&id, |l| l.files.push(rel))?;
+    readme::write(&app.db, &app.root)?;
+    Ok(Json(l))
 }
 
 /// The task's folder under `submit/` (or `submit/_lliurat/` once handed in).
