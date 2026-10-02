@@ -492,13 +492,14 @@ small{font-size:13px}
 .v-prop .field-row button:not(.ghost){border-color:var(--accent);color:var(--text)}
 .oplog{list-style:none;margin:0;padding:0}.oplog li{display:flex;flex-direction:column;gap:2px;padding:var(--s2) 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .oplog b{font:600 14px/1.4 var(--sans);color:var(--dim)}
-.oplog .mono{font-size:14px;overflow-wrap:anywhere}
+.oplog li{font-size:13px}
 .v-organitza{max-width:72ch}
-.v-organitza .actions{list-style:none;margin:var(--s2) 0 var(--s3);padding:0;display:grid;gap:var(--s2)}
-.v-organitza .actions li{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s1) var(--s2)}
-.ophd{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--s2)}
-.opgrp{margin:var(--s2) 0}.opgrp .hd,.opgrp summary{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s2);margin:0;cursor:pointer}
-.opgrp .hd{cursor:default}.opgrp b{font:600 14px/1.4 var(--sans)}
+.v-organitza .actions{list-style:none;margin:var(--s2) 0 var(--s3);padding:0;display:grid;grid-template-columns:auto 1fr;align-items:center;gap:var(--s2) var(--s3)}
+.v-organitza .actions li{display:contents}
+@media (max-width:599px){.v-organitza .actions{grid-template-columns:1fr;gap:var(--s1)}.v-organitza .actions li span{margin-bottom:var(--s1)}}
+.ophd{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--s2)}
+.opgrp{margin:var(--s2) 0}.opgrp summary{align-items:baseline;min-height:44px;display:flex;flex-wrap:wrap;gap:var(--s1) var(--s2);margin:0;cursor:pointer}
+.opgrp summary .dim{font-size:13px}.opgrp b{font:600 14px/1.4 var(--sans)}
 
 /* Tauler triage */
 .rowq{display:flex;align-items:stretch}.rowq[hidden]{display:none}

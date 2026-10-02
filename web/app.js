@@ -1177,7 +1177,8 @@ function groupOps(ops) {
     const i = o.from.lastIndexOf('/'), dir = i < 0 ? '' : o.from.slice(0, i), k = o.kind + '\0' + dir;
     const to = o.to.replace(/^\.moodle\/trash\/\d+\//, 'paperera/');
     const j = to.lastIndexOf('/');
-    if (!m.has(k)) m.set(k, { kind: o.kind, dir, rows: [] });
+    if (!m.has(k)) m.set(k, { kind: o.kind, dir, meta: 0, rows: [] });
+    if (o.from.endsWith('/meta.json')) { m.get(k).meta++; continue; }
     m.get(k).rows.push({ from: o.from.slice(i + 1), to: to.slice(0, j < 0 ? 0 : j) === dir ? to.slice(j + 1) : to });
   }
   return [...m.values()];
@@ -1202,22 +1203,19 @@ views.organitza = async () => {
   const ops = log.ops || [];
   const item = (btn, why) => h('li', {}, btn, h('span', { class: 'dim' }, why));
   const grp = (g) => {
-    const list = h('ul', { class: 'oplog' }, g.rows.map((r) => h('li', {}, h('span', { class: 'mono' }, r.from), h('span', { class: 'mono dim' }, '→ ', r.to))));
-    const head = `${KINDS[g.kind] || g.kind} · ${g.rows.length}`;
-    const dir = g.dir ? h('span', { class: 'mono dim' }, g.dir) : null;
-    return g.rows.length > 8
-      ? h('details', { class: 'opgrp' }, h('summary', {}, h('b', {}, head), dir), list)
-      : h('div', { class: 'opgrp' }, h('p', { class: 'hd' }, h('b', {}, head), dir), list);
+    const list = h('ul', { class: 'oplog' }, g.rows.map((r) => h('li', {}, h('span', {}, r.from), h('span', { class: 'dim' }, '→ ', r.to))));
+    const head = `${KINDS[g.kind] || g.kind} · ${g.rows.length + g.meta}`;
+    return h('details', { class: 'opgrp' }, h('summary', {}, h('b', {}, head), g.dir ? h('span', { class: 'dim' }, g.dir) : null), list);
   };
   return h('section', { class: 'v-organitza' }, h('h1', {}, 'Organitza'),
     h('ul', { class: 'actions' },
       item(act('Ordena ~/smx', ['/api/organize', withErr((r) => `Ordenat: ${r.ops} canvis${r.skipped.length ? `, ${r.skipped.length} omesos` : ''}`), errs],
         ['Ordenar ~/smx?', 'Mourà fitxers dins de ~/smx. Es pot desfer amb «Desfés l\'última ordenació».'], 'primary'), 'Mou els fitxers de cada curs a la seva carpeta.'),
-      item(act('Sincronitza lliurades', ['/api/delivered-sync', withErr((r) => `Lliurades: ${r.tasks} tasques, ${r.downloaded} baixats`), errs], null, 'ghost'), 'Baixa el que ja has lliurat a Moodle.'),
-      item(act('Sincronitza amb Apple', ['/api/apple-sync', withErr((r) => `Apple: ${r.created} noves, ${r.updated} actualitzades, ${r.done} fetes, ${r.deleted} esborrades`), errs], null, 'ghost'), 'Envia les tasques als Recordatoris d\'Apple.')),
+      item(act('Sincronitza lliurades', ['/api/delivered-sync', withErr((r) => `Lliurades: ${r.tasks} tasques, ${r.downloaded} baixats`), errs]), 'Baixa el que ja has lliurat a Moodle.'),
+      item(act('Sincronitza amb Apple', ['/api/apple-sync', withErr((r) => `Apple: ${r.created} noves, ${r.updated} actualitzades, ${r.done} fetes, ${r.deleted} esborrades`), errs]), 'Envia les tasques als Recordatoris d\'Apple.')),
     h('div', { class: 'ophd' }, h('h2', {}, 'Última ordenació'),
       ops.length ? act('Desfés l\'última ordenació', ['/api/organize/undo', (r) => `Desfet: ${r.restored} restaurats${r.skipped.length ? `, ${r.skipped.length} no s'han pogut desfer` : ''}`],
-        ['Desfer l\'última ordenació?', 'Es restauraran els fitxers a la ubicació anterior.'], 'ghost') : null),
+        ['Desfer l\'última ordenació?', 'Es restauraran els fitxers a la ubicació anterior.']) : null),
     !ops.length ? empty('Encara no s\'ha ordenat res', 'Els fitxers ordenats apareixeran aquí.') : h('div', {},
       h('p', { class: 'dim' }, `${when(log.at)} · ${ops.length} operacions`), groupOps(ops).map(grp)));
 };

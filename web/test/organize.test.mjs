@@ -11,11 +11,16 @@ test('groups by kind and parent dir, keeps only changing part', () => {
     { kind: 'replace', from: 'a/b/w.pdf', to: 'a/b/w2.pdf' },
   ]);
   assert.equal(g.length, 3);
-  assert.deepEqual(g[0], { kind: 'move', dir: 'a/b', rows: [{ from: 'x.pdf', to: 'y.pdf' }, { from: 'z.pdf', to: 'a/c/z.pdf' }] });
+  assert.deepEqual(g[0], { kind: 'move', dir: 'a/b', meta: 0, rows: [{ from: 'x.pdf', to: 'y.pdf' }, { from: 'z.pdf', to: 'a/c/z.pdf' }] });
   assert.equal(g[1].dir, 'a');
   assert.equal(g[1].rows[0].to, 'paperera/a/q.pdf');
   assert.equal(g[2].kind, 'replace');
 });
 test('root-level file has empty dir', () => {
   assert.equal(groupOps([{ kind: 'move', from: 'x', to: 'y' }])[0].dir, '');
+});
+test('meta.json moves are counted, not listed', () => {
+  const g = groupOps([{ kind: 'move', from: 'a/meta.json', to: 'b/a/meta.json' }, { kind: 'move', from: 'a/x', to: 'b/a/x' }])[0];
+  assert.equal(g.meta, 1);
+  assert.equal(g.rows.length, 1);
 });
