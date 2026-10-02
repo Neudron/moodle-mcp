@@ -303,7 +303,7 @@ kbd{font:600 12px var(--sans);background:var(--sunk);color:var(--text);border:1p
   .tabs{position:fixed;inset:auto 0 0 0;z-index:var(--z-tabs);flex-direction:row;background:var(--sunk);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);gap:0}
   .tabs a{flex:1;min-width:0;flex-direction:column;justify-content:center;gap:4px;min-height:64px;border-radius:0;padding:0 2px;font-size:13px;line-height:1.2;white-space:nowrap;overflow:hidden;position:relative}
   .tabs a>span:not(.pill),.tabs button.cur>span{max-width:100%;overflow:hidden;text-overflow:ellipsis}
-  @media (max-width:399px){.tabs a,.tabs button.cur{font-size:12px}}
+  @media (max-width:399px){.tabs a,.tabs button.cur{font-size:11px;padding:0}}
   .tabs a:focus-visible{outline-offset:-4px}
   .tabs a[aria-current=page]{background:transparent}
   .tabs a[aria-current=page]::before{content:"";position:absolute;left:16px;right:16px;top:0;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
@@ -402,7 +402,7 @@ kbd{font:600 12px var(--sans);background:var(--sunk);color:var(--text);border:1p
 .v-forums .fpost iframe.sheet{margin:0;width:100%;border-radius:0 0 var(--r-lg) var(--r-lg);border-width:1px 0 0;min-height:12rem;height:auto;max-height:70vh}
 /* fitxers */
 .v-fitxers table{table-layout:fixed}.v-fitxers .c-sz{width:96px}.v-fitxers .c-ac{width:88px}
-@media (min-width:600px){.v-fitxers .c-ac{width:152px}}
+@media (min-width:600px){.v-fitxers .c-ac{width:176px}}
 .v-fitxers td:has(.v-fname) span:last-child{overflow-wrap:anywhere}
 .v-fname{display:flex;align-items:center;gap:var(--s1);min-height:48px;color:var(--text);text-decoration:none;font-weight:500}
 .v-fname:hover span:last-child{text-decoration:underline}
@@ -502,8 +502,8 @@ small{font-size:13px}
 .v-organitza .actions li{display:contents}
 @media (max-width:599px){.v-organitza .actions{grid-template-columns:1fr;gap:var(--s1)}.v-organitza .actions li span{margin-bottom:var(--s1)}}
 .ophd{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--s2)}
-.opgrp{margin:var(--s2) 0}.opgrp summary{align-items:baseline;min-height:44px;display:flex;flex-wrap:wrap;gap:var(--s1) var(--s2);margin:0;cursor:pointer}
-.opgrp summary .dim{font-size:13px}.opgrp b{font:600 14px/1.4 var(--sans)}
+.opgrp{margin:var(--s2) 0}.opgrp summary{align-items:baseline;align-content:center;min-height:44px;display:flex;flex-wrap:wrap;gap:var(--s1) var(--s2);margin:0;cursor:pointer}
+.opgrp summary::before{align-self:center}.opgrp summary .dim{font-size:13px}.opgrp b{font:600 14px/1.4 var(--sans)}
 
 /* Tauler triage */
 .rowq{display:flex;align-items:stretch}.rowq[hidden]{display:none}

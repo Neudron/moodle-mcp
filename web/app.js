@@ -1111,7 +1111,7 @@ views.calendari = async (ym) => {
     href: `#/tasca/${enc(tv.task.id)}`, title: tv.task.title,
     class: (isDone(tv) ? 'done ' : isStale(tv) ? 'stale ' : left(tv.task.due).s === 'late' ? 'late ' : '') + (extra ? 'x' : ''),
   }, isDone(tv) ? ic('check') : isStale(tv) ? ic('clock') : left(tv.task.due).s === 'late' ? ic('warn') : h('span', { class: 'dot', style: { '--h': hueOf(tv.task.course) } }),
-    h('span', { class: 'et' }, isDone(tv) ? h('span', { class: 'sr-only' }, 'Lliurada: ') : isStale(tv) ? h('span', { class: 'sr-only' }, 'Data antiga: ') : left(tv.task.due).s === 'late' ? h('span', { class: 'sr-only' }, 'Endarrerida: ') : null, tv.task.title));
+    h('span', { class: 'et' }, isDone(tv) ? h('span', { class: 'sr-only' }, 'Lliurada: ') : isStale(tv) ? h('span', { class: 'sr-only' }, 'Data antiga: ') : left(tv.task.due).s === 'late' ? h('span', { class: 'sr-only' }, 'Endarrerida: ') : null, tv.task.title.split(/(?<=[_/])/).flatMap((s, i) => (i ? [h('wbr', {}), s] : [s]))));
   const cells = [];
   for (let i = 0; i < 42; i++) {
     const d = new Date(start); d.setDate(start.getDate() + i);
