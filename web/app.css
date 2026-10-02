@@ -103,7 +103,7 @@ main.edit{max-width:none;padding:0}
 button,.btn,select,input{font:inherit;color:inherit;touch-action:manipulation}
 button,.btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--s1);min-height:44px;padding:0 var(--s2);border-radius:var(--r-md);
   border:1px solid var(--ctl);background:var(--raised);font-weight:600;cursor:pointer;text-decoration:none;color:var(--text);
-  transition:background-color var(--dur) var(--ease),border-color var(--dur) var(--ease)}
+  transition:background-color var(--dur) var(--ease)}
 button:hover,.btn:hover{background:var(--hover)}
 button:active,.btn:active{transform:translateY(1px)}
 .primary,.primary:hover{background:var(--accent);color:var(--accent-ink);border-color:transparent}
@@ -239,9 +239,11 @@ main .empty h2{margin:0 0 var(--s0);font:600 var(--fs-3)/1.4 var(--sans);color:v
 
 /* dialog + toast */
 dialog{background:var(--raised);color:var(--text);border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:var(--shadow-pop);padding:var(--s3);width:calc(100% - 32px);max-width:min(560px,calc(100vw - 32px));
-  opacity:0;transform:translateY(8px);transition:opacity 200ms var(--ease),transform 200ms var(--ease),display 200ms allow-discrete,overlay 200ms allow-discrete}
+  }
+@media (prefers-reduced-motion:no-preference){
+dialog{opacity:0;transform:translateY(8px);transition:opacity 200ms var(--ease),transform 200ms var(--ease),display 200ms allow-discrete,overlay 200ms allow-discrete}
 dialog[open]{opacity:1;transform:none}
-@starting-style{dialog[open]{opacity:0;transform:translateY(8px)}}
+@starting-style{dialog[open]{opacity:0;transform:translateY(8px)}}}
 dialog::backdrop{background:var(--scrim);backdrop-filter:blur(2px)}
 dialog h2{margin:0 0 var(--s2)}
 dialog menu{display:flex;justify-content:flex-end;gap:var(--s1);margin-top:var(--s3)}
@@ -545,7 +547,8 @@ dialog.picker{width:min(640px,calc(100vw - 32px));margin-top:8vh}
 .picker #picker-c{align-items:center;gap:var(--s0)}.picker #picker-c .sep{color:var(--dim)}
 @media (forced-colors:active){.picker li[aria-selected="true"]{background:Highlight;color:HighlightText;forced-color-adjust:none}}
 
-.rowq{transition:opacity .15s}.rowq.leaving{opacity:0}
+.rowq.leaving{opacity:0}
+@media (prefers-reduced-motion:no-preference){.rowq{transition:opacity .15s}}
 .tabbar{display:flex;flex-wrap:wrap;align-items:flex-end;gap:0 var(--s2);border-bottom:1px solid var(--line)}
 .tabbar>[role=tablist]{border-bottom:0;flex:none;max-width:100%}
 .tabbar>.v-find{flex:1 1 200px;padding-bottom:var(--s1)}.tabbar>.v-find[hidden]{display:none}
