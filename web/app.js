@@ -598,7 +598,7 @@ function pkRender() {
   pk.shown = pk.all.filter((e) => e.name.toLowerCase().includes(q));
   pk.act = Math.min(pk.act, Math.max(0, pk.shown.length - 1));
   ul.replaceChildren(...pk.shown.map((e, i) => h('li', { id: `picker-o${i}`, role: 'option', 'aria-selected': String(i === pk.act), onclick: () => { pk.act = i; pkGo(); }, onmousemove: () => { if (pk.act !== i) { pk.act = i; pkMark(); } } },
-    h('span', { class: 'fn' }, ic(e.is_dir ? 'folder' : 'file'), e.name), h('small', {}, e.is_dir ? '' : fsize(e.size)))));
+    h('span', { class: 'fn' }, ic(e.is_dir ? 'folder' : 'file'), e.name), h('small', {}, e.is_dir ? '' : fsize(e.size)), h('span', { class: 'hint', 'aria-hidden': 'true' }, ic('check'), e.is_dir ? 'Obre' : 'Tria'))));
   inp.setAttribute('aria-expanded', String(pk.shown.length > 0));
   pkMark();
   setText($('#picker-n'), pk.shown.length ? `${pk.shown.length} elements` : 'Cap element');
@@ -614,7 +614,8 @@ async function pkDir(rel) {
     pk.dir = rel; pk.all = r.entries; pk.act = 0; $('#picker-q').value = ''; $('#picker-e').textContent = '';
     try { localStorage.setItem('pickerDir', rel); } catch (e) { /* storage blocked */ }
   } catch (e) { $('#picker-e').textContent = e.message; return false; }
-  $('#picker-c').replaceChildren(...crumbsOf(rel).map((c) => h('button', { type: 'button', class: 'ghost', onclick: () => { pkDir(c.rel); $('#picker-q').focus(); } }, c.name)));
+  const up = () => { pkDir(pk.dir.split('/').slice(0, -1).join('/')); $('#picker-q').focus(); };
+  $('#picker-c').replaceChildren(h('button', { type: 'button', class: 'ghost', disabled: !rel, onclick: up }, 'Amunt'), ...crumbsOf(rel).flatMap((c, i) => [i ? h('span', { 'aria-hidden': 'true', class: 'sep' }, '/') : '', h('button', { type: 'button', class: 'ghost', onclick: () => { pkDir(c.rel); $('#picker-q').focus(); } }, c.name)]));
   pkRender();
   return true;
 }

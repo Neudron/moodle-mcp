@@ -238,11 +238,11 @@ main .empty h2{margin:0 0 var(--s0);font:600 var(--fs-3)/1.4 var(--sans);color:v
 .skel i{display:block;height:12px;border-radius:var(--r-sm);background:var(--hover);width:60%}.skel i+i{width:30%}
 
 /* dialog + toast */
-dialog{background:var(--raised);color:var(--text);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow-pop);padding:var(--s3);width:calc(100% - 32px);max-width:min(560px,calc(100vw - 32px));
+dialog{background:var(--raised);color:var(--text);border:1px solid var(--line-strong);border-radius:var(--r-lg);box-shadow:var(--shadow-pop);padding:var(--s3);width:calc(100% - 32px);max-width:min(560px,calc(100vw - 32px));
   opacity:0;transform:translateY(8px);transition:opacity 200ms var(--ease),transform 200ms var(--ease),display 200ms allow-discrete,overlay 200ms allow-discrete}
 dialog[open]{opacity:1;transform:none}
 @starting-style{dialog[open]{opacity:0;transform:translateY(8px)}}
-dialog::backdrop{background:rgb(0 0 0/.55);backdrop-filter:blur(2px)}
+dialog::backdrop{background:var(--scrim);backdrop-filter:blur(2px)}
 dialog h2{margin:0 0 var(--s2)}
 dialog menu{display:flex;justify-content:flex-end;gap:var(--s1);margin-top:var(--s3)}
 dialog ul{background:var(--sunk);font:14px var(--mono);padding:var(--s2) var(--s2) var(--s2) var(--s4);border-radius:var(--r-md);list-style:disc;margin-top:var(--s1)}
@@ -252,14 +252,14 @@ dl.keys dd{margin:0;color:var(--dim)}
 dialog label{display:flex;align-items:center;gap:var(--s1);margin-top:var(--s3);padding-top:var(--s1);border-top:1px solid var(--line);min-height:44px}
 dialog input[type=checkbox]{min-height:0;width:20px;height:20px;accent-color:var(--accent)}
 dialog input:not([type=checkbox]){width:100%}
-dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:0 var(--s1)}
+kbd{font:600 12px var(--sans);background:var(--sunk);color:var(--text);border:1px solid var(--line-strong);border-radius:var(--r-sm);padding:2px 6px}
 .toast{position:fixed;right:var(--s2);bottom:var(--s2);z-index:var(--z-toast);max-width:min(420px,calc(100vw - 32px));background:var(--raised);box-shadow:var(--shadow-pop);
   border-radius:var(--r-md);padding:4px 4px 4px var(--s2);display:flex;align-items:center;gap:var(--s1);pointer-events:none;
   transition:opacity 200ms var(--ease),transform 200ms var(--ease)}
 .toast p{padding:var(--s1) 0;font-weight:600;min-width:0}.toast p:empty{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%)}
 .toast:not(.on){opacity:0;transform:translateY(8px)}
 .toast.on{pointer-events:auto}
-.toast.bad{box-shadow:0 16px 48px rgb(0 0 0/.4),0 0 0 2px var(--late)}.toast.bad p{color:var(--late)}
+.toast.bad{border:1px solid var(--late)}.toast.bad p{color:var(--late)}
 
 /* calendar */
 .cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r-lg);overflow:hidden}
@@ -519,7 +519,6 @@ dialog.pal{padding:var(--s2);max-width:min(560px,calc(100vw - 32px));margin-top:
 .pal li>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pal li.pal-g{min-height:32px;padding:var(--s2) var(--s2) 0;color:var(--dim);font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;cursor:default;pointer-events:none}
 .pal-k{margin:0;padding:var(--s2) var(--s2) 0;border-top:1px solid var(--line);color:var(--dim);font-size:12px;display:flex;gap:var(--s1);align-items:center}
-.pal-k kbd{font:inherit;padding:0 6px;border:1px solid var(--line);border-radius:6px;background:var(--raised)}
 .pal-k kbd:not(:first-child){margin-left:var(--s1)}
 .pal-k kbd+kbd{margin-left:0}
 @media (max-width:599px){.pal-k{display:none}}
@@ -540,7 +539,10 @@ dialog.picker{width:min(640px,calc(100vw - 32px));margin-top:8vh}
 .picker li{display:flex;justify-content:space-between;gap:var(--s2);align-items:center;min-height:44px;padding:0 var(--s2);border-radius:var(--r-md);cursor:pointer;border:2px solid transparent}
 .picker li .fn{display:flex;align-items:center;gap:var(--s1)}
 .picker li small{color:var(--dim);flex:none;font-size:14px}
-.picker li[aria-selected="true"]{background:var(--hover);border-color:var(--accent)}
+.picker li[aria-selected="true"]{background:color-mix(in oklab,var(--accent) 14%,var(--raised));border-color:transparent;box-shadow:inset 3px 0 0 var(--accent)}
+.picker li .hint{display:flex;align-items:center;gap:var(--s0);color:var(--dim);font-size:12px;visibility:hidden;flex:none}
+.picker li[aria-selected="true"] .hint{visibility:visible}
+.picker #picker-c{align-items:center;gap:var(--s0)}.picker #picker-c .sep{color:var(--dim)}
 @media (forced-colors:active){.picker li[aria-selected="true"]{background:Highlight;color:HighlightText;forced-color-adjust:none}}
 
 .rowq{transition:opacity .15s}.rowq.leaving{opacity:0}
