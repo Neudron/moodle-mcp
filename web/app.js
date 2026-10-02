@@ -187,12 +187,12 @@ function card(tv, hideCourse, quick) {
   if (!quick || done) return row;
   // Not inside the <a>: a button in a link is invalid. Commit is deferred so the undo toast is real.
   const wrap = h('div', { class: 'rowq' }, row, h('button', { type: 'button', class: 'ghost', 'aria-label': `Marca lliurada: ${t.title}`, onclick: () => {
-    $('#main').focus(); wrap.hidden = true;
-    later(`Marcada com a lliurada: ${t.title}`, () => { wrap.hidden = false; wrap.querySelector('button').focus(); }, async () => {
-      try { await api(`/api/tasks/${enc(t.id)}/status`, { method: 'POST', body: { status: 'lliurat' } }); } catch (e) { wrap.hidden = false; toast(e.message, true); }
+    $('#main').focus(); wrap.classList.add('leaving'); setTimeout(() => { wrap.hidden = true; }, 150);
+    later(`Marcada com a lliurada: ${t.title}`, () => { wrap.classList.remove('leaving'); wrap.hidden = false; wrap.querySelector('button').focus(); }, async () => {
+      try { await api(`/api/tasks/${enc(t.id)}/status`, { method: 'POST', body: { status: 'lliurat' } }); } catch (e) { wrap.classList.remove('leaving'); wrap.hidden = false; toast(e.message, true); }
       route({ soft: true });
     });
-  } }, ic('check'), h('span', {}, 'Lliurada')));
+  } }, ic('check'), h('span', {}, 'Marca lliurada')));
   return wrap;
 }
 
@@ -256,9 +256,9 @@ function proposal(tv) {
   } }, label);
   const art = h('article', { class: 'v-prop' },
     h('h3', {}, h('a', { href: `#/tasca/${enc(t.id)}` }, t.title)),
-    h('p', { class: 'm' }, h('span', { class: 'cn', style: { '--h': hueOf(t.course) } }, cname(t.course)), t.due ? ` · ${when(t.due)}` : null, t.ai_score != null ? ` · Jev ${t.ai_score.toFixed(2)}` : null),
+    h('p', { class: 'm' }, h('span', { class: 'cn', style: { '--h': hueOf(t.course) } }, cname(t.course)), t.due ? ` · ${when(t.due)}` : null),
     t.evidence ? h('blockquote', {}, t.evidence) : null,
-    h('p', { class: 'dim' }, 'Font: ', web ? popLink(t.url, {}, t.url, ic('ext')) : h('a', { href: `#/fitxers/${enc(t.url)}` }, t.url)),
+    h('p', { class: 'dim' }, 'Font: ', web ? popLink(t.url, { title: t.url }, linkKind(t.url), ic('ext')) : h('a', { href: `#/fitxers/${enc(t.url)}`, title: t.url }, t.url.split('/').pop())),
     h('details', { ontoggle: (e) => { if (e.target.open && !box.hasChildNodes()) preview(box, web ? { moodleUrl: t.url } : { path: t.url }); } }, h('summary', {}, 'Previsualitza'), box),
     h('div', { class: 'field-row' }, act(true, 'Mantén'), act(false, 'Descarta')));
   return art;
@@ -333,9 +333,9 @@ views.tauler = async () => {
       route({ soft: true });
     } }, `Descarta les ${zero.length} de puntuació 0`);
     const f = rest.length ? h('details', { class: 'fold' }, h('summary', {}, `${rest.length} de baixa confiança`), h('div', { class: 'v-props' }, restRows)) : null;
-    propEl = block('ai', h('section', { class: 'v-grp g-ai' },
-      h('h2', { class: 'grp' }, 'Propostes de la IA', h('span', { class: 'n' }, `${props.length} propostes, ${top.length} destacades`)),
-      h('div', { class: 'v-props' }, topRows), f, zero.length ? dropZero : null), [...topRows, ...restRows], f);
+    propEl = block('ai', h('details', { class: 'fold g-ai', open: views.tauler.aiOpen, ontoggle: (e) => { views.tauler.aiOpen = e.target.open; } },
+      h('summary', { class: 'grp' }, h('h2', {}, 'Propostes de la IA', h('span', { class: 'n' }, `${props.length} propostes, ${top.length} destacades`))),
+      scanControl(), h('div', { class: 'v-props' }, topRows), f, zero.length ? dropZero : null), [...topRows, ...restRows], f);
   }
 
   const status = h('p', { class: 'sr-only', role: 'status' });
@@ -364,18 +364,18 @@ views.tauler = async () => {
 
   tabs.sel ??= {};
   tabs.sel.tauler ??= (() => { try { return localStorage.getItem('tab-tauler'); } catch (e) { return null; } })() || (innerWidth < 600 ? 'agenda' : 'llista');
+  const tools = h('div', { class: 'v-find' }, h('label', { class: 'sr-only', for: 'filter' }, 'Filtra tasques'), input);
   const out = h('section', { class: 'v-tauler' },
     h('h1', {}, pending === 0 ? 'Tot al dia' : `Tens ${pending} ${pending === 1 ? 'tasca pendent' : 'tasques pendents'}`),
     next && !(by.late.length ? by.late : by.today.length ? by.today : by.week.length ? by.week : by.later).includes(next) ? h('a', { class: 'next', href: `#/tasca/${enc(next.task.id)}` },
-      h('span', { class: 'lbl' }, 'La propera'), h('span', { class: 'nt' }, next.task.title),
-      h('span', { class: 'nm' }, cname(next.task.course), ' · ', when(next.task.due))) : null,
+      'La propera: ', h('b', {}, next.task.title), ` · ${cname(next.task.course)} · ${when(next.task.due)}`) : null,
     total ? h('div', { class: 'sub' }, bar(doneN, total, 'Tasques lliurades', '', `${doneN} de ${total} lliurades`)) : null,
-    scanControl(), status,
+    status,
     all.length ? tabs('tauler', [
-      { id: 'llista', label: 'Llista', render: () => h('div', {}, h('div', { class: 'v-tools' }, seg, h('label', { class: 'sr-only', for: 'filter' }, 'Filtra tasques'), input), sections, oldEl, none) },
+      { id: 'llista', label: 'Llista', render: () => h('div', {}, h('div', { class: 'v-tools' }, seg), sections, oldEl, none) },
       { id: 'agenda', label: 'Agenda', render: () => agendaView(pendingList, now) },
       { id: 'curs', label: 'Per curs', render: () => perCurs(pendingList) },
-    ], 'Vista del tauler', true, () => apply()) : [sections, oldEl, none],
+    ], 'Vista del tauler', true, (id) => { tools.hidden = id !== 'llista'; apply(); }, tools) : [sections, oldEl, none],
     propEl);
   if (input.value) apply(); // filter survives soft refreshes
   return out;
@@ -441,7 +441,7 @@ function lazyPreview(box, o) {
 }
 
 // WAI-ARIA tabs; panels render once on first select; active id survives soft refreshes in tabs.sel[key].
-function tabs(key, items, label = 'Seccions de la tasca', persist, onPick) {
+function tabs(key, items, label = 'Seccions de la tasca', persist, onPick, tools) {
   tabs.sel ??= {};
   const btns = [], panels = [];
   const pick = (i, focus) => {
@@ -463,7 +463,8 @@ function tabs(key, items, label = 'Seccions de la tasca', persist, onPick) {
     panels.push(h('div', { role: 'tabpanel', id: `pn-${key}-${it.id}`, 'aria-labelledby': `tab-${key}-${it.id}`, tabindex: 0, hidden: true }));
   });
   pick(Math.max(0, items.findIndex((it) => it.id === tabs.sel[key])));
-  return h('div', { class: 'tabs2' }, h('div', { role: 'tablist', 'aria-label': label }, btns), panels);
+  const tl = h('div', { role: 'tablist', 'aria-label': label }, btns);
+  return h('div', { class: 'tabs2' }, tools ? h('div', { class: 'tabbar' }, tl, tools) : tl, panels);
 }
 
 views.tasca = async (id) => {
@@ -680,7 +681,7 @@ const wrapFocus = () => document.querySelectorAll('#main .tablewrap').forEach((w
 addEventListener('resize', wrapFocus);
 async function route(o) {
   const soft = o?.soft === true;
-  if (!soft) delete views.tauler.q;
+  if (!soft) { delete views.tauler.q; delete views.tauler.aiOpen; }
   const my = (route.n = (route.n || 0) + 1);
   const [name, ...rest] = (location.hash.slice(2) || 'calendari').split('/');
   const nm = views[name] ? name : 'calendari';

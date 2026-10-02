@@ -432,9 +432,9 @@ async fn undo_lliurat_moves_folder_back_and_refuses_nonempty_target() {
 }
 
 #[test]
-fn small_tag_font_size_is_16px_multiple() {
+fn small_tag_font_size_is_13px() {
     let css = include_str!("../web/app.css");
-    assert!(css.contains("small{font-size:16px}"));
+    assert!(css.contains("small{font-size:13px}"));
 }
 
 #[tokio::test]
