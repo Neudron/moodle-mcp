@@ -217,3 +217,22 @@ async fn huge_file_is_413_not_read() {
     f.set_len(65 << 20).unwrap();
     assert_eq!(get(&base, &[("path", "C/big.mp4")]).await.status(), 413);
 }
+
+#[tokio::test]
+async fn locate_jails_and_skips_non_pdf() {
+    let (base, root, _app, _m) = spawn("loc").await;
+    std::fs::write(root.join("C/a.txt"), "x").unwrap();
+    let go = |p: &str| {
+        reqwest::Client::new()
+            .get(format!("{base}/api/locate"))
+            .query(&[("path", p), ("q", "011 Endevinar")])
+            .send()
+    };
+    assert_eq!(go("../etc/passwd").await.unwrap().status(), 403);
+    assert_eq!(go(".env").await.unwrap().status(), 403);
+    let r = go("C/a.txt").await.unwrap();
+    assert_eq!(
+        r.json::<serde_json::Value>().await.unwrap()["page"],
+        serde_json::Value::Null
+    );
+}

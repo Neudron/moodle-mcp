@@ -389,11 +389,11 @@ async function preview(el, o) {
   let node;
   try {
     if (k === 'img') node = h('img', { class: 'v-img', src, alt: name });
-    else if (k === 'pdf') node = h('iframe', { class: 'sheet v-frame', src: src + '#pagemode=none', title: `PDF: ${name}` });
+    else if (k === 'pdf') node = h('iframe', { class: 'sheet v-frame', src: `${src}#${o.page ? `page=${o.page}&` : ''}pagemode=none`, title: `PDF: ${name}` });
     else if (k === 'html') node = h('iframe', { class: 'sheet v-frame', src, sandbox: '', referrerpolicy: 'no-referrer', title: `Previsualització: ${name}` });
     else if (k === 'video') node = h('video', { class: 'v-img', src, controls: true, 'aria-label': name });
     else if (k === 'audio') node = h('audio', { src, controls: true, 'aria-label': name });
-    else if (k === 'office') node = h('iframe', { class: 'sheet v-frame', src: pv, title: `PDF: ${name}` });
+    else if (k === 'office') node = h('iframe', { class: 'sheet v-frame', src: pv + (o.page ? `#page=${o.page}` : ''), title: `PDF: ${name}` });
     else if (k === 'text' && !big) node = h('pre', { tabindex: 0, role: 'region', 'aria-label': `Contingut de ${name}` }, (await api(name.toLowerCase().endsWith('.url') ? pv : src)).slice(0, 2e5));
     else if (k === 'zip' && !big) {
       const es = zipEntries(await (await fetch(src)).arrayBuffer());
@@ -462,6 +462,9 @@ views.tasca = async (id) => {
   const extras = taskExtras.map((f) => f(tv)).reverse(); // Edita first, then Puja / Envia
   const NEWTAB = h('span', { class: 'sr-only' }, ' (obre en una pestanya nova)');
 
+  const isWeb = /^https?:\/\//.test(t.url), exLink = h('a', { class: 'ext', href: '#', target: '_blank', rel: 'noopener', hidden: true }, "Obre l'exercici", ic('ext'), NEWTAB.cloneNode(true));
+  const page = isWeb ? Promise.resolve(null) : api(`/api/locate?path=${enc(t.url)}&q=${enc(t.title)}`).then((r) => r.page, () => null);
+  page.then((n) => { if (n) { exLink.href = `/api/${kindOf(t.url) === 'office' ? 'preview' : 'raw'}?path=${enc(t.url)}#page=${n}`; exLink.hidden = false; } });
   const rail = h('section', { class: 'rail', 'aria-labelledby': 'rail-t' },
     h('h2', { id: 'rail-t' }, 'Detalls'),
     h('dl', { class: 'kv' },
@@ -472,7 +475,8 @@ views.tasca = async (id) => {
     t.source === 'ai' && t.ai_confirmed == null && h('div', { class: 'notice', role: 'group', 'aria-label': 'Tasca extreta per IA' },
       h('p', {}, 'Extreta per IA. Revisa-la i decideix si la mantens.'),
       h('div', { class: 'field-row' }, aiBtn('ai-keep', 'Mantén', true, () => route({ soft: true })), aiBtn('ai-drop', 'Descarta', false, () => { location.hash = '#/tauler'; }))),
-    h('a', { class: 'ext', href: t.url, target: '_blank', rel: 'noopener' }, 'Obre a Moodle', ic('ext'), NEWTAB),
+    isWeb ? h('a', { class: 'ext', href: t.url, target: '_blank', rel: 'noopener' }, 'Obre a Moodle', ic('ext'), NEWTAB)
+      : [h('a', { class: 'ext', href: `#/fitxers/${enc(t.url)}` }, 'Obre el document'), exLink],
     h('div', { class: 'fld' }, h('label', { for: 'estat-sel' }, 'Estat local'), h('div', { class: 'field-row' }, select), selErr),
     extras.flat(Infinity).some(Boolean) ? h('div', { class: 'v-deliver' }, h('h2', { class: 'sr-only' }, 'Entrega'), extras) : null);
 
@@ -506,7 +510,9 @@ views.tasca = async (id) => {
     if (mode === 'shot') { showShot(); shot.firstChild.onerror = giveUp; }
     else if (mode === 'wait') { shot.replaceChildren(h('p', { class: 'dim', role: 'status' }, 'Capturant…')); wait(4); }
     else if (mode === 'link') shot.replaceChildren(link());
-    slot.append(shot, hasText(t.body_html) ? intro : empty('Moodle no publica cap text per a aquesta tasca', 'Mira els adjunts o obre-la a Moodle.'));
+    const pg = h('div', { class: 'v-preview' });
+    if (!isWeb) page.then((n) => preview(pg, { path: t.url, page: n }));
+    slot.append(shot, ...(!isWeb ? [pg, hasText(t.body_html) && intro] : [hasText(t.body_html) ? intro : empty('Moodle no publica cap text per a aquesta tasca', 'Mira els adjunts o obre-la a Moodle.')]).filter(Boolean));
     return h('div', { class: 'v-pane' }, slot,
       attRows.length ? [h('h2', {}, 'Adjunts del professor'), h('div', { class: 'list' }, attRows)] : null,
       fb ? [h('h2', {}, 'Retroacció'), fb] : null);

@@ -8,7 +8,7 @@ use axum::{
     http::{header, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
+    Json, Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -267,6 +267,91 @@ async fn preview(State(app): S, Query(q): Query<Q>) -> R<Response> {
     Ok(reply(files::mime(Path::new(&name)), bytes))
 }
 
+fn words(s: &str) -> Vec<String> {
+    deunicode::deunicode(s)
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// 0-based page whose text holds the title's leading number token and >=60% of its 4+ char words;
+/// else the page with the most word hits if that is >=50%.
+pub fn find_page(pages: &[String], title: &str) -> Option<usize> {
+    let tw = words(title);
+    let num = tw.first().filter(|w| w.chars().all(|c| c.is_ascii_digit()));
+    let key: Vec<&String> = tw.iter().filter(|w| w.chars().count() >= 4).collect();
+    let score = |p: &String| {
+        let pw = words(p);
+        let hits = key.iter().filter(|k| pw.contains(k)).count();
+        (num.is_none_or(|n| pw.contains(n)), hits, pw.len())
+    };
+    if key.is_empty() {
+        return pages.iter().position(|p| score(p).0 && num.is_some());
+    }
+    let sc: Vec<_> = pages.iter().map(score).collect();
+    let n = key.len() as f64;
+    let best = |ok: &dyn Fn(&(bool, usize, usize)) -> bool, min: f64| {
+        let mut b: Option<(usize, usize)> = None;
+        for (i, s) in sc.iter().enumerate() {
+            if ok(s) && s.1 as f64 >= min * n && b.is_none_or(|(_, h)| s.1 > h) {
+                b = Some((i, s.1));
+            }
+        }
+        b.map(|(i, _)| i)
+    };
+    best(&|s| s.0, 0.6).or_else(|| best(&|_| true, 0.5))
+}
+
+#[derive(Deserialize)]
+struct L {
+    path: String,
+    q: String,
+}
+
+async fn locate(State(app): S, Query(q): Query<L>) -> R<Json<Value>> {
+    let f = files::jail(Path::new(&app.root), &q.path).map_err(forbid)?;
+    let nf = |e: std::io::Error| ApiErr(StatusCode::NOT_FOUND, e.to_string());
+    if tokio::fs::metadata(&f).await.map_err(nf)?.len() > MAX_BYTES {
+        return Err(too_big());
+    }
+    let ext = ext_of(&q.path);
+    let (pdf, bytes) = if OFFICE.contains(&ext.as_str()) {
+        let b = tokio::fs::read(&f).await.map_err(nf)?;
+        (None, Some(convert(&app, &b, &ext, "pdf").await?))
+    } else if ext == "pdf" {
+        (Some(f), None)
+    } else {
+        return Ok(Json(json!({ "page": null })));
+    };
+    let tmp;
+    let path = match (pdf, bytes) {
+        (Some(p), _) => p,
+        (_, Some(b)) => {
+            tmp = previews(&app).join(format!("loc-{}.pdf", sha_hex(&b)));
+            files::write_atomic(&tmp, &b)
+                .map_err(|e| ApiErr(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            tmp.clone()
+        }
+        _ => unreachable!(),
+    };
+    let out = tokio::process::Command::new("pdftotext")
+        .arg("-layout")
+        .arg(&path)
+        .arg("-")
+        .output()
+        .await
+        .map_err(|e| ApiErr(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let pages: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .split('\x0c')
+        .map(String::from)
+        .collect();
+    Ok(Json(
+        json!({ "page": find_page(&pages, &q.q).map(|i| i + 1) }),
+    ))
+}
+
 /// Token-protected source fetch; also served on the docker-bound listener for OnlyOffice.
 pub fn psrc_router() -> Router<Arc<App>> {
     Router::new().route("/oo/psrc", get(psrc))
@@ -275,6 +360,7 @@ pub fn psrc_router() -> Router<Arc<App>> {
 pub fn router() -> Router<Arc<App>> {
     Router::new()
         .route("/api/preview", get(preview))
+        .route("/api/locate", get(locate))
         .merge(psrc_router())
 }
 
@@ -290,5 +376,33 @@ mod tests {
         assert!(!staged_name(&format!("../{h}.docx")));
         assert!(!staged_name(&format!("{}.docx", "a".repeat(63))));
         assert!(!staged_name(&h));
+    }
+
+    #[test]
+    fn find_page_cases() {
+        let p = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let pages = p(&[
+            "Index",
+            "010 – Exercici Endevinar un nombre de l'1 al 5",
+            "010 Exercici\n011 -Endevinar el nom d'una persona escollida a l'atzar entre 5 persones.",
+        ]);
+        let t = "011 - Endevinar el nom d'una persona escollida a l'atzar";
+        assert_eq!(find_page(&pages, t), Some(2));
+        // accents fold, number token must match
+        assert_eq!(
+            find_page(&pages, "010 Exercici Endevinar un nómbre"),
+            Some(1)
+        );
+        // fallback: 50% hits without number
+        assert_eq!(
+            find_page(&p(&["alpha beta gamma delta"]), "9 alpha beta zzzzz yyyyy"),
+            Some(0)
+        );
+        assert_eq!(find_page(&p(&["alpha"]), "alpha beta zzzzz yyyyy"), None);
+        assert_eq!(
+            find_page(&p(&["alpha beta"]), "alpha beta zzzzz yyyyy"),
+            Some(0)
+        );
+        assert_eq!(find_page(&pages, "xyz"), None);
     }
 }
