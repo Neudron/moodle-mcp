@@ -181,14 +181,14 @@ fn evidence_of(html: &str) -> String {
         .split_once("<blockquote>")
         .and_then(|(_, r)| r.split_once("</blockquote>"))
         .map_or("", |(q, _)| q);
-    inner
-        .replace("&lt;", "<")
+    unescape_html(inner).chars().take(200).collect()
+}
+
+fn unescape_html(s: &str) -> String {
+    s.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&amp;", "&")
-        .chars()
-        .take(200)
-        .collect()
 }
 
 pub fn module_of(l: &Local, course: &str) -> String {
@@ -829,7 +829,7 @@ async fn course(State(app): S, Path(short): Path<String>) -> R<Json<Value>> {
         let mut sfiles = Vec::new();
         for m in files::list(root, &s.rel).map_err(forbid)? {
             if m.is_dir {
-                modules.push(json!({"name": m.name, "rel": m.rel, "files": files::list(root, &m.rel).unwrap_or_default()}));
+                modules.push(json!({"name": unescape_html(&m.name), "rel": m.rel, "files": files::list(root, &m.rel).unwrap_or_default()}));
             } else {
                 sfiles.push(m);
             }
@@ -837,7 +837,7 @@ async fn course(State(app): S, Path(short): Path<String>) -> R<Json<Value>> {
         if !sfiles.is_empty() {
             modules.insert(0, json!({"name": "Fitxers", "rel": s.rel, "files": sfiles}));
         }
-        sections.push(json!({"name": s.name, "rel": s.rel, "modules": modules}));
+        sections.push(json!({"name": unescape_html(&s.name), "rel": s.rel, "modules": modules}));
     }
     if !loose.is_empty() {
         sections.insert(0, json!({"name": "Fitxers", "rel": dir, "modules": [{"name": "Fitxers", "rel": dir, "files": loose}]}));
@@ -1377,6 +1377,14 @@ mod frontmatter_tests {
         let md = render_index_md(&c, "", &[], "t");
         assert_eq!(frontmatter(&md, "title").unwrap(), "a\"b\\c\nd \\n");
         assert_eq!(frontmatter(&md, "course_id").unwrap(), "7");
+    }
+}
+
+#[cfg(test)]
+mod unescape_tests {
+    #[test]
+    fn gt_decoded() {
+        assert_eq!(super::unescape_html("A -&gt; B &amp;lt;"), "A -> B &lt;");
     }
 }
 

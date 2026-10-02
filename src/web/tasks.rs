@@ -254,11 +254,17 @@ async fn sync_all_inner(
         let teachers: serde_json::Map<String, Value> = list
             .iter()
             .filter_map(|c| {
-                let names: Vec<&str> = c["contacts"]
+                let mut names: Vec<String> = Vec::new();
+                for n in c["contacts"]
                     .as_array()?
                     .iter()
                     .filter_map(|x| x["fullname"].as_str())
-                    .collect();
+                    .map(clean_name)
+                {
+                    if !names.contains(&n) {
+                        names.push(n);
+                    }
+                }
                 Some((c["shortname"].as_str()?.to_string(), json!(names)))
             })
             .collect();
@@ -460,10 +466,31 @@ async fn sync_all_inner(
     Ok(events)
 }
 
+/// Moodle contacts sometimes return the fullname doubled ("A B A B").
+fn clean_name(n: &str) -> String {
+    let w: Vec<&str> = n.split_whitespace().collect();
+    let h = w.len() / 2;
+    if w.len().is_multiple_of(2) && h > 0 && w[..h] == w[h..] {
+        w[..h].join(" ")
+    } else {
+        w.join(" ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn clean_name_dedupes() {
+        assert_eq!(
+            clean_name("Mariona Batalla Taylor Mariona Batalla Taylor"),
+            "Mariona Batalla Taylor"
+        );
+        assert_eq!(clean_name("Ana Ana"), "Ana");
+        assert_eq!(clean_name("Joan Puig"), "Joan Puig");
+    }
 
     fn c() -> Course {
         Course {
