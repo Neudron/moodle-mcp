@@ -1103,8 +1103,8 @@ views.calendari = async (ym) => {
       evs.slice(3).map((tv) => ev(tv, true)));
     if (evs.length > 3) {
       const n = evs.length - 3;
-      const more = h('button', { type: 'button', class: 'ghost more', 'aria-expanded': 'false', 'aria-label': `+${n} tasques més`,
-        onclick: () => more.setAttribute('aria-expanded', cell.classList.toggle('open')) }, `+${n}`);
+      const more = h('button', { type: 'button', class: 'ghost more', 'aria-expanded': 'false', 'aria-label': `+${n} més tasques`,
+        onclick: () => more.setAttribute('aria-expanded', cell.classList.toggle('open')) }, `+${n} més`);
       cell.append(more);
     }
     cells.push(cell);
