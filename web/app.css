@@ -294,14 +294,16 @@ kbd{font:600 12px var(--sans);background:var(--sunk);color:var(--text);border:1p
   .courses{min-height:0;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);order:3;flex:0 0 100%;flex-direction:row;overflow-x:auto;scroll-snap-type:x proximity;scroll-padding-inline:16px 32px;gap:var(--s1);padding:var(--s1) var(--s2) 0;margin:0 calc(-1*var(--s2))}
   body:not(:has(main[data-view=curs])) .courses{display:none}
   a.chip{min-height:44px}
-  .tabs button.cur{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:64px;padding:0 4px;border:0;border-radius:0;background:transparent;color:var(--text);font-size:14px;line-height:1.2;white-space:nowrap;overflow:hidden}
+  .tabs button.cur{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:64px;padding:0 4px;border:0;border-radius:0;background:transparent;color:var(--text);font-size:13px;line-height:1.2;white-space:nowrap;overflow:hidden}
   .tabs button.cur[hidden]{display:none}
   #cursos-sheet{margin:auto auto 0;border-radius:var(--r-lg) var(--r-lg) 0 0;max-height:80vh;overflow:auto}
   .courses a .nm{-webkit-line-clamp:1}
   .courses a{scroll-snap-align:start;flex:none;max-width:240px;border:1px solid var(--line);background:var(--raised)}
   html{scroll-padding-bottom:96px}
   .tabs{position:fixed;inset:auto 0 0 0;z-index:var(--z-tabs);flex-direction:row;background:var(--sunk);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom);gap:0}
-  .tabs a{flex:1;min-width:0;flex-direction:column;justify-content:center;gap:4px;min-height:64px;border-radius:0;padding:0 4px;font-size:14px;line-height:1.2;white-space:nowrap;overflow:hidden;position:relative}
+  .tabs a{flex:1;min-width:0;flex-direction:column;justify-content:center;gap:4px;min-height:64px;border-radius:0;padding:0 2px;font-size:13px;line-height:1.2;white-space:nowrap;overflow:hidden;position:relative}
+  .tabs a>span:not(.pill),.tabs button.cur>span{max-width:100%;overflow:hidden;text-overflow:ellipsis}
+  @media (max-width:399px){.tabs a,.tabs button.cur{font-size:12px}}
   .tabs a:focus-visible{outline-offset:-4px}
   .tabs a[aria-current=page]{background:transparent}
   .tabs a[aria-current=page]::before{content:"";position:absolute;left:16px;right:16px;top:0;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
@@ -532,7 +534,6 @@ dialog.pal{padding:var(--s2);max-width:min(560px,calc(100vw - 32px));margin-top:
 
 .tabs button.cur{display:none}
 @media (max-width:899px){.tabs button.cur{display:flex}.tabs button.cur[hidden]{display:none}}
-@media (max-width:599px){.tabs a>span:not(.pill),.tabs button.cur>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
 #cursos-list{display:flex;flex-direction:column;gap:var(--s1)}
 #cursos-list a{display:flex;align-items:center;gap:var(--s2);min-height:44px;padding:0 var(--s2);border-left:3px solid hsl(var(--h) var(--cs));border-radius:var(--r-md);color:var(--text);text-decoration:none}
 #cursos-list a:hover{background:var(--hover)}
@@ -556,3 +557,7 @@ dialog.picker{width:min(640px,calc(100vw - 32px));margin-top:8vh}
 .tabbar>[role=tablist]{border-bottom:0;flex:none;max-width:100%}
 .tabbar>.v-find{flex:1 1 200px;padding-bottom:var(--s1)}.tabbar>.v-find[hidden]{display:none}
 .grp .tch::before{content:'· '}
+.seg,.tabs2>[role=tablist],.courses{scrollbar-width:none}
+.seg::-webkit-scrollbar,.tabs2>[role=tablist]::-webkit-scrollbar,.courses::-webkit-scrollbar{display:none}
+@media (max-width:899px){.v-tauler .seg,.tabs2>[role=tablist]{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 24px),transparent)}}
+@media (max-width:599px){.grp .tch{display:none}}
