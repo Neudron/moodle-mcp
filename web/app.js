@@ -72,6 +72,14 @@ const cname = (short) => COURSES[short] || short;
 const setText = (el, v) => { if (el.textContent !== v) el.textContent = v; }; // live regions re-announce on every write
 const enc = encodeURIComponent;
 
+// pop-helpers-start
+const plainClick = (e) => e.button === 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && !e.defaultPrevented;
+const popLink = (href, attrs, ...kids) => h('a', { ...attrs, href, target: '_blank', rel: 'noopener', onclick: (e) => {
+  if (!plainClick(e)) return;
+  const w = window.open(href, 'neu-pop', 'popup,width=900,height=700');
+  if (w) { w.opener = null; e.preventDefault(); }
+} }, ...kids, h('span', { class: 'sr-only' }, ' (obre en una finestra nova)'));
+// pop-helpers-end
 // intro-helpers-start
 const hasText = (html) => !!html && (/<(img|video|iframe|object)\b/i.test(html) || html.replace(/<[^>]*>|&nbsp;|\s/g, '') !== '');
 const enunciatMode = (shot, hasIntro) => shot === 'ready' ? 'shot' : shot === 'pending' ? 'wait' : hasIntro ? 'text' : 'link';
@@ -235,7 +243,7 @@ function proposal(tv) {
     h('h3', {}, h('a', { href: `#/tasca/${enc(t.id)}` }, t.title)),
     h('p', { class: 'm' }, h('span', { class: 'cn', style: { '--h': hue(t.course) } }, cname(t.course)), t.due ? ` · ${when(t.due)}` : null, t.ai_score != null ? ` · Jev ${t.ai_score.toFixed(2)}` : null),
     t.evidence ? h('blockquote', {}, t.evidence) : null,
-    h('p', { class: 'dim' }, 'Font: ', web ? h('a', { href: t.url, target: '_blank', rel: 'noopener' }, t.url, ic('ext'), h('span', { class: 'sr-only' }, ' (obre en una pestanya nova)')) : h('a', { href: `#/fitxers/${enc(t.url)}` }, t.url)),
+    h('p', { class: 'dim' }, 'Font: ', web ? popLink(t.url, {}, t.url, ic('ext')) : h('a', { href: `#/fitxers/${enc(t.url)}` }, t.url)),
     h('details', { ontoggle: (e) => { if (e.target.open && !box.hasChildNodes()) preview(box, web ? { moodleUrl: t.url } : { path: t.url }); } }, h('summary', {}, 'Previsualitza'), box),
     h('div', { class: 'field-row' }, act(true, 'Mantén'), act(false, 'Descarta')));
   return art;
@@ -475,7 +483,7 @@ views.tasca = async (id) => {
     t.source === 'ai' && t.ai_confirmed == null && h('div', { class: 'notice', role: 'group', 'aria-label': 'Tasca extreta per IA' },
       h('p', {}, 'Extreta per IA. Revisa-la i decideix si la mantens.'),
       h('div', { class: 'field-row' }, aiBtn('ai-keep', 'Mantén', true, () => route({ soft: true })), aiBtn('ai-drop', 'Descarta', false, () => { location.hash = '#/tauler'; }))),
-    isWeb ? h('a', { class: 'ext', href: t.url, target: '_blank', rel: 'noopener' }, 'Obre a Moodle', ic('ext'), NEWTAB)
+    isWeb ? popLink(t.url, { class: 'ext' }, 'Obre a Moodle', ic('ext'))
       : [h('a', { class: 'ext', href: `#/fitxers/${enc(t.url)}` }, 'Obre el document'), exLink],
     h('div', { class: 'fld' }, h('label', { for: 'estat-sel' }, 'Estat local'), h('div', { class: 'field-row' }, select), selErr),
     extras.flat(Infinity).some(Boolean) ? h('div', { class: 'v-deliver' }, h('h2', { class: 'sr-only' }, 'Entrega'), extras) : null);
@@ -498,7 +506,7 @@ views.tasca = async (id) => {
     const slot = h('div', { class: 'v-shotbox' });
     const shot = h('div');
     const mode = enunciatMode(tv.shot, hasText(t.body_html));
-    const link = () => h('a', { class: 'btn ghost', href: t.url, target: '_blank', rel: 'noopener' }, "Obre l'enunciat a Moodle", NEWTAB.cloneNode(true));
+    const link = () => popLink(t.url, { class: 'btn ghost' }, "Obre l'enunciat a Moodle");
     const showShot = () => shot.replaceChildren(h('img', { class: 'v-shot', src: shotUrl(), alt: "Captura de l'enunciat (el text és a sota)" }));
     const giveUp = () => shot.replaceChildren(hasText(t.body_html) ? h('p', { class: 'dim' }, 'Sense captura.') : link());
     const wait = (left) => {

@@ -54,3 +54,11 @@ test('aminName', () => {
   assert.equal(aminName('Examination.pdf'), 'Examination_amin.pdf');
   assert.equal(aminName('x.tar.gz'), 'x.tar_amin.gz');
 });
+
+const { plainClick } = new Function(`${block('pop')}; return { plainClick };`)();
+test('plainClick', () => {
+  assert.equal(plainClick({ button: 0 }), true);
+  for (const m of ['ctrlKey', 'metaKey', 'shiftKey', 'altKey']) assert.equal(plainClick({ button: 0, [m]: true }), false);
+  assert.equal(plainClick({ button: 1 }), false);
+  assert.equal(plainClick({ button: 0, defaultPrevented: true }), false);
+});
