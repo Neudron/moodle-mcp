@@ -1031,7 +1031,7 @@ views.curs = async (short) => {
           : [m.name === 'Fitxers' ? null : h('h3', {}, m.name), h('ul', { class: 'list' }, fs.map(li))];
       }))) : empty('Sense continguts', 'Sincronitza per carregar-los.'));
   return h('section', { class: 'v-curs' },
-    h('h1', { style: { '--h': hueOf(short) } }, c.title),
+    h('h1', { style: { '--h': hueOf(short) } }, h('span', { class: 'dot lg', 'aria-hidden': 'true' }), ' ', c.title),
     profTxt(short) ? h('p', { class: 'sub' }, profTxt(short)) : null,
     tasks.length ? h('p', { class: 'sub' }, bar(nDone, tasks.length, `Tasques lliurades de ${c.title}`, '', `${nDone} de ${tasks.length} lliurades`)) : null,
     h('div', { class: 'two' }, tasksCol, contents));

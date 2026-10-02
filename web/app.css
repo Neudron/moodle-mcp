@@ -375,7 +375,7 @@ kbd{font:600 12px var(--sans);background:var(--sunk);color:var(--text);border:1p
 .v-curs details .list li{display:flex;align-items:center;gap:var(--s1)}
 .v-curs details .list li>a:first-child{flex:1;min-width:0}
 .v-curs .list .num{margin-left:auto;flex:none;font-size:14px}
-.v-curs h1{width:fit-content;max-width:100%;padding-bottom:var(--s1);border-bottom:4px solid hsl(var(--h) var(--cs))}
+.v-curs h1 .dot{vertical-align:middle}
 .v-curs details details.mod{margin:0;border-top:1px solid var(--line)}
 .v-curs summary .n{color:var(--dim);font-weight:500}
 .v-curs .dl-t{display:none}
