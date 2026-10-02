@@ -16,13 +16,19 @@ test('pickMove', () => {
   assert.equal(pickMove(5, 'PageUp', 30), 0); assert.equal(pickMove(2, 'ArrowUp', 3), 1);
 });
 
-const { backFor, stripTitle, startDirs } = new Function(`${block('back')}; ${block('picker')}; return { backFor, stripTitle, startDirs };`)();
+const { backFor, nextBack, stripTitle, startDirs } = new Function(`${block('back')}; ${block('picker')}; return { backFor, nextBack, stripTitle, startDirs };`)();
 test('backFor', () => {
   assert.deepEqual(backFor('curs', '#/curs/x', 'DAW'), { hash: '#/curs/x', label: 'DAW' });
   assert.deepEqual(backFor('tauler', '#/tauler', ''), { hash: '#/tauler', label: 'Tauler' });
   assert.equal(backFor('tauler', '#/tauler', 'Tens 5 tasques pendents').label, 'Tauler');
   assert.equal(backFor('calendari', '#/calendari/2026-10', 'Octubre de 2026').label, 'Calendari');
   assert.equal(backFor('tasca', '#/tasca/1', 'T'), null);
+});
+test('nextBack', () => {
+  const prev = { hash: '#/calendari/2026-10', label: 'Calendari' };
+  assert.equal(nextBack('organitza', '#/organitza', 'Org', prev), null);
+  assert.equal(nextBack('tasca', '#/tasca/1', 'T', prev), prev);
+  assert.equal(nextBack('calendari', '#/calendari/x', 'C', null).label, 'Calendari');
 });
 test('stripTitle', () => {
   assert.equal(stripTitle('<p><b>Tasca 1. (a)</b></p><p>Text</p>', 'Tasca 1. (a)'), '<p>Text</p>');

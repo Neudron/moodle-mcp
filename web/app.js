@@ -103,12 +103,14 @@ const linkKind = (u) => {
   return /(^|\.)youtube\.com$|^youtu\.be$/.test(h) ? 'YouTube' : h;
 };
 // intro-helpers-end
+// sandboxed iframe is unmeasurable: guess ~68ch lines + block breaks, resizable by the user
+const estH = (html) => Math.min(900, Math.max(80, 32 + 24 * (Math.ceil(html.replace(/<[^>]*>/g, '').length / 80) + (html.match(/<(p|br|li|h\d|tr)\b/gi) || []).length)));
 function sandboxed(html, label) {
   if (!html || !html.trim()) return h('p', { class: 'dim' }, 'Sense descripció a Moodle.');
   const c = getComputedStyle(document.documentElement), v = (n) => c.getPropertyValue(n).trim();
   const SERIF = v('--sans'), MONO = v('--mono'), INK = v('--text'), ACC = v('--accent'), RULE = v('--line'), DIM = v('--dim'), SUNK = v('--sunk');
-  const css = `<style>:root{color-scheme:${c.colorScheme}}html{background:transparent;color:${INK};font:18px/1.7 ${SERIF}}body{max-width:68ch;margin:0 auto;padding:24px 16px;overflow-wrap:anywhere}a{color:${ACC};text-underline-offset:.2em}img,video{max-width:100%;height:auto}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid ${RULE};padding:8px 16px;text-align:left}blockquote{border-left:3px solid ${ACC};margin:0;padding-left:16px;color:${DIM}}pre,code{font-family:${MONO};background:${SUNK}}h1,h2,h3,h4{font-family:${SERIF};line-height:1.3}*{max-width:100%}font,[style*=color]{color:inherit!important}[style*=background],[bgcolor]{background:transparent!important}a{color:${ACC}!important}</style>`;
-  return h('iframe', { class: 'sheet', sandbox: 'allow-popups allow-popups-to-escape-sandbox', referrerpolicy: 'no-referrer', title: label || 'Contingut de Moodle', srcdoc: '<base target=_blank>' + css + html });
+  const css = `<style>:root{color-scheme:${c.colorScheme}}html{background:transparent;color:${INK};font:15px/1.6 ${SERIF}}body{max-width:68ch;margin:0 auto;padding:8px 16px;overflow-wrap:anywhere}a{color:${ACC};text-underline-offset:.2em}img,video{max-width:100%;height:auto}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid ${RULE};padding:8px 16px;text-align:left}blockquote{border-left:1px solid ${RULE};margin:0;padding-left:16px;color:${DIM}}pre,code{font-family:${MONO};background:${SUNK}}h1,h2,h3,h4{font-family:${SERIF};line-height:1.3}*{max-width:100%}font,[style*=color]{color:inherit!important}[style*=background],[bgcolor]{background:transparent!important}a{color:${ACC}!important}</style>`;
+  return h('iframe', { class: 'sheet', sandbox: 'allow-popups allow-popups-to-escape-sandbox', referrerpolicy: 'no-referrer', title: label || 'Contingut de Moodle', style: { '--est': estH(html) + 'px' }, srcdoc: '<base target=_blank>' + css + html });
 }
 
 function toast(msg, bad, undo) {
@@ -572,6 +574,7 @@ views.tasca = async (id) => {
 // back-helpers-start
 const BACKS = { tauler: 'Tauler', curs: null, calendari: 'Calendari', forums: 'Fòrums' };
 const backFor = (view, hash, label) => (view in BACKS ? { hash, label: BACKS[view] || label || 'Tauler' } : null);
+const nextBack = (view, hash, label, prev) => backFor(view, hash, label) ?? (view === 'tasca' ? prev : null);
 const stripTitle = (html, title) => (html || '').replace(new RegExp(`^\\s*(?:<[^>]+>\\s*)*${title.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')}\\s*(?=<|$)(?:<\\/[^>]+>\\s*)*`, 'i'), '');
 // back-helpers-end
 // picker-helpers-start
@@ -701,7 +704,7 @@ async function route(o) {
     main.replaceChildren(node); main.removeAttribute('aria-busy');
     node.dispatchEvent?.(new Event('mounted'));
     const h1 = main.querySelector('h1');
-    if (!soft) route.back = backFor(nm, location.hash, h1?.textContent.trim()) ?? route.back;
+    if (!soft) route.back = nextBack(nm, location.hash, h1?.textContent.trim(), route.back);
     document.title = `${h1 ? h1.textContent.trim() + ' · ' : ''}Institut`;
     if (!soft && h1 && (first || same)) setText($('#live'), h1.textContent.trim()); // announced only when the h1 is not focused
     wrapFocus();
