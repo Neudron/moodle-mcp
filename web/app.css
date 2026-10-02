@@ -335,7 +335,8 @@ kbd{font:600 12px var(--sans);background:var(--sunk);color:var(--text);border:1p
 
 /* ---- views ---- */
 /* tauler */
-.v-tauler .v-tools{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s2);align-items:center;margin:0 0 var(--s1)}
+.v-tauler .v-tools{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s2);align-items:center;margin:0}
+.v-tauler .tabs2 [role=tabpanel]{padding-top:0}
 .v-find input{width:100%}
 .v-tauler .v-scan button{background:transparent;border-color:var(--ctl);color:var(--text)}
 .v-tauler .v-scan button:hover{background:var(--hover);filter:none}

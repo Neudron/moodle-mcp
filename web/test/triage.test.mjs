@@ -61,3 +61,15 @@ test('bySubject: courses by name, natural title, pos first', () => {
   assert.deepEqual(r.map((g) => g.course), ['a', 'b']);
   assert.deepEqual(r[1].items.map((v) => v.task.title), ['Zeta', 'Alfa', 'Act 1', 'Act 3', 'Act 10']);
 });
+
+test('bySubject: due ascending, undated last, pos then title break ties', () => {
+  const x = (title, due, pos) => ({ pos, task: { course: 'a', title, due } });
+  const r = bySubject([x('A11_P', 166), x('Sense', null, 0), x('PARA3', 114, 9), x('Zeta', 114, 2), x('Alfa', 114, 2), x('Prim', 28)]);
+  assert.deepEqual(r[0].items.map((v) => v.task.title), ['Prim', 'Alfa', 'Zeta', 'PARA3', 'A11_P', 'Sense']);
+});
+
+test('bySubject: courses by earliest due, undated last, then name', () => {
+  const x = (course, due) => ({ task: { course, title: 't', due } });
+  assert.deepEqual(bySubject([x('a', 50), x('b', 10)]).map((g) => g.course), ['b', 'a']);
+  assert.deepEqual(bySubject([x('z', null), x('y', null), x('c', 5)]).map((g) => g.course), ['c', 'y', 'z']);
+});

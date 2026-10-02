@@ -48,7 +48,10 @@ const dk = (d) => d.toLocaleDateString('en-CA', { timeZone: TZ });
 function left(ts) {
   if (!ts) return { t: 'Sense venciment', s: 'later' };
   const hrs = (ts * 1000 - Date.now()) / 36e5;
-  if (hrs < 0) return { t: 'Endarrerida', s: 'late' };
+  if (hrs < 0) {
+    const d = Math.round((Date.parse(dk(new Date())) - Date.parse(dk(new Date(ts * 1000)))) / 864e5); // calendar days ago
+    return { t: d < 1 ? `Fa ${Math.max(1, Math.round(-hrs))} h` : `Fa ${d} ${d === 1 ? 'dia' : 'dies'}`, s: 'late' };
+  }
   if (hrs < 24) return { t: `En ${Math.max(1, Math.round(hrs))} h`, s: 'soon' };
   const d = Math.round((Date.parse(dk(new Date(ts * 1000))) - Date.parse(dk(new Date()))) / 864e5); // calendar days
   if (d <= 1) return { t: 'Demà', s: 'soon' };
@@ -172,7 +175,7 @@ const views = {};
 const taskExtras = [];
 const fileExtras = [];
 
-function card(tv, hideCourse, quick) {
+function card(tv, hideCourse, quick, noProf) {
   const t = tv.task, done = isDone(tv);
   // Badges only when they differ from the default 'Sense enviar'.
   const badges = [
@@ -182,7 +185,7 @@ function card(tv, hideCourse, quick) {
   ];
   const row = h('a', { class: 'row' + (done ? ' done' : !isStale(tv) && left(t.due).s === 'late' ? ' late' : ''), href: `#/tasca/${enc(t.id)}`, style: { '--h': hueOf(t.course) } },
     h('span', { class: 't', title: t.title }, t.title),
-    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hueOf(t.course) } }, cname(t.course)), profTxt(t.course) && !hideCourse ? h('span', {}, profTxt(t.course)) : null, t.kind === 'assign' || t.kind === 'ai' ? null : h('span', {}, KIND[t.kind] || t.kind), badges),
+    h('span', { class: 'm' }, hideCourse ? null : h('span', { class: 'cn', title: cname(t.course), style: { '--h': hueOf(t.course) } }, cname(t.course)), profTxt(t.course) && !hideCourse && !noProf ? h('span', {}, profTxt(t.course)) : null, t.kind === 'assign' || t.kind === 'ai' ? null : h('span', {}, KIND[t.kind] || t.kind), badges),
     dueChip(tv));
   if (!quick || done) return row;
   // Not inside the <a>: a button in a link is invalid. Commit is deferred so the undo toast is real.
@@ -270,16 +273,7 @@ const agendaView = (list, now) => {
   const fmt = new Intl.DateTimeFormat('ca-ES', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Madrid' });
   return h('div', {}, g.map(({ day, items }) => h('section', { class: 'v-grp' },
     h('h2', { class: 'grp' }, day === 'late' ? 'Vençudes' : fmt.format(new Date(`${day}T12:00:00Z`)), h('span', { class: 'n' }, items.length)),
-    h('div', { class: 'cards' }, items.map((tv) => card(tv, false, true))))));
-};
-const perCurs = (list) => {
-  const by = {};
-  for (const tv of list) (by[tv.task.course] ||= []).push(tv);
-  const ks = Object.keys(by).sort();
-  if (!ks.length) return empty('Res pendent', 'No hi ha tasques pendents.');
-  return h('div', {}, ks.map((c) => h('section', { class: 'v-grp' },
-    h('h2', { class: 'grp' }, cname(c), h('span', { class: 'n' }, by[c].length)),
-    h('div', { class: 'cards' }, by[c].map((tv) => card(tv, true, true))))));
+    h('div', { class: 'cards' }, items.map((tv) => card(tv, false, true, day === 'late'))))));
 };
 
 views.tauler = async () => {
@@ -374,7 +368,6 @@ views.tauler = async () => {
     all.length ? tabs('tauler', [
       { id: 'llista', label: 'Llista', render: () => h('div', {}, h('div', { class: 'v-tools' }, seg), sections, oldEl, none) },
       { id: 'agenda', label: 'Agenda', render: () => agendaView(pendingList, now) },
-      { id: 'curs', label: 'Per curs', render: () => perCurs(pendingList) },
     ], 'Vista del tauler', true, (id) => { tools.hidden = id !== 'llista'; apply(); }, tools) : [sections, oldEl, none],
     propEl);
   if (input.value) apply(); // filter survives soft refreshes
@@ -752,14 +745,15 @@ function groupByDue(tasks, now) {
   }
   return g;
 }
-// Courses by name, items by Moodle module order (pos) then natural title ("Act 3" < "Act 10").
+// Courses by earliest due (undated last, then name), items by due date (undated last), then Moodle module order (pos), then natural title ("Act 3" < "Act 10").
 function bySubject(list) {
   const by = {};
   for (const tv of list) (by[tv.task.course] ||= []).push(tv);
   const p = (tv) => tv.pos ?? Number.MAX_SAFE_INTEGER;
-  return Object.keys(by).sort((a, b) => cname(a).localeCompare(cname(b))).map((c) => ({
+  const m = (c) => Math.min(...by[c].map((tv) => tv.task.due || Infinity));
+  return Object.keys(by).sort((a, b) => (m(a) - m(b)) || cname(a).localeCompare(cname(b))).map((c) => ({
     course: c,
-    items: by[c].sort((a, b) => p(a) - p(b) || a.task.title.localeCompare(b.task.title, undefined, { numeric: true })),
+    items: by[c].sort((a, b) => (a.task.due || Infinity) - (b.task.due || Infinity) || p(a) - p(b) || a.task.title.localeCompare(b.task.title, undefined, { numeric: true })),
   }));
 }
 // The Tauler filter only applies to the AI proposals while the Llista tab is showing.
