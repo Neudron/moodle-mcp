@@ -201,7 +201,11 @@ pub fn assign_module_folders(
         }
         let seeded = known.get(&m.id.to_string()).cloned().or_else(|| {
             m.contents.iter().flatten().find_map(|f| {
-                let p = &files.get(f.fileurl.as_deref()?)?.path;
+                let u = f.fileurl.as_deref()?;
+                let p = &files
+                    .get(&format!("{u}#cm{}", m.id))
+                    .or_else(|| files.get(u))?
+                    .path;
                 let mut it = p.split('/');
                 (it.clone().count() >= 4).then(|| it.nth(2).map(str::to_string))?
             })
@@ -390,6 +394,14 @@ fn is_pluginfile(url: &str) -> bool {
     url.contains("/pluginfile.php")
 }
 
+/// Real link behind a state key (drops the `#cm<id>` disambiguator).
+#[must_use]
+pub fn external_target(key: &str) -> &str {
+    key.rsplit_once("#cm")
+        .filter(|(_, id)| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+        .map_or(key, |(u, _)| u)
+}
+
 fn external_leaf(filename: &str) -> String {
     let mut base = ra::sanitize(filename);
     if base.is_empty() {
@@ -418,6 +430,7 @@ pub fn plan(
     let module_re_invalid = filters.module_re.is_some() && module_re.is_none();
     let mut assigned: HashSet<String> = HashSet::new();
     let mut seen: HashSet<String> = HashSet::new();
+    let mut ext_taken: HashSet<String> = HashSet::new();
     // Old destinations by URL for move detection.
     let old: &BTreeMap<String, crate::state::FileEntry> = &state.files;
 
@@ -467,6 +480,13 @@ pub fn plan(
                 if f.filesize == 0 && f.filename.is_empty() {
                     continue;
                 }
+                // Same external URL in several modules: state is keyed by URL,
+                // so later modules get their own key (else the path flaps).
+                let url = if !is_pluginfile(&url) && !ext_taken.insert(url.clone()) {
+                    format!("{url}#cm{}", module.id)
+                } else {
+                    url
+                };
                 seen.insert(url.clone());
                 if !file_passes_filters(
                     f,
@@ -478,7 +498,7 @@ pub fn plan(
                 ) {
                     continue;
                 }
-                let external = !is_pluginfile(&url);
+                let external = !is_pluginfile(external_target(&url));
                 let sanitized = if external {
                     external_leaf(&f.filename)
                 } else {
@@ -694,6 +714,50 @@ mod tests {
         assert_eq!(b.as_deref(), Some("a-2.pdf"));
         let c = unique_leaf(&mut assigned, "RA01/001-m", "a.pdf", ConflictStrategy::Skip);
         assert_eq!(c, None);
+    }
+
+    #[test]
+    fn planner_shared_external_url_is_stable() {
+        use crate::state::FileEntry;
+        let url = "https://docs.google.com/presentation/d/x";
+        let m = |id: i64, name: &str| crate::moodle::CourseModule {
+            id,
+            name: name.to_string(),
+            module_type: "url".to_string(),
+            description: None,
+            contents: Some(vec![ModuleFile {
+                filename: name.to_string(),
+                filesize: 0,
+                mimetype: String::new(),
+                fileurl: Some(url.to_string()),
+                timemodified: 0,
+                contenthash: String::new(),
+            }]),
+        };
+        let contents = vec![CourseSection {
+            id: 1,
+            name: "RA01".to_string(),
+            summary: "s".to_string(),
+            position: 1,
+            modules: vec![m(1, "Fitxa"), m(2, "Presentacio")],
+        }];
+        let mut state = CourseState::default();
+        let p1 = plan(&contents, &SyncFilters::default(), &state, "C");
+        assert_eq!(p1.fetch.len(), 2, "{p1:?}");
+        for f in &p1.fetch {
+            state.files.insert(
+                f.url.clone(),
+                FileEntry {
+                    path: f.dest_rel.clone(),
+                    ..Default::default()
+                },
+            );
+        }
+        let p2 = plan(&contents, &SyncFilters::default(), &state, "C");
+        assert_eq!(p2.reuse.len(), 2, "{p2:?}");
+        assert!(p2.fetch.is_empty() && p2.moves.is_empty() && p2.stale.is_empty());
+        assert_eq!(external_target("u#cm12"), "u");
+        assert_eq!(external_target("u#cmx"), "u#cmx");
     }
 
     #[test]

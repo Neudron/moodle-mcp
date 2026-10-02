@@ -196,7 +196,10 @@ async fn write_external(
     old_files: &BTreeMap<String, FileEntry>,
 ) -> TaskOutcome {
     let dest_abs = root.join(&file.dest_rel);
-    let body = format!("[InternetShortcut]\nURL={}\n", file.url);
+    let body = format!(
+        "[InternetShortcut]\nURL={}\n",
+        crate::sync::planner::external_target(&file.url)
+    );
     if let Some(parent) = dest_abs.parent() {
         if tokio::fs::create_dir_all(parent).await.is_err() {
             return TaskOutcome::Failed(format!("{}: cannot create module dir", file.filename));
@@ -224,7 +227,10 @@ async fn write_external(
     // sync; only the `.url` is tracked in state.
     if let Some(md_rel) = indexer::pointer_md_rel(&file.dest_rel) {
         let md_abs = root.join(&md_rel);
-        let md = indexer::external_pointer_md(&file.filename, &file.url);
+        let md = indexer::external_pointer_md(
+            &file.filename,
+            crate::sync::planner::external_target(&file.url),
+        );
         let _ = tokio::fs::write(&md_abs, md.as_bytes()).await;
     }
     TaskOutcome::New {

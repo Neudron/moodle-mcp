@@ -385,7 +385,7 @@ async fn write_index_and_meta(
                 original: info.filename.clone(),
                 stored: info.stored_name.clone(),
                 size: entry.size,
-                url: url.clone(),
+                url: planner::external_target(url).to_string(),
                 is_external: info.is_external,
             });
             by_module
@@ -394,7 +394,7 @@ async fn write_index_and_meta(
                 .push(ModuleFileMeta {
                     filename: info.filename.clone(),
                     stored: info.stored_name.clone(),
-                    url: url.clone(),
+                    url: planner::external_target(url).to_string(),
                     size: entry.size,
                     timemodified: info.timemodified,
                     mimetype: info.mimetype.clone(),
