@@ -162,12 +162,31 @@ pub fn default_profile(root: &Path) -> Result<PathBuf, FfError> {
     })
 }
 
-/// Firefox config dir: `MOODLE_FIREFOX_ROOT`, else `$HOME/.mozilla/firefox`.
+/// Firefox config dir: `MOODLE_FIREFOX_ROOT`, else `~/.mozilla/firefox`, else
+/// the XDG `${XDG_CONFIG_HOME:-~/.config}/mozilla/firefox` when only that exists.
 pub fn root() -> PathBuf {
     std::env::var_os("MOODLE_FIREFOX_ROOT").map_or_else(
-        || Path::new(&std::env::var_os("HOME").unwrap_or_default()).join(".mozilla/firefox"),
+        || {
+            root_in(
+                Path::new(&std::env::var_os("HOME").unwrap_or_default()),
+                std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+            )
+        },
         PathBuf::from,
     )
+}
+
+fn root_in(home: &Path, xdg: Option<PathBuf>) -> PathBuf {
+    let old = home.join(".mozilla/firefox");
+    let new = xdg
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| home.join(".config"))
+        .join("mozilla/firefox");
+    if !old.is_dir() && new.is_dir() {
+        new
+    } else {
+        old
+    }
 }
 
 /// Moodle session cookie of the default profile under `root`.
@@ -175,4 +194,24 @@ pub fn session_cookie(root: &Path, base_path: Option<&str>) -> Result<(String, S
     let file = default_profile(root)?.join("sessionstore-backups/recovery.jsonlz4");
     let blob = std::fs::read(file).map_err(|_| FfError::NoSession)?;
     moodle_session_cookie(&mozlz4_decode(&blob)?, base_path)
+}
+
+#[cfg(test)]
+mod root_tests {
+    use super::root_in;
+
+    #[test]
+    fn xdg_profile_found() {
+        let h = std::env::temp_dir().join(format!("ffroot{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&h);
+        assert_eq!(root_in(&h, None), h.join(".mozilla/firefox"));
+        std::fs::create_dir_all(h.join(".config/mozilla/firefox")).unwrap();
+        assert_eq!(root_in(&h, None), h.join(".config/mozilla/firefox"));
+        let x = h.join("x");
+        std::fs::create_dir_all(x.join("mozilla/firefox")).unwrap();
+        assert_eq!(root_in(&h, Some(x.clone())), x.join("mozilla/firefox"));
+        std::fs::create_dir_all(h.join(".mozilla/firefox")).unwrap();
+        assert_eq!(root_in(&h, None), h.join(".mozilla/firefox"));
+        std::fs::remove_dir_all(&h).unwrap();
+    }
 }
