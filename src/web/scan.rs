@@ -51,7 +51,7 @@ pub struct Item {
     pub kind: &'static str,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 pub struct Cand {
     pub title: String,
     pub description: String,
@@ -1017,21 +1017,40 @@ async fn classify_store(app: &App, sha: &str, it: &Item, text: &str) -> anyhow::
             return Ok(format!("Jev: sense tasques (p={p:.2})"));
         }
     }
-    let cands = verify(classify(app, sha, text).await?, text, it).await;
+    // Identical text under another key (URL, renamed file) reuses the verdict without the model.
+    // ponytail: old ai:<sha> tasks of an edited source are not pruned; add when stale rows annoy.
+    let tsha = sha_hex(text.as_bytes());
+    let hit = app
+        .db
+        .cache_get(&tsha)?
+        .and_then(|j| serde_json::from_str::<Vec<Cand>>(&j).ok());
+    let cands = match hit {
+        Some(c) => c,
+        None => verify(classify(app, sha, text).await?, text, it).await,
+    };
     let existing = app.db.all_tasks()?;
     app.db
         .upsert_ai_tasks(&to_tasks(sha, it, &cands, &existing))?;
-    app.db
-        .cache_put(sha, &it.src, &serde_json::to_string(&cands)?, now)?;
+    let j = serde_json::to_string(&cands)?;
+    app.db.cache_put(&tsha, &it.src, &j, now)?;
+    app.db.cache_put(sha, &it.src, &j, now)?;
     Ok(String::new())
 }
 
 async fn file_item(app: &App, it: &Item, p: &Path, rel: &str, sha: &str) -> anyhow::Result<Out> {
-    if app.db.cache_get(sha)?.is_some() {
-        return Ok((sha.into(), "cached", String::new()));
+    if let Some(c) = app.db.cache_get(sha)? {
+        let v: Value = serde_json::from_str(&c).unwrap_or_default();
+        return Ok(match v["review"].as_str() {
+            Some(why) => (sha.into(), "needs_review", why.into()),
+            None => (sha.into(), "cached", String::new()),
+        });
     }
     Ok(match extract(app, p, rel, sha).await? {
-        Ex::Review(why) => (sha.into(), "needs_review", why),
+        Ex::Review(why) => {
+            let j = json!({ "review": why }).to_string();
+            app.db.cache_put(sha, &it.src, &j, crate::web::now())?;
+            (sha.into(), "needs_review", why)
+        }
         Ex::Done(note) => {
             app.db.cache_put(sha, &it.src, "[]", crate::web::now())?;
             (sha.into(), "done", note)
@@ -2219,6 +2238,66 @@ mod tests {
             "{t}"
         );
         assert!(!t.contains("x.class") && !t.contains("mac junk"), "{t}");
+    }
+
+    #[tokio::test]
+    async fn same_text_skips_model_and_review_is_cached() {
+        let _g = jev::mock::ENV.lock().await;
+        std::env::set_var("JEV_URL", "http://127.0.0.1:1");
+        let root = std::env::temp_dir().join(format!("scancache-{}", uniq()));
+        std::fs::create_dir_all(&root).unwrap();
+        let app = App::new(
+            crate::web::db::Db::memory().unwrap(),
+            crate::moodle::Moodle::new("http://127.0.0.1:1", "t"),
+            root.to_str().unwrap(),
+            0,
+        );
+        let marker = root.join("calls");
+        let fake = root.join("fake.sh");
+        let out = r#"{"type":"text","part":{"text":"{\"tasks\":[{\"title\":\"Entrega 1\",\"evidence_quote\":\"lliurar la memoria final\",\"confidence\":0.9}]}"}}"#;
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\necho x >> {}\nprintf '%s\\n' '{out}'\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        std::env::set_var("SCAN_CMD", &fake);
+        let it = Item {
+            src: "A/x.txt".into(),
+            course: "A".into(),
+            kind: "file",
+        };
+        let text = "Cal lliurar la memoria final abans de divendres";
+        classify_store(&app, "sha1aaaaaaaaaaaa", &it, text)
+            .await
+            .unwrap();
+        let c1 = std::fs::read_to_string(&marker).unwrap().lines().count();
+        classify_store(&app, "sha2bbbbbbbbbbbb", &it, text)
+            .await
+            .unwrap();
+        let calls = std::fs::read_to_string(&marker).unwrap().lines().count();
+        std::env::remove_var("SCAN_CMD");
+        assert_eq!(calls, c1, "second identical text must not call the model");
+        assert!(app.db.cache_get("sha2bbbbbbbbbbbb").unwrap().is_some());
+        assert!(app.db.task("ai:sha1aaaaaaaa:0").unwrap().is_some());
+        // review verdicts are cached
+        let f = root.join("a.xyz");
+        std::fs::write(&f, "x").unwrap();
+        let a = file_item(&app, &it, &f, "a.xyz", "shaR").await.unwrap();
+        let b = file_item(&app, &it, &f, "a.xyz", "shaR").await.unwrap();
+        assert_eq!((a.1, b.1), ("needs_review", "needs_review"));
+        assert_eq!(a.2, b.2);
+        assert!(app
+            .db
+            .cache_get("shaR")
+            .unwrap()
+            .unwrap()
+            .contains("review"));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[tokio::test]
