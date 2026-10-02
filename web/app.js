@@ -498,7 +498,7 @@ views.tasca = async (id) => {
     h('dl', { class: 'kv' },
       h('div', {}, h('dt', {}, 'Venciment'), h('dd', {}, when(t.due))),
       t.cutoff ? h('div', {}, h('dt', {}, 'Tancament'), h('dd', {}, when(t.cutoff))) : null,
-      h('div', {}, h('dt', {}, 'Moodle'), h('dd', {}, MSTATUS[t.moodle_status] || t.moodle_status)),
+      (MSTATUS[t.moodle_status] || t.moodle_status) ? h('div', {}, h('dt', {}, 'Moodle'), h('dd', {}, MSTATUS[t.moodle_status] || t.moodle_status)) : null,
       t.grade ? h('div', {}, h('dt', {}, 'Nota'), h('dd', {}, t.grade)) : null),
     t.source === 'ai' && t.ai_confirmed == null && h('div', { class: 'notice', role: 'group', 'aria-label': 'Tasca extreta per IA' },
       h('p', {}, 'Extreta per IA. Revisa-la i decideix si la mantens.'),
@@ -508,12 +508,8 @@ views.tasca = async (id) => {
     h('div', { class: 'fld' }, h('label', { for: 'estat-sel' }, 'Estat local'), h('div', { class: 'field-row' }, select), selErr),
     extras.flat(Infinity).some(Boolean) ? h('div', { class: 'v-deliver' }, h('h2', { class: 'sr-only' }, 'Entrega'), extras) : null);
 
-  const badges = [
-    l.status && !isDone(tv) && h('span', { class: 'badge ' + (['revisat OK', 'lliurat'].includes(l.status) ? 'ok' : 'warn') }, LSTATUS[l.status] || l.status),
-    t.source === 'ai' && aiBadge()];
-
   const links = stmtLinks(t.body_html);
-  const intro = h('div', {}, sandboxed(t.body_html, `Enunciat: ${t.title}`), links.length ? [h('h2', {}, "Enllaços de l'enunciat"), h('div', { class: 'list' }, links.map((u) => popLink(u, {}, linkKind(u), ' ', h('span', { class: 'mono dim' }, u))))] : null);
+  const intro = h('div', {}, sandboxed(stripTitle(t.body_html, t.title), `Enunciat: ${t.title}`), links.length ? [h('h2', {}, "Enllaços de l'enunciat"), h('div', { class: 'list' }, links.map((u) => popLink(u, {}, linkKind(u), ' ', h('span', { class: 'mono dim' }, u))))] : null);
   const fb = t.feedback_html ? sandboxed(t.feedback_html, 'Retroacció') : null;
   if (fb && fb.tagName === 'IFRAME') fb.classList.add('fb');
   const attRows = t.attachments.map((a) => {
@@ -555,7 +551,7 @@ views.tasca = async (id) => {
           f.startsWith('submit/') && h('button', { type: 'button', class: 'btn ghost', onclick: () => metaDialog(id, f, l.owners || {}) }, 'Nom i autor…'),
           l.owners?.[f] && h('span', { class: 'dim' }, `Propietari: ${l.owners[f]}`)), box);
     }) : h('p', { class: 'dim' }, `Cap fitxer vinculat. Carpeta suggerida: ${tv.submit_dir}`),
-    linkFiles(id));
+    linkFiles(id, `smx/${tv.submit_dir}`));
   const lliurat = () => h('div', { class: 'v-pane' },
     (t.submission_files || []).length ? t.submission_files.map((f) => {
       const box = h('div', { class: 'v-preview' });
@@ -571,17 +567,26 @@ views.tasca = async (id) => {
     { id: 'lliurat', label: 'Lliurat a Moodle', render: lliurat }]));
 
   return h('article', { class: 'v-tasca' },
-    h('a', { class: 'btn ghost', href: '#/tauler' }, ic('arrow-l'), 'Tauler'),
+    h('a', { class: 'btn ghost', href: route.back?.hash || '#/tauler' }, ic('arrow-l'), route.back?.label || 'Tauler'),
     h('h1', {}, t.title),
     h('div', { class: 'meta' },
       h('a', { class: 'chip cn', style: { '--h': hueOf(t.course) }, href: `#/curs/${enc(t.course)}` }, h('span', { class: 'dot', style: { '--h': hueOf(t.course) } }), cname(t.course)),
       profTxt(t.course) ? h('span', { class: 'dim' }, profTxt(t.course)) : null,
-      dueChip(tv, true), badges),
+      dueChip(tv, true), t.source === 'ai' && aiBadge()),
     h('div', { class: 'split' }, h('div', { class: 'grid' }, main, rail)));
 };
 
+// back-helpers-start
+const BACKS = { tauler: 'Tauler', curs: null, calendari: 'Calendari', forums: 'Fòrums' };
+const backFor = (view, hash, label) => (view in BACKS ? { hash, label: BACKS[view] || label || 'Tauler' } : null);
+const stripTitle = (html, title) => (html || '').replace(new RegExp(`^\\s*(?:<[^>]+>\\s*)*${title.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+')}\\s*(?=<|$)(?:<\\/[^>]+>\\s*)*`, 'i'), '');
+// back-helpers-end
 // picker-helpers-start
 const crumbsOf = (rel) => [{ name: '~', rel: '' }, ...rel.split('/').filter(Boolean).map((name, i, a) => ({ name, rel: a.slice(0, i + 1).join('/') }))];
+const startDirs = (suggest, stored) => {
+  const up = (suggest || '').split('/').filter(Boolean).map((_, i, a) => a.slice(0, a.length - i).join('/'));
+  return [...new Set([...up, stored, 'smx/submit'].filter((d) => d != null))];
+};
 const pickMove = (i, key, n) => {
   const d = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: n - 1, PageDown: i + 10, PageUp: i - 10 }[key];
   return d === undefined ? -1 : Math.max(0, Math.min(n - 1, d));
@@ -619,11 +624,13 @@ async function pkGo() {
   try { await api(`/api/tasks/${enc(pk.id)}/pick`, { method: 'POST', body: { path: e.rel } }); } catch (x) { $('#picker-e').textContent = x.message; return; }
   $('#picker').close(); await route({ soft: true });
 }
-async function openPicker(id) {
+async function openPicker(id, suggest) {
   pk.id = id; pk.opener = document.activeElement;
-  let start = 'smx/submit'; try { start = localStorage.getItem('pickerDir') ?? start; } catch (e) { /* storage blocked */ }
+  let stored = null; try { stored = localStorage.getItem('pickerDir'); } catch (e) { /* storage blocked */ }
   $('#picker').showModal();
-  if (!(await pkDir(start)) && start !== 'smx/submit') await pkDir('');
+  let ok = false;
+  for (const d of startDirs(suggest, stored)) if ((ok = await pkDir(d))) break;
+  if (!ok) await pkDir('');
   $('#picker-q').focus();
 }
 $('#picker-q').addEventListener('input', () => { pk.act = 0; pkRender(); });
@@ -649,7 +656,7 @@ async function metaDialog(id, f, owners) {
   try { await api(`/api/tasks/${id}/file-meta`, { method: 'POST', body: { path: f, name: name.value, owner: owner.value } }); await route({ soft: true }); }
   catch (e) { toast(e.message, true); }
 }
-function linkFiles(id) {
+function linkFiles(id, suggest) {
   const st = h('p', { class: 'dim hint', role: 'status' });
   const inp = h('input', { type: 'file', multiple: true, class: 'sr-only', id: 'puja-i', onchange: async () => {
     const fs = [...inp.files];
@@ -665,7 +672,7 @@ function linkFiles(id) {
     } finally { inp.value = ''; await route({ soft: true }); }
   } });
   return h('div', { class: 'fld v-link' },
-    h('button', { type: 'button', id: 'vincula', onclick: () => openPicker(id) }, ic('folder'), 'Tria un fitxer de la torre…'),
+    h('button', { type: 'button', id: 'vincula', onclick: () => openPicker(id, suggest) }, ic('folder'), 'Tria un fitxer de ~/smx…'),
     h('label', { class: 'btn', for: 'puja-i' }, ic('upload'), "Puja des d'aquest dispositiu…"), inp, st);
 }
 
@@ -700,6 +707,7 @@ async function route(o) {
     main.replaceChildren(node); main.removeAttribute('aria-busy');
     node.dispatchEvent?.(new Event('mounted'));
     const h1 = main.querySelector('h1');
+    if (!soft) route.back = backFor(nm, location.hash, h1?.textContent.trim()) ?? route.back;
     document.title = `${h1 ? h1.textContent.trim() + ' · ' : ''}Institut`;
     if (!soft && h1 && (first || same)) setText($('#live'), h1.textContent.trim()); // announced only when the h1 is not focused
     wrapFocus();
