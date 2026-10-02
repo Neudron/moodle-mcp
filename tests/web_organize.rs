@@ -242,6 +242,7 @@ fn messy_on(tag: &str, port: u16) -> (Arc<web::App>, PathBuf) {
     put(&r, "submit/misc/E1_Amin.pdf", "pdf");
     put(&r, "submit/_prova/prova.docx", "test");
     put(&r, "decks/a.txt", "deck");
+    put(&r, "marques/index.md", "---\ntitle: M\n---\n");
     put(&r, "marques/sub/b.txt", "marca");
     put(&r, "sistemas/c.txt", "sis");
     put(&r, "school-verify.skill", "skill");
@@ -318,16 +319,13 @@ async fn organize_rules_1_to_6() {
     );
     assert!(!r.join("C1/lliuraments").exists());
     // rule 5
-    for f in [
-        "decks/a.txt",
-        "marques/sub/b.txt",
-        "sistemas/c.txt",
-        "school-verify.skill",
-    ] {
+    for f in ["decks/a.txt", "sistemas/c.txt", "school-verify.skill"] {
         assert!(!r.join(f).exists(), "{f}");
-        assert!(r.join("_personal").join(f).exists(), "{f}");
+        assert!(r.join("personal").join(f).exists(), "{f}");
     }
-    assert!(!r.join("marques").exists());
+    // organize_personal_skips_course_dirs: a dir with index.md stays put
+    assert_eq!(read(&r, "marques/sub/b.txt"), "marca");
+    assert!(!r.join("_personal").exists());
     // rule 6: Mod A is the canonical label (2 tasks vs 1), files and Local follow
     assert_eq!(read(&r, "submit/Mod A/Tasca 1/Tasca_amin.docx"), "t1");
     assert!(!r.join("submit/Old").exists());

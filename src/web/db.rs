@@ -272,6 +272,14 @@ impl Db {
 
     /// Rewrite stored paths `old` (or `old/..`) to `new`: task url, scan_item,
     /// extract_cache and local files. One transaction.
+    /// Tasks whose course is a folder name get the Moodle shortname instead.
+    pub fn rename_task_course(&self, from: &str, to: &str) -> Result<usize> {
+        Ok(self.c().execute(
+            "UPDATE task SET json=json_set(json,'$.course',?2) WHERE json_extract(json,'$.course')=?1",
+            params![from, to],
+        )?)
+    }
+
     pub fn rewrite_prefix(&self, old: &str, new: &str) -> Result<usize> {
         let mut c = self.c();
         let tx = c.transaction()?;

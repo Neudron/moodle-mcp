@@ -572,15 +572,21 @@ impl Cx {
 
     /// Rule 5.
     fn personal(&mut self) -> Result<()> {
-        for n in ["decks", "marques", "sistemas", "school-verify.skill"] {
+        for n in ["decks", "sistemas", "school-verify.skill"] {
+            let course = self.abs(&format!("{n}/index.md")).is_file()
+                || std::fs::read_to_string(self.abs(".moodle/folders.json"))
+                    .is_ok_and(|t| t.contains(&format!("\"{n}\"")));
+            if course {
+                continue;
+            }
             if self.abs(n).is_dir() {
                 let mut v = Vec::new();
                 files::walk(&self.root, n, &mut v);
                 for f in v {
-                    self.place(&f, &format!("_personal/{f}"))?;
+                    self.place(&f, &format!("personal/{f}"))?;
                 }
             } else if self.abs(n).is_file() {
-                self.place(n, &format!("_personal/{n}"))?;
+                self.place(n, &format!("personal/{n}"))?;
             }
         }
         Ok(())

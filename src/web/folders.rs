@@ -156,7 +156,13 @@ pub fn migrate(root: &Path, db: &Db, dry: bool) -> Result<Report> {
     let mut modules: Vec<(String, String)> = Vec::new(); // old path -> new path
     let mut names = std::collections::HashMap::new(); // old module folder -> new
     for (id, cs) in &state.courses {
-        let old = ra::sanitize(&cs.shortname);
+        // old dir = the first segment shared by all stored paths (survives earlier renames)
+        let seg = |f: &crate::state::FileEntry| f.path.split('/').next().unwrap_or("").to_string();
+        let mut segs = cs.files.values().map(seg);
+        let old = match segs.next() {
+            Some(a) if !a.is_empty() && segs.all(|b| b == a) => a,
+            _ => ra::sanitize(&cs.shortname),
+        };
         let c = Course {
             id: id.parse().unwrap_or(0),
             fullname: cs.fullname.clone(),
@@ -164,6 +170,9 @@ pub fn migrate(root: &Path, db: &Db, dry: bool) -> Result<Report> {
             summary: String::new(),
         };
         let new = course_dir_name(&rs, &c)?;
+        if !dry && new != cs.shortname {
+            db.rename_task_course(&new, &cs.shortname)?;
+        }
         // ponytail: on resume (dir moved, state not yet rewritten) conflict-renamed `-N`
         // exact pairs are lost; those entries map to the plain new name.
         let pre = format!("{old}/");
@@ -413,6 +422,49 @@ mod tests {
             1
         );
         assert!(r.join(".moodle/trash").read_dir().unwrap().next().is_some());
+    }
+
+    const M_OLD: &str = "marques/RA01/001-x/a.pdf";
+    const M_NEW: &str = "maques/RA01/001-x/a.pdf";
+
+    #[test]
+    fn migrate_renames_already_migrated_dir() {
+        let r = tmp("again");
+        setup(&r, &[(5, "2627_DAX_0373", "maques", &[M_OLD])]);
+        put(&r.join(M_OLD), "pdf");
+        let db = Db::memory().unwrap();
+        db.upsert_ai_tasks(&[crate::web::db::Task {
+            id: "ai:1:0".into(),
+            source: "ai".into(),
+            url: M_OLD.into(),
+            ..Default::default()
+        }])
+        .unwrap();
+        migrate(&r, &db, false).unwrap();
+        assert_eq!(fs::read_to_string(r.join(M_NEW)).unwrap(), "pdf");
+        assert!(!r.join("marques").exists());
+        assert_eq!(state_paths(&r), [M_NEW]);
+        assert_eq!(db.task("ai:1:0").unwrap().unwrap().url, M_NEW);
+        assert!(migrate(&r, &db, false).unwrap().pairs.is_empty());
+    }
+
+    #[test]
+    fn migrate_normalises_task_course() {
+        let r = tmp("course");
+        setup(
+            &r,
+            &[(5, "DAM-MP03", "programacio", &["programacio/RA01/a.pdf"])],
+        );
+        let db = Db::memory().unwrap();
+        db.upsert_ai_tasks(&[crate::web::db::Task {
+            id: "ai:1:0".into(),
+            source: "ai".into(),
+            course: "programacio".into(),
+            ..Default::default()
+        }])
+        .unwrap();
+        migrate(&r, &db, false).unwrap();
+        assert_eq!(db.task("ai:1:0").unwrap().unwrap().course, "DAM-MP03");
     }
 
     #[test]
