@@ -748,7 +748,7 @@ function groupByDue(tasks, now) {
   }
   return g;
 }
-// Courses by earliest due (undated last, then name), items by due date (undated last), then Moodle module order (pos), then natural title ("Act 3" < "Act 10").
+// Courses by earliest due (undated last, then name); items in Moodle module order (pos), then natural title ("Act 1" < "Act 3" < "Act 10"), then due.
 function bySubject(list) {
   const by = {};
   for (const tv of list) (by[tv.task.course] ||= []).push(tv);
@@ -756,7 +756,7 @@ function bySubject(list) {
   const m = (c) => Math.min(...by[c].map((tv) => tv.task.due || Infinity));
   return Object.keys(by).sort((a, b) => (m(a) - m(b)) || cname(a).localeCompare(cname(b))).map((c) => ({
     course: c,
-    items: by[c].sort((a, b) => (a.task.due || Infinity) - (b.task.due || Infinity) || p(a) - p(b) || a.task.title.localeCompare(b.task.title, undefined, { numeric: true })),
+    items: by[c].sort((a, b) => p(a) - p(b) || a.task.title.localeCompare(b.task.title, undefined, { numeric: true }) || (a.task.due || Infinity) - (b.task.due || Infinity)),
   }));
 }
 // The Tauler filter only applies to the AI proposals while the Llista tab is showing.

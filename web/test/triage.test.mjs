@@ -62,10 +62,10 @@ test('bySubject: courses by name, natural title, pos first', () => {
   assert.deepEqual(r[1].items.map((v) => v.task.title), ['Zeta', 'Alfa', 'Act 1', 'Act 3', 'Act 10']);
 });
 
-test('bySubject: due ascending, undated last, pos then title break ties', () => {
+test('bySubject: Moodle order beats due date (Act 3 never above Act 1)', () => {
   const x = (title, due, pos) => ({ pos, task: { course: 'a', title, due } });
-  const r = bySubject([x('A11_P', 166), x('Sense', null, 0), x('PARA3', 114, 9), x('Zeta', 114, 2), x('Alfa', 114, 2), x('Prim', 28)]);
-  assert.deepEqual(r[0].items.map((v) => v.task.title), ['Prim', 'Alfa', 'Zeta', 'PARA3', 'A11_P', 'Sense']);
+  const r = bySubject([x('Act 3', 10, 3), x('Act 1', 90, 1), x('Act 2', null), x('Act 10', 5)]);
+  assert.deepEqual(r[0].items.map((v) => v.task.title), ['Act 1', 'Act 3', 'Act 2', 'Act 10']);
 });
 
 test('bySubject: courses by earliest due, undated last, then name', () => {
