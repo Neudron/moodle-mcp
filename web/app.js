@@ -700,7 +700,7 @@ async function route(o) {
   main.setAttribute('aria-busy', 'true');
   if (!soft) { main.dataset.view = nm; main.classList.toggle('edit', nm === 'edita' || nm === 'ide'); main.replaceChildren(skeleton()); }
   let node;
-  try { node = await views[nm](...rest.map(decodeURIComponent)); } catch (e) { node = errorPanel(e.message); }
+  try { node = await views[nm](...rest.map(decodeURIComponent)); } catch (e) { node = errorPanel(`No s'ha pogut carregar la vista: ${e.message}`); }
   if (my !== route.n) return; // a newer navigation won
   route.cur = nm;
   const paint = () => {
@@ -1223,7 +1223,7 @@ views.organitza = async () => {
     h('div', { class: 'ophd' }, h('h2', {}, 'Última ordenació'),
       ops.length ? act('Desfés l\'última ordenació', ['/api/organize/undo', (r) => `Desfet: ${r.restored} restaurats${r.skipped.length ? `, ${r.skipped.length} no s'han pogut desfer` : ''}`],
         ['Desfer l\'última ordenació?', 'Es restauraran els fitxers a la ubicació anterior.'], 'ghost') : null),
-    !ops.length ? empty('Encara no s\'ha ordenat res') : h('div', {},
+    !ops.length ? empty('Encara no s\'ha ordenat res', 'Els fitxers ordenats apareixeran aquí.') : h('div', {},
       h('p', { class: 'dim' }, `${when(log.at)} · ${ops.length} operacions`), groupOps(ops).map(grp)));
 };
 
