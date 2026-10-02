@@ -928,11 +928,11 @@ addEventListener('hashchange', async () => {
 // Never bound to an action button (Puja/Envia/Desa/Sincronitza).
 const GO = { t: 'tauler', c: 'calendari', f: 'fitxers', n: 'notes', o: 'forums', z: 'organitza' };
 const keysOn = () => { try { return localStorage.getItem('keys') !== 'off'; } catch (e) { return true; } };
-const KEYS = [['j|k', 'fila següent / anterior'], ['g t', 'Tauler'], ['g c', 'Calendari'], ['g f', 'Fitxers'], ['g n', 'Notes'], ['g o', 'Fòrums'], ['g z', 'Organitza'], ['/|o|Ctrl+K', 'cerca i salta'], ['Esc', 'tanca / esborra el filtre']];
+const KEYS = [['j|k', 'fila següent / anterior'], ['g t', 'Tauler'], ['g c', 'Calendari'], ['g f', 'Fitxers'], ['g n', 'Notes'], ['g o', 'Fòrums'], ['g z', 'Organitza'], ['/|Ctrl+K', 'cerca i salta'], ['Esc', 'tanca / esborra el filtre']];
 function showKeys() {
   const on = h('input', { type: 'checkbox', checked: keysOn(), onchange: (e) => { try { localStorage.setItem('keys', e.target.checked ? 'on' : 'off'); } catch (x) { /* ignore */ } } });
   confirmDialog('Dreceres de teclat', h('div', {},
-    h('dl', { class: 'keys' }, KEYS.flatMap(([k, d]) => [h('dt', {}, k.split('|').flatMap((alt, i) => [i ? ' o ' : '', ...alt.split(' ').map((x) => h('kbd', {}, x))])), h('dd', {}, d)])),
+    h('dl', { class: 'keys' }, KEYS.flatMap(([k, d]) => [h('dt', {}, k.split('|').flatMap((alt, i) => [i ? ', ' : '', ...alt.split(' ').map((x) => h('kbd', {}, x))])), h('dd', {}, d)])),
     h('label', {}, on, 'Activa les dreceres d\'una tecla')), 'Tanca', true);
 }
 document.addEventListener('keydown', (e) => {
