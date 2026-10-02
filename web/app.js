@@ -703,7 +703,7 @@ async function route(o) {
   if (my !== route.n) return; // a newer navigation won
   route.cur = nm;
   const paint = () => {
-    main.dataset.view = nm; main.classList.toggle('edit', nm === 'edita' || nm === 'ide');
+    const ide = nm === 'ide' && node.classList?.contains('v-ide'); main.dataset.view = nm; main.classList.toggle('edit', nm === 'edita' || ide); document.body.classList.toggle('ide-mode', ide);
     main.replaceChildren(node); main.removeAttribute('aria-busy');
     node.dispatchEvent?.(new Event('mounted'));
     const h1 = main.querySelector('h1');
@@ -1345,6 +1345,13 @@ function previewDoc(lang, text) {
   if (lang === 'markdown') return `<body style="font:16px/1.6 system-ui;max-width:70ch;margin:16px auto;padding:0 16px">${window.marked.parse(text)}</body>`;
   return null;
 }
+// Load-failure target for #/ide/<rel>: null when fine; 4xx never retries (same answer again).
+function ideTarget(rel, e) {
+  if (!rel) return { kind: 'empty', title: 'Tria un fitxer per editar', text: "Obre un fitxer des de Fitxers i prem «Obre a l'IDE».", href: '#/fitxers', label: 'Ves a Fitxers' };
+  if (!e) return null;
+  if (e.status === 415) return { kind: 'empty', title: 'No és un fitxer de text', text: 'Aquest fitxer no es pot editar com a text.', href: `#/fitxers/${encodeURIComponent(rel)}`, label: 'Torna al fitxer' };
+  return { kind: 'err', msg: e.message, retry: !(e.status >= 400 && e.status < 500) };
+}
 // ide-helpers-end
 const MONACO = 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.2/min', MARKED = 'https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js';
 const loadJs = (src) => (loadJs[src] ??= new Promise((ok, ko) => { const s = h('script', { src }); s.onload = ok; s.onerror = () => { delete loadJs[src]; ko(new Error('No s\'ha pogut carregar ' + src)); }; document.head.append(s); }));
@@ -1358,13 +1365,14 @@ async function loadMonaco() {
 
 views.ide = async (...parts) => {
   const rel = parts.join('/');
-  let f;
-  try { f = await api(`/api/ide/file?path=${enc(rel)}`); }
-  catch (e) { return e.status === 415 ? empty('No és un fitxer de text', 'Aquest fitxer no es pot editar com a text.', h('a', { class: 'btn', href: `#/fitxers/${enc(rel)}` }, 'Torna al fitxer')) : errorPanel(e.message); }
+  let f, t0 = ideTarget(rel);
+  if (!t0) try { f = await api(`/api/ide/file?path=${enc(rel)}`); } catch (e) { t0 = ideTarget(rel, e); }
+  if (t0) return t0.kind === 'empty' ? empty(t0.title, t0.text, h('a', { class: 'btn', href: t0.href }, t0.label)) : errorPanel(t0.msg, t0.retry);
   let sha = f.sha, dirty = false, ed;
   const lang = langOf(rel), live = ['html', 'svg', 'markdown'].includes(lang) || lang === 'xml';
   const state = h('span', { class: 'v-dirty dim', role: 'status' });
-  const setDirty = (d) => { dirty = d; setText(state, d ? 'Canvis sense desar' : ''); };
+  const saveBtn = h('button', { type: 'button', onclick: () => save() }, 'Desa');
+  const setDirty = (d) => { dirty = d; setText(state, d ? 'Canvis sense desar' : ''); saveBtn.classList.toggle('primary', d); };
   const post = (url, body) => api(url, { method: 'POST', body });
   const save = async () => {
     const content = ed.getValue();
@@ -1391,10 +1399,10 @@ views.ide = async (...parts) => {
   const bar = h('div', { class: 'v-editbar' },
     h('a', { class: 'btn ghost', href: `#/fitxers/${enc(rel)}` }, ic('arrow-l'), 'Torna al fitxer'),
     h('span', { class: 'v-editname', title: rel }, rel.split('/').pop()), state,
-    h('button', { type: 'button', class: 'primary', onclick: save }, 'Desa'));
+    saveBtn);
   const wrap = h('section', { class: 'v-ide' }, h('h1', { class: 'sr-only' }, `IDE ${rel}`), bar,
     f.teacher && h('p', { class: 'v-idenote dim' }, 'Original del professor: en desar es crearà una còpia _amin.'),
-    h('div', { class: 'v-idesplit' + (live ? ' live' : '') }, box, frame));
+    h('div', { class: 'v-idesplit' + (live ? ' live' : '') }, box, live && h('div', { class: 'v-pv' }, h('p', { class: 'v-pvl' }, 'Previsualització'), frame)));
   wrap.addEventListener('mounted', async () => {
     let m = null;
     try { if (lang === 'markdown') { const d = window.define; window.define = undefined; try { await loadJs(MARKED); } finally { window.define = d; } } await loadMonaco(); m = window.monaco; }

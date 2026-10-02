@@ -88,3 +88,14 @@ test('bellItems adds a non-dismissable overdue item', () => {
   assert.equal(all.length, 2);
   assert.equal(all[1].key, 'late');
 });
+
+test('ideTarget', () => {
+  const { ideTarget } = new Function(`${block('ide')}; return { ideTarget };`)();
+  const e = ideTarget('');
+  assert.equal(e.title, 'Tria un fitxer per editar');
+  assert.equal(e.href, '#/fitxers');
+  assert.equal(ideTarget('a.md'), null);
+  assert.equal(ideTarget('a.md', { status: 404, message: 'x' }).retry, false);
+  assert.equal(ideTarget('a.md', { status: 500, message: 'x' }).retry, true);
+  assert.equal(ideTarget('a.md', { status: 415 }).kind, 'empty');
+});
