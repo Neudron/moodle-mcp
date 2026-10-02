@@ -50,6 +50,50 @@ fn post(c: &reqwest::Client, base: &str, path: &str) -> reqwest::RequestBuilder 
         .header("x-neu", "1")
 }
 
+/// POST /api/sync (202), then wait until the background run has finished.
+async fn sync_wait(c: &reqwest::Client, base: &str) -> serde_json::Value {
+    let r = post(c, base, "/api/sync").send().await.unwrap();
+    assert_eq!(r.status(), 202, "{}", r.text().await.unwrap());
+    for _ in 0..600 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let st: serde_json::Value = c
+            .get(format!("{base}/api/status"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if st["syncing"] == false {
+            return st;
+        }
+    }
+    panic!(
+        "sync did not finish: {}",
+        c.get(format!("{base}/api/status"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn sync_is_background_and_409_while_running() {
+    let (base, app, _m, _root) = start("syncbg").await;
+    let c = reqwest::Client::new();
+    {
+        let _g = app.syncing.lock().await;
+        let r = post(&c, &base, "/api/sync").send().await.unwrap();
+        assert_eq!(r.status(), 409);
+    }
+    let st = sync_wait(&c, &base).await;
+    assert!(st["result"]["files_new"].is_number(), "{st}");
+    assert!(st["progress"].is_null());
+}
+
 #[tokio::test]
 async fn guard_blocks_bad_requests() {
     let (base, ..) = start("guard").await;
@@ -105,7 +149,7 @@ async fn guard_blocks_cross_site_and_sets_corp() {
 async fn old_open_task_is_stale() {
     let (base, app, _m, _root) = start("stale").await;
     let c = reqwest::Client::new();
-    post(&c, &base, "/api/sync").send().await.unwrap();
+    sync_wait(&c, &base).await;
     app.db.update_task("assign:7", |t| t.due = 86400).unwrap();
     let tasks: serde_json::Value = c
         .get(format!("{base}/api/tasks"))
@@ -128,8 +172,7 @@ async fn old_open_task_is_stale() {
 async fn sync_then_tasks_and_status() {
     let (base, _app, _m, _root) = start("sync").await;
     let c = reqwest::Client::new();
-    let r = post(&c, &base, "/api/sync").send().await.unwrap();
-    assert!(r.status().is_success(), "{}", r.text().await.unwrap());
+    sync_wait(&c, &base).await;
     let tasks: serde_json::Value = c
         .get(format!("{base}/api/tasks"))
         .send()
@@ -283,7 +326,7 @@ async fn moodle_file_sandboxes_only_html_svg_and_ignores_fragment_ext() {
 async fn lliurat_moves_folder_under_module_and_rewrites_files() {
     let (base, _app, _m, root) = start("lliurat").await;
     let c = reqwest::Client::new();
-    post(&c, &base, "/api/sync").send().await.unwrap();
+    sync_wait(&c, &base).await;
     let one: serde_json::Value = c
         .get(format!("{base}/api/tasks/assign:7"))
         .send()
@@ -328,7 +371,7 @@ async fn lliurat_moves_folder_under_module_and_rewrites_files() {
 async fn undo_lliurat_moves_folder_back_and_refuses_nonempty_target() {
     let (base, _app, _m, root) = start("unlliurat").await;
     let c = reqwest::Client::new();
-    post(&c, &base, "/api/sync").send().await.unwrap();
+    sync_wait(&c, &base).await;
     let get = |c: &reqwest::Client| c.get(format!("{base}/api/tasks/assign:7")).send();
     let one: serde_json::Value = get(&c).await.unwrap().json().await.unwrap();
     let dir = one["submit_dir"].as_str().unwrap().to_string();
@@ -419,7 +462,7 @@ async fn static_assets_use_etag_and_304() {
 async fn tasks_etag_changes_on_write_and_304s_otherwise() {
     let (base, app, ..) = start("tetag").await;
     let c = reqwest::Client::new();
-    post(&c, &base, "/api/sync").send().await.unwrap();
+    sync_wait(&c, &base).await;
     let r = c.get(format!("{base}/api/tasks")).send().await.unwrap();
     let et = r
         .headers()
@@ -486,7 +529,7 @@ async fn ai_task_list_has_evidence_but_no_body_and_detail_is_full() {
 async fn upload_route_saves_draft_and_rejects_bad_input() {
     let (base, app, _m, root) = start("upload").await;
     let c = reqwest::Client::new();
-    post(&c, &base, "/api/sync").send().await.unwrap();
+    sync_wait(&c, &base).await;
     std::fs::create_dir_all(root.join("submit/T")).unwrap();
     std::fs::write(root.join("submit/T/a_amin.txt"), "x").unwrap();
     let up = |id: &str, files: serde_json::Value| {
@@ -534,7 +577,7 @@ async fn moodle_warnings_become_errors() {
         };
         let (base, _app, _m, root) = start_with(&format!("warn-{f}"), cfg).await;
         let c = reqwest::Client::new();
-        post(&c, &base, "/api/sync").send().await.unwrap();
+        sync_wait(&c, &base).await;
         std::fs::create_dir_all(root.join("submit/T")).unwrap();
         std::fs::write(root.join("submit/T/a_amin.txt"), "x").unwrap();
         let (path, body) = if f.ends_with("save_submission") {
@@ -563,7 +606,7 @@ async fn submit_moves_folder_to_lliurat_and_readme_follows() {
     };
     let (base, app, _m, root) = start_with("submit", cfg).await;
     let c = reqwest::Client::new();
-    post(&c, &base, "/api/sync").send().await.unwrap();
+    sync_wait(&c, &base).await;
     let one: serde_json::Value = c
         .get(format!("{base}/api/tasks/assign:7"))
         .send()
@@ -597,7 +640,7 @@ async fn submit_moves_folder_to_lliurat_and_readme_follows() {
 }
 
 async fn seed_task_dir(c: &reqwest::Client, base: &str) -> String {
-    post(c, base, "/api/sync").send().await.unwrap();
+    sync_wait(c, base).await;
     let one: serde_json::Value = c
         .get(format!("{base}/api/tasks/assign:7"))
         .send()
@@ -613,7 +656,7 @@ async fn seed_task_dir(c: &reqwest::Client, base: &str) -> String {
 async fn upload_refuses_teacher_originals_outside_submit() {
     let (base, _app, _m, root) = start("orig").await;
     let c = reqwest::Client::new();
-    post(&c, &base, "/api/sync").send().await.unwrap();
+    sync_wait(&c, &base).await;
     std::fs::create_dir_all(root.join("submit/T")).unwrap();
     std::fs::write(root.join("submit/T/plain.txt"), "x").unwrap();
     let up = |f: &str| {
@@ -878,7 +921,7 @@ async fn raw_supports_range_and_caps_large_files() {
 async fn me_returns_fullname_after_sync() {
     let (base, ..) = start("me").await;
     let c = reqwest::Client::new();
-    post(&c, &base, "/api/sync").send().await.unwrap();
+    sync_wait(&c, &base).await;
     let j: serde_json::Value = c
         .get(format!("{base}/api/me"))
         .send()
@@ -894,7 +937,7 @@ async fn me_returns_fullname_after_sync() {
 async fn file_meta_renames_link_and_repoints() {
     let (base, app, _m, root) = start("fmeta").await;
     let c = reqwest::Client::new();
-    post(&c, &base, "/api/sync").send().await.unwrap();
+    sync_wait(&c, &base).await;
     std::fs::create_dir_all(root.join("submit/T")).unwrap();
     let target = "Digitalització aplicada/RA01/Mapa IT·OT.txt";
     std::os::unix::fs::symlink(root.join(target), root.join("submit/T/old.txt")).unwrap();

@@ -45,12 +45,24 @@ async fn browse_and_pick() {
     tokio::spawn(web::serve_on(listener, Arc::clone(&app)));
     let base = format!("http://127.0.0.1:{port}");
     let c = reqwest::Client::new();
-    assert!(post(&c, &base, "/api/sync")
-        .send()
-        .await
-        .unwrap()
-        .status()
-        .is_success());
+    assert_eq!(
+        post(&c, &base, "/api/sync").send().await.unwrap().status(),
+        202
+    );
+    for _ in 0..100 {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let st: serde_json::Value = c
+            .get(format!("{base}/api/status"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        if st["syncing"] == false {
+            break;
+        }
+    }
 
     let get = |q: &str| c.get(format!("{base}/api/browse?path={q}")).send();
     let r = get("").await.unwrap();

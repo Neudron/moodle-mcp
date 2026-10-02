@@ -70,6 +70,10 @@ h3{margin:var(--s2) 0 var(--s1)}
 .brand .ic{color:var(--accent);width:24px;height:24px}
 .foot{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--s1);align-items:center;margin-bottom:var(--s1)}
 .foot button{width:100%;padding:0}
+.foot #sync{grid-column:1/-1;gap:var(--s1)}
+.foot #syncbar{grid-column:1/-1}
+.foot #syncbar .bar{width:100%}
+.foot #syncbar .barwrap{display:flex}
 .foot #lastsync{grid-column:1/-1;color:var(--dim);font-size:14px}
 .tabs,.courses{display:flex;flex-direction:column;gap:var(--s1)}
 .tabs a,.courses a{position:relative;display:flex;align-items:center;gap:var(--s2);min-height:44px;padding:0 var(--s2);border-radius:var(--r-md);color:var(--text);text-decoration:none;min-width:0}
@@ -272,6 +276,8 @@ dialog kbd{font:600 14px var(--mono);background:var(--sunk);border:1px solid var
   .brand{flex:1;min-height:40px}
   .foot{margin:0;display:flex;gap:var(--s1)}
   .foot button{width:44px}
+  .foot #sync .lbl{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+  .foot #syncbar{display:none}
   .foot #lastsync{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .side .sec{display:none}
   .courses{-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 32px),transparent);order:3;flex:0 0 100%;flex-direction:row;overflow-x:auto;scroll-snap-type:x proximity;scroll-padding-inline:16px 32px;gap:var(--s1);padding:var(--s1) var(--s2) 0;margin:0 calc(-1*var(--s2))}

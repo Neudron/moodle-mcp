@@ -729,10 +729,24 @@ function notifItems(a) {
 const authBannerText = (a) => notifItems(a).map((i) => i.text).join(' · ');
 const visibleBanner = (items, dismissed) => items.filter((i) => !dismissed.has(i.key));
 // auth-helpers-end
+// sync-helpers-start
+const syncProgress = (p) => (p ? `Sincronitzant: ${p.phase === 'files' ? 'fitxers' : 'tasques'} ${p.i}/${p.n} · ${p.course}` : 'Sincronitzant…');
+const syncSummary = (r) => (r ? `Sincronitzat: ${r.events} canvis, ${r.files_new} fitxers nous, ${r.files_removed} eliminats (a la paperera)${r.errors?.length ? `. ${r.errors.length} errors` : ''}` : 'Sincronitzat');
+// sync-helpers-end
+function syncUi(s) {
+  const b = $('#sync'), bw = $('#syncbar');
+  refreshStatus.busy = s.syncing;
+  b.toggleAttribute('aria-disabled', s.syncing); b.setAttribute('aria-busy', String(s.syncing));
+  bw.hidden = !s.syncing;
+  if (s.syncing) { const p = s.progress; bw.replaceChildren(bar(p ? p.i : 0, p ? p.n : 1, 'Progrés de la sincronització', 'acc', '')); }
+  if (s.syncing) { clearTimeout(refreshStatus.t); refreshStatus.t = setTimeout(refreshStatus, 1500); }
+  else if (refreshStatus.watch) { refreshStatus.watch = false; toast(s.error || syncSummary(s.result), !!s.error); }
+}
 async function refreshStatus() {
   try {
     const s = await api('/api/status');
-    setText($('#lastsync'), s.syncing ? 'Sincronitzant…' : s.last_sync ? `Sincronitzat ${syncAt(s.last_sync)}` : 'Mai sincronitzat');
+    setText($('#lastsync'), s.syncing ? syncProgress(s.progress) : s.last_sync ? `Sincronitzat ${syncAt(s.last_sync)}` : 'Mai sincronitzat');
+    syncUi(s);
     const prev = refreshStatus.ls; refreshStatus.ls = s.last_sync;
     if (!s.syncing && shouldSoftRoute(prev, s.last_sync, document.activeElement?.tagName, route.cur)) route({ soft: true });
     const b = $('#banner'); b.hidden = !s.error; setText(b, s.error || '');
@@ -784,14 +798,10 @@ async function loadCourses() {
 $('#cursos-btn').addEventListener('click', () => $('#cursos-sheet').showModal());
 
 $('#scan-slot').append(scanControl());
-$('#sync').addEventListener('click', async (e) => {
-  const b = e.currentTarget;
-  if (b.getAttribute('aria-busy') === 'true') return;
-  b.setAttribute('aria-disabled', 'true'); b.setAttribute('aria-busy', 'true');
-  $('#lastsync').textContent = 'Sincronitzant…';
-  try { const r = await api('/api/sync', { method: 'POST' }); toast(`Sincronitzat (${r.events} canvis)`); await route({ soft: true }); }
-  catch (err) { toast(err.message, true); }
-  b.removeAttribute('aria-disabled'); b.removeAttribute('aria-busy'); refreshStatus();
+$('#sync').addEventListener('click', async () => {
+  if (refreshStatus.busy) return;
+  try { await api('/api/sync', { method: 'POST' }); } catch (err) { toast(err.message, true); return; }
+  refreshStatus.watch = true; refreshStatus();
 });
 const curTheme = () => document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
 // Sandboxed iframes bake the theme colours into srcdoc, so a theme change re-renders the view.

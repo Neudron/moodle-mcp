@@ -14,6 +14,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 type S = State<Arc<App>>;
@@ -828,7 +829,9 @@ async fn grades(State(app): S) -> R<Json<Vec<Value>>> {
 async fn status(State(app): S) -> R<Json<Value>> {
     Ok(Json(json!({
         "last_sync": app.db.kv_get("last_sync")?.and_then(|v| v.parse::<i64>().ok()).unwrap_or(0),
-        "syncing": app.syncing.try_lock().is_err(),
+        "syncing": app.syncing.try_lock().is_err() || app.bg_sync.load(Ordering::Relaxed),
+        "progress": kv_json(&app, "sync_progress"),
+        "result": kv_json(&app, "sync_result"),
         "error": app.db.kv_get("last_error")?.unwrap_or_default(),
         "errors": app.db.recent_errors(5)?.into_iter()
             .map(|(at, source, kind, msg)| json!({"at": at, "source": source, "kind": kind, "msg": msg}))
@@ -956,15 +959,35 @@ async fn apple_reimport(State(app): S) -> (StatusCode, Json<Value>) {
     }
 }
 
-async fn sync_now(State(app): S) -> R<Json<Value>> {
-    if app.syncing.try_lock().is_err() {
+/// kv value parsed as JSON, null when empty or missing.
+fn kv_json(app: &App, k: &str) -> Value {
+    app.db
+        .kv_get(k)
+        .ok()
+        .flatten()
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or(Value::Null)
+}
+
+async fn sync_now(State(app): S) -> R<(StatusCode, Json<Value>)> {
+    if app.syncing.try_lock().is_err() || app.bg_sync.swap(true, Ordering::AcqRel) {
         return Err(ApiErr(
             StatusCode::CONFLICT,
             "ja s'està sincronitzant".into(),
         ));
     }
-    let ev = crate::web::run_sync(&app, false).await.map_err(upstream)?;
-    Ok(Json(json!({"events": ev.len()})))
+    tokio::spawn(async move {
+        let a = Arc::clone(&app);
+        // inner spawn: a panic still reaches the store below
+        let _ = tokio::spawn(async move {
+            if crate::web::run_sync(&a, true).await.is_ok() {
+                let _ = crate::web::organize::delivered_sync(&a).await;
+            }
+        })
+        .await;
+        app.bg_sync.store(false, Ordering::Release);
+    });
+    Ok((StatusCode::ACCEPTED, Json(json!({"started": true}))))
 }
 
 async fn office_config(State(app): S, Json(q): Json<PathQ>) -> R<Json<Value>> {

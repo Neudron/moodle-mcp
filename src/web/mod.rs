@@ -28,6 +28,8 @@ pub struct App {
     pub root: String,
     pub port: u16,
     pub syncing: tokio::sync::Mutex<()>,
+    /// Set from the 202 until the spawned sync ends, so status never shows a gap.
+    pub bg_sync: std::sync::atomic::AtomicBool,
 }
 
 impl App {
@@ -38,6 +40,7 @@ impl App {
             root: root.to_string(),
             port,
             syncing: tokio::sync::Mutex::new(()),
+            bg_sync: Default::default(),
         }
     }
 }
