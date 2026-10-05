@@ -448,6 +448,11 @@ const RETRY_SECS: i64 = 6 * 3600;
 /// Shot state of a task: "ready", "pending" (capture running or just started) or "none".
 /// Starts a background capture when the task qualifies and was not tried in the last 6h.
 pub fn ensure(app: &Arc<App>, t: &crate::web::db::Task) -> &'static str {
+    // empty statement: a capture is a blank strip, the UI shows the direct Moodle link instead
+    if crate::web::scan::strip_html(&t.body_html).trim().is_empty() && !t.body_html.contains("<img")
+    {
+        return "none";
+    }
     let file = shot_file(&app.root, &t.id);
     if file.exists() {
         return "ready";

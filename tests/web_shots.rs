@@ -45,6 +45,13 @@ async fn shot_routes() {
                 id: "assign:auto".into(),
                 kind: "assign".into(),
                 url: format!("{}/mod/assign/view.php?id=1", m.base()),
+                body_html: "<p>Enunciat</p>".into(),
+                ..Default::default()
+            },
+            Task {
+                id: "assign:empty".into(),
+                kind: "assign".into(),
+                url: format!("{}/mod/assign/view.php?id=2", m.base()),
                 ..Default::default()
             },
         ])
@@ -91,6 +98,8 @@ async fn shot_routes() {
     );
     // foreign host: never spawn
     assert_eq!(shot("assign:evil").await, "none");
+    // empty statement: no capture, the UI falls back to the direct link
+    assert_eq!(shot("assign:empty").await, "none");
     // no Firefox session: the bridge is never spawned; the (failing stub) fallback runs instead
     let ffroot = root.join("ff");
     std::fs::create_dir_all(&ffroot).unwrap();
