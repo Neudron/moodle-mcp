@@ -1044,6 +1044,23 @@ async fn to_pdf_converts_linked_docx_next_to_it() {
         b"%PDF-mock"
     );
     assert_eq!(go(&d).send().await.unwrap().status(), 400);
+    // Relink the doc and convert again: the linked PDF is overwritten, never duplicated.
+    post(&c, &base, "/api/tasks/assign:7/files")
+        .json(&serde_json::json!({"files": [format!("{dir}/a-2_amin.pdf"), t, d]}))
+        .send()
+        .await
+        .unwrap();
+    let l: serde_json::Value = go(&d).send().await.unwrap().json().await.unwrap();
+    let f = l["files"].as_array().unwrap();
+    assert_eq!(
+        f.iter()
+            .filter(|x| x.as_str().unwrap().ends_with(".pdf"))
+            .count(),
+        1,
+        "{l}"
+    );
+    assert!(!l["files"].to_string().contains("a.docx"), "{l}");
+    assert!(!root.join(&dir).join("a-3_amin.pdf").exists());
 }
 
 #[tokio::test]

@@ -109,6 +109,15 @@ async fn browse_and_pick() {
         .unwrap()["files"]
         .clone();
     assert_eq!(files.as_array().unwrap().len(), 1);
+    // A submit/ symlink is linked as given, not followed out of submit/ into a second link.
+    let files = pick(&format!("smx/{rel}"))
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()["files"]
+        .clone();
+    assert_eq!(files, serde_json::json!([rel]));
     let files = pick("Docs2/a.pdf")
         .await
         .unwrap()

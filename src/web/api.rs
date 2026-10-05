@@ -663,17 +663,23 @@ async fn to_pdf(State(app): S, Path(id): Path<String>, Json(b): Json<PickIn>) ->
     let stem = rel.file_stem().unwrap_or_default().to_string_lossy();
     let dir = rel.parent().unwrap_or(std::path::Path::new(""));
     let abs = std::path::Path::new(&app.root).join(dir);
+    // Re-converting overwrites a PDF this task already links instead of adding another -N copy.
+    let linked = app.db.local(&id)?.files;
+    let is_linked = |n: &str| linked.contains(&dir.join(n).to_string_lossy().into_owned());
     let mut name = files::amin_name(&format!("{stem}.pdf"));
     for n in 2.. {
-        if !abs.join(&name).exists() {
+        if is_linked(&name) || !abs.join(&name).exists() {
             break;
         }
         name = files::amin_name(&format!("{stem}-{n}.pdf"));
     }
+    let again = is_linked(&name);
     files::write_atomic(&abs.join(&name), pdf).map_err(anyhow::Error::from)?;
     let out = dir.join(&name).to_string_lossy().into_owned();
     let l = app.db.update_local(&id, |l| {
-        if let Some(f) = l.files.iter_mut().find(|f| **f == b.path) {
+        if again {
+            l.files.retain(|f| *f != b.path);
+        } else if let Some(f) = l.files.iter_mut().find(|f| **f == b.path) {
             *f = out;
         }
     })?;
@@ -687,18 +693,30 @@ struct PickIn {
 }
 /// Link a file picked from $HOME into the task's submit folder (symlink, never a copy).
 async fn pick(State(app): S, Path(id): Path<String>, Json(b): Json<PickIn>) -> R<Json<Local>> {
-    let p = files::jail(&files::home(), &b.path).map_err(forbid)?;
+    let root = std::path::Path::new(&app.root);
+    let croot = root.canonicalize().map_err(anyhow::Error::from)?;
+    // A submit/ path is linked as given: canonicalizing would follow a picked symlink out of submit/.
+    let sub = croot
+        .strip_prefix(files::home())
+        .ok()
+        .and_then(|d| b.path.strip_prefix(&format!("{}/", d.to_string_lossy())))
+        .filter(|r| r.starts_with("submit/") && !r.split('/').any(|c| c == ".." || c == "."));
+    let p = match sub {
+        Some(r) => files::jail(root, r),
+        None => files::jail(&files::home(), &b.path),
+    }
+    .map_err(forbid)?;
     if !p.is_file() {
         return Err(bad("no és un fitxer"));
     }
-    let root = std::path::Path::new(&app.root);
-    let croot = root.canonicalize().map_err(anyhow::Error::from)?;
     let t = app
         .db
         .task(&id)?
         .ok_or(ApiErr(StatusCode::NOT_FOUND, "no existeix".into()))?;
     let l = app.db.local(&id)?;
-    let rel = if let (true, Ok(r)) = (p.starts_with(croot.join("submit")), p.strip_prefix(&croot)) {
+    let rel = if let Some(r) = sub {
+        r.to_string()
+    } else if let (true, Ok(r)) = (p.starts_with(croot.join("submit")), p.strip_prefix(&croot)) {
         r.to_string_lossy().into_owned()
     } else {
         let stem = p

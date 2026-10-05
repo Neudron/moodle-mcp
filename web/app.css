@@ -429,7 +429,6 @@ kbd{font:600 12px var(--sans);background:var(--sunk);color:var(--text);border:1p
 .v-oo{height:calc(100dvh - 56px - var(--banner-h));overflow:hidden;background:var(--raised)}
 .v-oo iframe{border:0}
 .v-edita-fb{max-width:640px;margin:var(--s4) auto;padding:0 var(--s2)}
-.v-editwarn{flex:none;font-weight:600;color:var(--text)}
 .v-acts{position:relative;flex:none;margin:0;border-radius:var(--r-md)}
 .v-acts>summary{min-height:44px}
 .v-acts[open]>summary{border-bottom:0;margin:0}

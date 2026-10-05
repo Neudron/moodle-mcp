@@ -641,7 +641,7 @@ $('#picker').addEventListener('close', () => { const o = pk.opener; pk.opener = 
 // amin-helpers-start
 const aminName = (n) => { const i = n.lastIndexOf('.'), st = (i > 0 ? n.slice(0, i) : n).replace(/_amin$/i, '_amin'), x = i > 0 ? n.slice(i) : ''; return st.split(/[^\p{L}\p{N}]+/u).some((w) => w.toLowerCase() === 'amin') ? st + x : `${st}_amin${x}`; };
 // amin-helpers-end
-async function metaDialog(id, f, owners, done) {
+async function metaDialog(id, f, owners) {
   const base = f.split('/').pop();
   let me = ''; try { me = (await api('/api/me')).fullname || ''; } catch (e) { /* optional */ }
   const name = h('input', { id: 'meta-name', value: aminName(base), autocomplete: 'off', spellcheck: 'false' });
@@ -650,7 +650,7 @@ async function metaDialog(id, f, owners, done) {
     h('label', { for: 'meta-name' }, 'Nom'), name, h('label', { for: 'meta-owner' }, 'Propietari'), owner,
     h('p', { class: 'dim hint' }, "Moodle posa l'autor ell mateix: aquest nom només es guarda aquí."));
   if (!(await confirmDialog('Nom i autor', body, 'Desa'))) return;
-  try { await api(`/api/tasks/${enc(id)}/file-meta`, { method: 'POST', body: { path: f, name: name.value, owner: owner.value } }); await (done ? done(f.slice(0, f.lastIndexOf('/') + 1) + name.value.trim()) : route({ soft: true })); }
+  try { await api(`/api/tasks/${enc(id)}/file-meta`, { method: 'POST', body: { path: f, name: name.value, owner: owner.value } }); await route({ soft: true }); }
   catch (e) { toast(e.message, true); }
 }
 function linkFiles(id, suggest) {
@@ -1349,7 +1349,6 @@ views.edita = async (...parts) => {
   try { cfg = await api('/api/office/config', { method: 'POST', body: { path: rel } }); }
   catch (e) { return fallback(e.status === 503 ? 'OnlyOffice no disponible.' : e.message); }
   let tv; try { tv = taskOf((await tasksOnce()).filter((t) => t.task.kind !== 'post'), cfg.rel); } catch (e) { /* menu works without a task */ }
-  const reopen = (r) => { location.hash = `#/edita/${enc(r)}`; };
   // OnlyOffice saves on its own schedule: conversions read the last saved version.
   const menu = h('div', { class: 'v-acts-m' },
     tv ? h('p', { class: 'dim' }, 'Tasca: ', h('a', { href: `#/tasca/${enc(tv.task.id)}` }, tv.task.title)) : h('p', { class: 'dim' }, 'Fitxer no vinculat a cap tasca: vincula\'l des de la tasca per afegir-hi el PDF o més fitxers.'),
@@ -1358,7 +1357,8 @@ views.edita = async (...parts) => {
     DOC.test(cfg.rel) && pdfLink(cfg.rel),
     tv && linkFiles(tv.task.id, `smx/${dirOf(cfg.rel)}`),
     tv && cfg.rel.startsWith('submit/') && h('button', { type: 'button', class: 'btn ghost', onclick: async () => {
-      try { await linkIn(tv, cfg.rel); await metaDialog(tv.task.id, cfg.rel, tv.local.owners || {}, async (r) => reopen(r)); } catch (e) { toast(e.message, true); }
+      // Rename from the task page: OnlyOffice saves to this path, so never rename under the live editor.
+      try { await linkIn(tv, cfg.rel); location.hash = `#/tasca/${enc(tv.task.id)}`; } catch (e) { toast(e.message, true); }
     } }, 'Nom i autor…'),
     openLocal, saveBack);
   const acts = h('details', { class: 'v-acts', onkeydown: (e) => { if (e.key === 'Escape' && acts.open) { acts.open = false; acts.firstChild.focus(); } } },
@@ -1366,9 +1366,8 @@ views.edita = async (...parts) => {
   // DocsAPI replaces #oo with an iframe sized 100% of its parent, so the parent carries the height.
   const holder = h('div', { class: 'v-oo' }, h('div', { id: 'oo' }));
   const bar = h('div', { class: 'v-editbar' },
-    h('a', { class: 'btn ghost', href: `#/fitxers/${enc(cfg.rel)}` }, ic('arrow-l'), 'Torna al fitxer'),
+    h('a', { class: 'btn ghost dl', href: `#/fitxers/${enc(cfg.rel)}`, 'aria-label': 'Torna al fitxer' }, ic('arrow-l'), h('span', { class: 'dl-t', 'aria-hidden': 'true' }, 'Torna al fitxer')),
     h('span', { class: 'v-editname', title: cfg.rel }, cfg.rel.split('/').pop()),
-    tv?.needs_pdf && h('span', { class: 'v-editwarn' }, 'Demana PDF'),
     dlBtn(dlHref(cfg.rel), cfg.rel.split('/').pop()), acts);
   const wrap = h('section', { class: 'v-edita' }, h('h1', { class: 'sr-only' }, `Edita ${cfg.rel}`), bar, holder);
   // DocsAPI injects an untitled iframe: name it once it appears.
