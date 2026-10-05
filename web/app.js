@@ -1331,7 +1331,13 @@ views.edita = async (...parts) => {
   // DocsAPI injects an untitled iframe: name it once it appears.
   new MutationObserver((_, o) => { const f = holder.querySelector('iframe'); if (f) { f.title = 'Editor de documents'; o.disconnect(); } }).observe(holder, { childList: true, subtree: true });
   // api.js does getElementById(placeholderId): it takes the id only, so build once the holder is in the document.
-  const open = () => { if (holder.isConnected) new window.DocsAPI.DocEditor('oo', cfg.config); };
+  // A content blocker (uBlock blocks OnlyOffice's Analytics.js) leaves the editor on its skeleton forever.
+  let ready = false;
+  const open = () => {
+    if (!holder.isConnected) return;
+    new window.DocsAPI.DocEditor('oo', { ...cfg.config, events: { onAppReady: () => { ready = true; } } });
+    setTimeout(() => { if (!ready && wrap.isConnected) wrap.replaceChildren(fallback("L'editor no s'ha carregat. Si tens uBlock Origin o un altre bloquejador, desactiva'l per a 127.0.0.1:8080 i torna-ho a provar, o obre el fitxer amb l'aplicació de l'ordinador.")); }, 20000);
+  };
   wrap.addEventListener('mounted', () => {
     if (window.DocsAPI) return open();
     const s = h('script', { src: cfg.api_js });
