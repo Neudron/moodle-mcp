@@ -91,12 +91,17 @@ async fn shot_routes() {
     );
     // foreign host: never spawn
     assert_eq!(shot("assign:evil").await, "none");
-    // no Firefox session: never spawn
+    // no Firefox session: the bridge is never spawned; the (failing stub) fallback runs instead
     let ffroot = root.join("ff");
     std::fs::create_dir_all(&ffroot).unwrap();
     std::env::set_var("MOODLE_FIREFOX_ROOT", &ffroot);
-    assert_eq!(shot("assign:auto").await, "none");
+    std::env::set_var("SHOT_FIREFOX", "false");
+    assert_eq!(shot("assign:auto").await, "pending");
+    while shot("assign:auto").await == "pending" {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
     assert!(!log.exists());
+    app.db.kv_set("shot_try:assign:auto", "0").unwrap();
 
     // session: capture starts by itself
     ff::firefox_session(&ffroot);
@@ -118,4 +123,21 @@ async fn shot_routes() {
     }
     assert!(ok, "shot not produced within 5s");
     assert_eq!(shot("assign:auto").await, "ready");
+
+    // fallback present: shown as ready, real capture still retried and wins
+    let real = root.join(".moodle/shots/assign_auto.png");
+    let fb = real.with_extension("fb.png");
+    std::fs::rename(&real, &fb).unwrap();
+    app.db.kv_set("shot_try:assign:auto", "0").unwrap();
+    assert_eq!(shot("assign:auto").await, "ready");
+    for _ in 0..50 {
+        if real.exists() && !fb.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(
+        real.exists() && !fb.exists(),
+        "real capture should replace fb"
+    );
 }

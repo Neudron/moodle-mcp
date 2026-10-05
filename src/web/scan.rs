@@ -315,7 +315,7 @@ fn prune_key(t: &Task) -> (String, String, String) {
     (t.course.clone(), key(&t.title), t.url.clone())
 }
 
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

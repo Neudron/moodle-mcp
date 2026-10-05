@@ -347,7 +347,96 @@ pub fn shot_file(root: &str, id: &str) -> PathBuf {
 }
 
 pub fn router() -> Router<Arc<App>> {
-    Router::new().route("/api/shot/{id}", get(get_shot))
+    Router::new()
+        .route("/api/shot/{id}", get(get_shot))
+        .route("/api/shot-render/{id}", get(render))
+}
+
+/// Statement alone (title, body, attachment names) in Moodle-like styling: the page the
+/// headless-Firefox fallback photographs. Images go through the same-origin proxy; scripts are off.
+async fn render(State(app): State<Arc<App>>, AxPath(id): AxPath<String>) -> R<Response> {
+    let t = app
+        .db
+        .task(&id)?
+        .ok_or(ApiErr(StatusCode::NOT_FOUND, "no existeix".into()))?;
+    let files: String = t
+        .attachments
+        .iter()
+        .map(|a| format!("<li>{}</li>", crate::web::scan::esc(&a.filename)))
+        .collect();
+    let files = if files.is_empty() {
+        files
+    } else {
+        format!("<h3>Fitxers adjunts</h3><ul>{files}</ul>")
+    };
+    let html = format!(
+        "<!doctype html><meta charset=utf-8><style>body{{font:15px/1.5 -apple-system,'Segoe UI',Roboto,sans-serif;color:#212529;background:#fff;margin:0;padding:24px;max-width:952px}}h2{{font-size:1.6rem;font-weight:500;margin:0 0 4px}}h3{{font-size:1.1rem;margin:20px 0 6px}}.c{{color:#6a737b;margin-bottom:16px}}img{{max-width:100%;height:auto}}a{{color:#0f6cbf}}table{{border-collapse:collapse}}td,th{{border:1px solid #dee2e6;padding:4px 8px}}</style><h2>{}</h2><div class=c>{}</div><div>{}</div>{files}",
+        crate::web::scan::esc(&t.title),
+        crate::web::scan::esc(&t.course),
+        crate::web::tasks::proxy_urls(&t.body_html),
+    );
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'",
+            ),
+        ],
+        html,
+    )
+        .into_response())
+}
+
+const FF_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Headless Firefox shot of `url` into `dest`, no Moodle login needed. Fresh temp profile (never
+/// the user's), killed on timeout, profile deleted either way.
+/// ponytail: window height is a text-length guess (headless shots are viewport-sized).
+pub async fn shoot_headless(url: &str, height: usize, dest: &Path) -> Result<()> {
+    let prof = std::env::temp_dir().join(format!(
+        "moodle-shot-{}-{}",
+        std::process::id(),
+        crate::web::now()
+    ));
+    tokio::fs::create_dir_all(&prof).await?;
+    let tmp = prof.join("out.png");
+    let run = Command::new(std::env::var("SHOT_FIREFOX").unwrap_or_else(|_| "firefox".into()))
+        .args(["--headless", "--no-remote", "--profile"])
+        .arg(&prof)
+        .arg(format!("--window-size=1000,{height}"))
+        .arg("--screenshot")
+        .arg(&tmp)
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .status();
+    let res = async {
+        tokio::time::timeout(FF_TIMEOUT, run)
+            .await
+            .context("firefox timeout")??;
+        if let Some(dir) = dest.parent() {
+            tokio::fs::create_dir_all(dir).await?;
+        }
+        tokio::fs::copy(&tmp, dest).await.context("no screenshot")?;
+        Ok(())
+    }
+    .await;
+    let _ = tokio::fs::remove_dir_all(&prof).await;
+    res
+}
+
+/// Bridge capture first; when it fails (or cannot run), the fallback.
+async fn first_ok(
+    bridge: impl std::future::Future<Output = Result<()>>,
+    fallback: impl std::future::Future<Output = Result<()>>,
+) -> Result<()> {
+    match bridge.await {
+        Ok(()) => Ok(()),
+        Err(b) => fallback.await.with_context(|| format!("bridge: {b}")),
+    }
 }
 
 /// Captures in flight or queued, by task id.
@@ -363,8 +452,16 @@ pub fn ensure(app: &Arc<App>, t: &crate::web::db::Task) -> &'static str {
     if file.exists() {
         return "ready";
     }
+    // title+body fallback render: shown, but the real capture is still retried
+    let fb = file.with_extension("fb.png");
+    let have_fb = fb.exists();
+    let (pending, none) = if have_fb {
+        ("ready", "ready")
+    } else {
+        ("pending", "none")
+    };
     if BUSY.lock().unwrap().contains(&t.id) {
-        return "pending";
+        return pending;
     }
     let key = format!("shot_try:{}", t.id);
     let recent = app
@@ -377,16 +474,43 @@ pub fn ensure(app: &Arc<App>, t: &crate::web::db::Task) -> &'static str {
     if !matches!(t.kind.as_str(), "assign" | "quiz")
         || !moodle_only(app.moodle.base(), &t.url)
         || recent
-        || crate::firefox::session_cookie(&crate::firefox::root(), None).is_err()
     {
-        return "none";
+        return none;
     }
     let _ = app.db.kv_set(&key, &crate::web::now().to_string());
     BUSY.lock().unwrap().push(t.id.clone());
     let (app, id, url) = (Arc::clone(app), t.id.clone(), t.url.clone());
     tokio::spawn(async move {
         let _g = SERIAL.lock().await;
-        if let Err(e) = shoot(&cmd(), &url, &shot_file(&app.root, &id)).await {
+        let dest = shot_file(&app.root, &id);
+        let bridge = async {
+            if crate::firefox::session_cookie(&crate::firefox::root(), None).is_err() {
+                bail!("no Firefox Moodle session");
+            }
+            shoot(&cmd(), &url, &dest).await
+        };
+        let render = format!(
+            "http://127.0.0.1:{}/api/shot-render/{}",
+            app.port,
+            crate::web::tasks::pct(&id)
+        );
+        let h = app
+            .db
+            .task(&id)
+            .ok()
+            .flatten()
+            .map_or(0, |t| t.body_html.len());
+        let h = (500 + h / 4).min(6000);
+        let res = if have_fb {
+            let r = bridge.await;
+            if r.is_ok() {
+                let _ = tokio::fs::remove_file(&fb).await;
+            }
+            r
+        } else {
+            first_ok(bridge, shoot_headless(&render, h, &fb)).await
+        };
+        if let Err(e) = res {
             let _ = app.db.log_error(
                 "shot",
                 "capture",
@@ -395,7 +519,7 @@ pub fn ensure(app: &Arc<App>, t: &crate::web::db::Task) -> &'static str {
         }
         BUSY.lock().unwrap().retain(|x| *x != id);
     });
-    "pending"
+    pending
 }
 
 /// Start captures for up to `n` tasks that lack one (the 30-min pass).
@@ -413,9 +537,12 @@ pub fn backfill(app: &Arc<App>, n: usize) {
 }
 
 async fn get_shot(State(app): State<Arc<App>>, AxPath(id): AxPath<String>) -> R<Response> {
-    let bytes = tokio::fs::read(shot_file(&app.root, &id))
-        .await
-        .map_err(|_| ApiErr(StatusCode::NOT_FOUND, "no shot".into()))?;
+    let f = shot_file(&app.root, &id);
+    let bytes = match tokio::fs::read(&f).await {
+        Ok(b) => Ok(b),
+        Err(_) => tokio::fs::read(f.with_extension("fb.png")).await,
+    }
+    .map_err(|_| ApiErr(StatusCode::NOT_FOUND, "no shot".into()))?;
     Ok((
         [
             (header::CONTENT_TYPE, "image/png"),
@@ -437,6 +564,22 @@ mod tests {
     }
 
     use super::*;
+
+    #[tokio::test]
+    async fn fallback_runs_only_when_bridge_fails() {
+        let ok = || async { Ok(()) };
+        let bad = || async { bail!("no login") };
+        assert!(
+            first_ok(ok(), bad()).await.is_ok(),
+            "bridge ok: fallback unused"
+        );
+        assert!(
+            first_ok(bad(), ok()).await.is_ok(),
+            "bridge fails: fallback used"
+        );
+        let e = first_ok(bad(), bad()).await.unwrap_err();
+        assert!(format!("{e:#}").contains("no login"));
+    }
 
     const FAKE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/fake_mcp.sh");
 
