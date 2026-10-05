@@ -38,3 +38,14 @@ test('startDirs', () => {
   assert.deepEqual(startDirs('smx/submit/a/b', 'q'), ['smx/submit/a/b', 'smx/submit/a', 'smx/submit', 'smx', 'q']);
   assert.deepEqual(startDirs(undefined, null), ['smx/submit']);
 });
+
+const { taskOf } = new Function(`${block('edita')}; return { taskOf };`)();
+test('taskOf: linked file first, else the same folder across _lliurat/ and the date suffix', () => {
+  const a = { task: { id: 'a' }, local: { files: ['submit/C/RA1. Act 2 (05-10-26)/x.docx'] }, submit_dir: 'submit/_lliurat/C/RA1. Act 2 (05-10-26)' };
+  const b = { task: { id: 'b' }, local: { files: ['submit/C/Other/y.docx'] } };
+  assert.equal(taskOf([a, b], 'submit/C/Other/y.docx'), b);
+  assert.equal(taskOf([a, b], 'submit/C/RA1. Act 2/new_amin.docx'), a);
+  assert.equal(taskOf([a, b], 'submit/_lliurat/C/RA1. Act 2 (05-10-26)/z.pdf'), a);
+  assert.equal(taskOf([a, b], 'C/RA1. Act 2/teacher.docx'), undefined);
+  assert.equal(taskOf([a, b], 'submit/C/Nope/z.docx'), undefined);
+});

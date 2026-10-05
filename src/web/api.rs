@@ -284,7 +284,8 @@ async fn list_tasks(State(app): S, h: HeaderMap) -> R<Response> {
             if let Some(ev) = ev {
                 tv["evidence"] = ev.into();
             }
-            json!({"task": tv, "local": l, "stale": stale(&t, &l, now), "needs_pdf": np, "pos": pos})
+            let dir = task_submit_dir(&l, &t);
+            json!({"task": tv, "local": l, "stale": stale(&t, &l, now), "needs_pdf": np, "pos": pos, "submit_dir": dir})
         })
         .collect();
     Ok(cached(
@@ -365,11 +366,20 @@ fn move_lliurat(
         }
         std::fs::create_dir_all(to.parent().unwrap_or(&to)).map_err(anyhow::Error::from)?;
         std::fs::rename(root.join(&from_rel), &to).map_err(anyhow::Error::from)?;
+        let mv = |f: &str| {
+            (f == from_rel || f.starts_with(&format!("{from_rel}/")))
+                .then(|| format!("{to_rel}{}", &f[from_rel.len()..]))
+        };
         for f in &mut l.files {
-            if f == &from_rel || f.starts_with(&format!("{from_rel}/")) {
-                *f = format!("{to_rel}{}", &f[from_rel.len()..]);
+            if let Some(n) = mv(f) {
+                *f = n;
             }
         }
+        // Owners are keyed by path too: without this, Propietari vanishes after delivery.
+        l.owners = std::mem::take(&mut l.owners)
+            .into_iter()
+            .map(|(k, v)| (mv(&k).unwrap_or(k), v))
+            .collect();
     }
     Ok(())
 }

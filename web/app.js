@@ -641,7 +641,7 @@ $('#picker').addEventListener('close', () => { const o = pk.opener; pk.opener = 
 // amin-helpers-start
 const aminName = (n) => { const i = n.lastIndexOf('.'), st = (i > 0 ? n.slice(0, i) : n).replace(/_amin$/i, '_amin'), x = i > 0 ? n.slice(i) : ''; return st.split(/[^\p{L}\p{N}]+/u).some((w) => w.toLowerCase() === 'amin') ? st + x : `${st}_amin${x}`; };
 // amin-helpers-end
-async function metaDialog(id, f, owners) {
+async function metaDialog(id, f, owners, done) {
   const base = f.split('/').pop();
   let me = ''; try { me = (await api('/api/me')).fullname || ''; } catch (e) { /* optional */ }
   const name = h('input', { id: 'meta-name', value: aminName(base), autocomplete: 'off', spellcheck: 'false' });
@@ -650,7 +650,7 @@ async function metaDialog(id, f, owners) {
     h('label', { for: 'meta-name' }, 'Nom'), name, h('label', { for: 'meta-owner' }, 'Propietari'), owner,
     h('p', { class: 'dim hint' }, "Moodle posa l'autor ell mateix: aquest nom només es guarda aquí."));
   if (!(await confirmDialog('Nom i autor', body, 'Desa'))) return;
-  try { await api(`/api/tasks/${id}/file-meta`, { method: 'POST', body: { path: f, name: name.value, owner: owner.value } }); await route({ soft: true }); }
+  try { await api(`/api/tasks/${enc(id)}/file-meta`, { method: 'POST', body: { path: f, name: name.value, owner: owner.value } }); await (done ? done(f.slice(0, f.lastIndexOf('/') + 1) + name.value.trim()) : route({ soft: true })); }
   catch (e) { toast(e.message, true); }
 }
 function linkFiles(id, suggest) {
@@ -685,6 +685,7 @@ const wrapFocus = () => document.querySelectorAll('#main .tablewrap').forEach((w
 addEventListener('resize', wrapFocus);
 async function route(o) {
   const soft = o?.soft === true;
+  if (soft && $('#main').dataset.view === 'edita') return; // never reload the live editor after a menu action
   if (!soft) { delete views.tauler.q; delete views.tauler.aiOpen; }
   const my = (route.n = (route.n || 0) + 1);
   const [name, ...rest] = (location.hash.slice(2) || 'calendari').split('/');
@@ -1263,14 +1264,11 @@ taskExtras.push((tv) => {
   const noUp = submitted || !files.length, noSend = tv.task.moodle_status !== 'draft';
   const whyUp = submitted ? 'Ja enviada.' : 'Vincula primer un fitxer per poder pujar-lo.';
   const whySend = submitted ? 'Ja enviada.' : 'Envia es desbloqueja quan hi ha un esborrany a Moodle.';
-  const DOC = /\.(docx?|odt)$/i, doc = files.find((f) => DOC.test(f));
+  const doc = files.find((f) => DOC.test(f));
   const pdfWarn = tv.needs_pdf && doc && !submitted;
-  const toPdf = pdfWarn && h('div', { class: 'notice', role: 'group', 'aria-label': 'Cal PDF' },
-    h('p', {}, 'Aquesta tasca demana PDF.'),
-    h('button', { type: 'button', id: 'to-pdf', onclick: async () => {
-      try { await api(`/api/tasks/${id}/to-pdf`, { method: 'POST', body: { path: doc } }); toast('PDF creat.'); await route({ soft: true }); $('#to-pdf')?.focus(); }
-      catch (e) { toast(e.message, true); }
-    } }, 'Converteix a PDF'));
+  const toPdf = doc && h('div', { class: tv.needs_pdf ? 'notice' : '', role: 'group', 'aria-label': 'PDF' },
+    tv.needs_pdf && h('p', {}, 'Aquesta tasca demana PDF.'),
+    h('button', { type: 'button', id: 'to-pdf', onclick: async () => { if (await addPdf(tv, doc)) { await route({ soft: true }); $('#to-pdf')?.focus(); } } }, 'Converteix a PDF'));
   const up = h('button', { type: 'button', id: 'puja', 'aria-disabled': String(noUp), 'aria-describedby': 'puja-hint', onclick: async () => {
     if (noUp) { toast(whyUp); return; }
     const sizes = await Promise.all(files.map((f) => api(`/api/files?path=${enc(f)}`).then((i) => kb(i.size), () => 'no trobat')));
@@ -1293,6 +1291,34 @@ taskExtras.push((tv) => {
 });
 
 const OFFICE = /\.(docx?|odt|rtf|xlsx?|ods|csv|pptx?|odp)$/i;
+// edita-helpers-start
+const DOC = /\.(docx?|odt)$/i;
+const dirOf = (rel) => rel.slice(0, rel.lastIndexOf('/'));
+// Folder key: same under submit/ and submit/_lliurat/, with or without the ' (dd-mm-yy)' due suffix.
+const normDir = (d) => d.replace(/^submit\/(_lliurat\/)?/, '').replace(/ \(\d\d-\d\d-\d\d\)$/, '');
+// The task a deliverable belongs to: linked file first, else a task whose folder matches the file's folder.
+function taskOf(tasks, rel) {
+  const d = normDir(dirOf(rel));
+  return tasks.find((tv) => tv.local.files.includes(rel))
+    || (rel.startsWith('submit/') ? tasks.find((tv) => [tv.submit_dir || '', ...tv.local.files.map(dirOf)].some((x) => x.startsWith('submit/') && normDir(x) === d)) : undefined);
+}
+// edita-helpers-end
+// Task actions need the file in local.files: an in-submit file is linked in place (no copy) first.
+async function linkIn(tv, rel) {
+  if (!tv.local.files.includes(rel)) tv.local = await api(`/api/tasks/${enc(tv.task.id)}/pick`, { method: 'POST', body: { path: `smx/${rel}` } });
+}
+// Writes <name>_amin.pdf next to the doc and links it instead of the doc. Returns the new Local, or null.
+async function addPdf(tv, rel) {
+  try {
+    await linkIn(tv, rel);
+    const l = (tv.local = await api(`/api/tasks/${enc(tv.task.id)}/to-pdf`, { method: 'POST', body: { path: rel } }));
+    toast(`PDF afegit a la tasca: ${l.files.find((f) => dirOf(f) === dirOf(rel) && /\.pdf$/i.test(f))?.split('/').pop() || ''}`);
+    return l;
+  } catch (e) { toast(e.message, true); return null; }
+}
+// Converted on the fly by /api/preview: nothing is written.
+const pdfLink = (rel) => h('a', { class: 'btn ghost', href: `/api/preview?path=${enc(rel)}`, download: rel.split('/').pop().replace(/\.[^.]+$/, '.pdf') }, ic('download'), 'Descarrega en PDF');
+fileExtras.push((info) => (DOC.test(info.rel) ? pdfLink(info.rel) : null));
 const editButton = (rel) => h('a', { class: 'btn primary', href: `#/edita/${enc(rel)}` }, 'Edita');
 fileExtras.push((info) => (OFFICE.test(info.rel) ? editButton(info.rel) : null));
 taskExtras.push((tv) => { const f = tv.local.files.find((x) => OFFICE.test(x)); return f ? editButton(f) : null; });
@@ -1322,11 +1348,28 @@ views.edita = async (...parts) => {
   let cfg;
   try { cfg = await api('/api/office/config', { method: 'POST', body: { path: rel } }); }
   catch (e) { return fallback(e.status === 503 ? 'OnlyOffice no disponible.' : e.message); }
+  let tv; try { tv = taskOf((await tasksOnce()).filter((t) => t.task.kind !== 'post'), cfg.rel); } catch (e) { /* menu works without a task */ }
+  const reopen = (r) => { location.hash = `#/edita/${enc(r)}`; };
+  // OnlyOffice saves on its own schedule: conversions read the last saved version.
+  const menu = h('div', { class: 'v-acts-m' },
+    tv ? h('p', { class: 'dim' }, 'Tasca: ', h('a', { href: `#/tasca/${enc(tv.task.id)}` }, tv.task.title)) : h('p', { class: 'dim' }, 'Fitxer no vinculat a cap tasca: vincula\'l des de la tasca per afegir-hi el PDF o més fitxers.'),
+    tv?.needs_pdf && h('p', { class: 'notice' }, 'Aquesta tasca demana PDF.'),
+    tv && DOC.test(cfg.rel) && h('button', { type: 'button', onclick: async () => { await addPdf(tv, cfg.rel); } }, 'Afegeix el PDF a la tasca'),
+    DOC.test(cfg.rel) && pdfLink(cfg.rel),
+    tv && linkFiles(tv.task.id, `smx/${dirOf(cfg.rel)}`),
+    tv && cfg.rel.startsWith('submit/') && h('button', { type: 'button', class: 'btn ghost', onclick: async () => {
+      try { await linkIn(tv, cfg.rel); await metaDialog(tv.task.id, cfg.rel, tv.local.owners || {}, async (r) => reopen(r)); } catch (e) { toast(e.message, true); }
+    } }, 'Nom i autor…'),
+    openLocal, saveBack);
+  const acts = h('details', { class: 'v-acts', onkeydown: (e) => { if (e.key === 'Escape' && acts.open) { acts.open = false; acts.firstChild.focus(); } } },
+    h('summary', { class: 'btn ghost' }, 'Accions'), menu);
   // DocsAPI replaces #oo with an iframe sized 100% of its parent, so the parent carries the height.
   const holder = h('div', { class: 'v-oo' }, h('div', { id: 'oo' }));
   const bar = h('div', { class: 'v-editbar' },
     h('a', { class: 'btn ghost', href: `#/fitxers/${enc(cfg.rel)}` }, ic('arrow-l'), 'Torna al fitxer'),
-    h('span', { class: 'v-editname', title: cfg.rel }, cfg.rel.split('/').pop()));
+    h('span', { class: 'v-editname', title: cfg.rel }, cfg.rel.split('/').pop()),
+    tv?.needs_pdf && h('span', { class: 'v-editwarn' }, 'Demana PDF'),
+    dlBtn(dlHref(cfg.rel), cfg.rel.split('/').pop()), acts);
   const wrap = h('section', { class: 'v-edita' }, h('h1', { class: 'sr-only' }, `Edita ${cfg.rel}`), bar, holder);
   // DocsAPI injects an untitled iframe: name it once it appears.
   new MutationObserver((_, o) => { const f = holder.querySelector('iframe'); if (f) { f.title = 'Editor de documents'; o.disconnect(); } }).observe(holder, { childList: true, subtree: true });
